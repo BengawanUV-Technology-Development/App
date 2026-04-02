@@ -2,168 +2,233 @@
 
 **Bengawan UAV – Technology Development Team**
 
+---
+
 ## Overview
 
-Mission Planner is a ground control and mission management system developed by the Technology Development Team of Bengawan UAV. This project is designed to support the planning, simulation, execution, and analysis of unmanned aerial vehicle (UAV) missions with a focus on reliability, flexibility, and operational efficiency.
+Mission Planner adalah aplikasi ground control station (GCS) yang dikembangkan oleh Technology Development Team Bengawan UAV untuk mendukung perencanaan, eksekusi, dan analisis misi UAV secara terintegrasi.
 
-The system enables operators and engineers to define flight paths, monitor telemetry, and manage UAV operations through an integrated interface.
-
----
-
-## Key Features
-
-* **Mission Planning**
-
-  * Waypoint-based navigation
-  * Grid and survey mission generation
-  * Altitude and speed configuration per waypoint
-
-* **Real-Time Monitoring**
-
-  * Live telemetry visualization (position, altitude, speed)
-  * UAV status tracking
-  * Map-based interface
-
-* **Simulation Support**
-
-  * Pre-flight mission validation
-  * Virtual environment testing
-  * Scenario-based simulation
-
-* **Data Logging & Analysis**
-
-  * Flight data recording
-  * Post-mission analysis tools
-  * Exportable logs for further processing
-
-* **System Integration**
-
-  * Compatible with multiple flight controllers
-  * Modular architecture for future extensions
-  * API support for external tools
+Aplikasi ini dirancang untuk mempermudah operator dalam mengontrol UAV, mengatur misi penerbangan, serta melakukan monitoring dan evaluasi performa sistem secara real-time maupun pasca penerbangan.
 
 ---
 
-## System Architecture
+## Fitur Utama Aplikasi
 
-The Mission Planner system consists of the following main components:
+### 1. Koneksi & Sistem Dasar
 
-* **Frontend Interface**
+* **Connect Telemetri**
 
-  * User interaction layer
-  * Map visualization and mission design tools
+  * Koneksi langsung ke UAV melalui modul telemetri
+* **Reboot System**
 
-* **Backend Services**
+  * Restart flight controller dari aplikasi
+* **ARM / DISARM**
 
-  * Mission processing
-  * Communication handling with UAV systems
+  * Kontrol status keamanan UAV sebelum dan sesudah flight
+
+---
+
+### 2. Flight Modes
+
+Aplikasi mendukung berbagai mode penerbangan:
+
+* **MANUAL** – Kontrol penuh oleh pilot
+* **FBWA (Fly By Wire A)** – Stabilized manual flight
+* **AUTO** – Eksekusi misi waypoint otomatis
+* **Q_STABILIZE** – Stabilize mode untuk VTOL
+* **Q_HOVER** – Hover di posisi tertentu
+* **Q_LAND** – Landing vertikal otomatis
+
+---
+
+### 3. Navigasi & Mission Planning
+
+* **GPS & Maps Integration**
+
+  * Tampilan peta berbasis koordinat real-time
+* **Waypoint Planning**
+
+  * Membuat, mengedit, dan mengatur jalur misi
+* **Monitor Posisi UAV**
+
+  * Tracking posisi UAV secara langsung di peta
+
+---
+
+### 4. Monitoring & Visualisasi
+
+* **HUD (Heads-Up Display)**
+
+  * Informasi attitude (roll, pitch, yaw)
+  * Airspeed, altitude, heading
+* **Real-Time Telemetry Data**
+
+  * Status UAV secara langsung
+
+---
+
+### 5. Data Logging & Analisis
+
+* **Data Log Recording**
+
+  * Penyimpanan seluruh data penerbangan
+* **Post-Flight Analysis**
+
+  * Evaluasi performa UAV setelah misi
+* **3D Model Simulation (Post-Flight)**
+
+  * Visualisasi ulang flight dalam bentuk simulasi 3D
+
+---
+
+## Fitur Opsional (Advanced Configuration)
+
+### 1. Pre-Flight & Kalibrasi
+
+* Pre-flight Airspeed Calibration
+* Compass Calibration
+* Level Calibration
+* Accelerometer Calibration
+
+---
+
+### 2. Hardware Testing
+
+* Motor Test
+* Sensor validation
+
+---
+
+### 3. Parameter Configuration
+
+Konfigurasi parameter lanjutan untuk tuning sistem:
+
+#### VTOL & Frame Configuration
+
+* `Q_ENABLE`
+* `Q_FRAME_CLASS`
+* `Q_FRAME_TYPE`
+* `Q_TILT_ENABLE`
+* `Q_TILT_MASK`
+
+#### Airspeed Configuration
+
+* `ARSPD_USE`
+* `ARSPD_TYPE`
+* `ARSPD_PIN`
+* `ARSPD_AUTOCAL`
+* `ARSPD_FBW_MIN`
+
+#### Servo & Control
+
+* `SERVO[X]_FUNCTION`
+
+#### Flight Behavior & Transition
+
+* `Q_VFWD_GAIN`
+* `Q_RTL_MODE`
+* `Q_TRANS_FAIL`
+* `Q_TRANS_DURATION` / `Q_TRANSITION_MS`
+
+---
+
+## Arsitektur Sistem
+
+* **Frontend (UI/UX)**
+
+  * Interface interaktif untuk operator
+  * Visualisasi peta dan HUD
+
+* **Backend**
+
+  * Pengolahan data misi
+  * Manajemen komunikasi UAV
 
 * **Communication Layer**
 
-  * MAVLink or equivalent protocol support
-  * Telemetry data exchange
+  * Protokol MAVLink untuk komunikasi telemetri
 
 * **Data Storage**
 
-  * Mission configurations
-  * Flight logs and analytics data
+  * Penyimpanan mission plan dan log penerbangan
 
 ---
 
-## Technologies Used
+## Instalasi
 
-* Programming Language(s): *(e.g., Python, C++, JavaScript — specify as applicable)*
-* Frameworks: *(e.g., Qt, React, ROS — specify as applicable)*
-* Communication Protocol: MAVLink
-* Mapping Tools: *(e.g., OpenStreetMap, Google Maps API)*
+### Prasyarat
 
----
+* OS: Windows / Linux
+* Python / environment sesuai stack
+* UAV / simulator kompatibel
 
-## Installation
-
-### Prerequisites
-
-* Operating System: Windows / Linux
-* Required dependencies installed
-* Compatible UAV hardware or simulator
-
-### Steps
+### Langkah Instalasi
 
 ```bash
-# Clone the repository
-git clone https://github.com/BengawanUV-Technology-Development/App.git
-
-# Navigate to the project directory
-cd mission-planner
+git clone https://github.com/BengawanUV-Technology-Development/App
 
 # Install dependencies
-# (example, adjust based on stack)
 pip install -r requirements.txt
 
-# Run the application
+# Jalankan aplikasi
 python main.py
 ```
 
 ---
 
-## Usage
+## Cara Penggunaan
 
-1. Launch the Mission Planner application
-2. Connect to UAV or simulator
-3. Create or load a mission plan
-4. Upload mission to UAV
-5. Monitor mission in real-time
-6. Retrieve and analyze flight data
+1. Jalankan aplikasi Mission Planner
+2. Hubungkan telemetri UAV
+3. Lakukan ARM jika sistem siap
+4. Pilih flight mode sesuai kebutuhan
+5. Buat dan upload waypoint mission
+6. Monitor UAV melalui HUD dan map
+7. Setelah flight, analisis data log
 
 ---
 
-## Project Structure
+## Struktur Proyek
 
 ```
 mission-planner/
-│── src/                # Source code
-│── configs/            # Configuration files
-│── assets/             # UI and map assets
-│── logs/               # Flight logs
-│── tests/              # Test cases
-│── docs/               # Documentation
-│── main.py             # Entry point
+│── src/                # Source code utama
+│── configs/            # File konfigurasi parameter
+│── assets/             # UI, icon, dan map assets
+│── logs/               # Data log penerbangan
+│── simulation/         # 3D replay & simulation
+│── tests/              # Unit & integration tests
+│── docs/               # Dokumentasi
+│── main.py             # Entry point aplikasi
 ```
 
 ---
 
-## Contribution Guidelines
+## Roadmap Pengembangan
 
-* Follow coding standards defined by the Technology Development Team
-* Use feature branches for development
-* Submit pull requests with clear descriptions
-* Ensure all tests pass before submission
-
----
-
-## Roadmap
-
-* Enhanced autonomous mission capabilities
-* AI-assisted route optimization
-* Improved UI/UX for mission design
-* Expanded hardware compatibility
+* Integrasi AI untuk optimasi rute
+* Peningkatan akurasi simulasi 3D
+* UI/UX lebih intuitif
+* Dukungan multi-UAV
 
 ---
 
-## License
+## Kontribusi
 
-*(Specify license type, e.g., MIT, Apache 2.0, proprietary)*
+* Gunakan branch terpisah untuk setiap fitur
+* Ikuti coding standard tim
+* Pastikan semua testing lolos sebelum PR
 
 ---
 
-## Team
+## Tim
 
 **Bengawan UAV – Technology Development Team**
 
 ---
 
-## Contact
+## Kontak
 
-For questions or collaboration inquiries, please contact the Technology Development Team through internal communication channels.
+Silakan hubungi tim melalui kanal komunikasi internal Bengawan UAV untuk kolaborasi atau pertanyaan teknis.
 
 ---
