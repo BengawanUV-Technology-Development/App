@@ -1,0 +1,156 @@
+# Ground Station Backend Checklist
+
+Dokumen ini dipakai sebagai jalur kerja backend Python (Flask + MAVSDK) sampai siap dipakai frontend.
+Fokusnya command API: konsisten, aman, dan gampang di-maintain.
+
+## Cara Pakai Dokumen Ini
+
+- Kerjakan dari atas ke bawah.
+- Jangan lompat fase kalau checkbox fase sebelumnya belum beres.
+- Tiap fase punya indikator selesai (DoD).
+
+---
+
+## Fase 1 - Fondasi State Tunggal
+
+Tujuan: semua endpoint baca state yang sama, tidak ada state dobel.
+
+- [x] `StateManager` jadi source of truth utama.
+- [x] Update telemetry di loop MAVSDK pakai `state_manager.update(...)`.
+- [x] Endpoint command baca state dari `StateManager`, bukan dari dict global.
+- [X] Hapus semua sisa state lama (`_state_lock`, `_telemetry_state`, helper legacy) kalau masih tersisa.
+
+DoD:
+
+- Tidak ada lagi path baca/tulis state selain `StateManager`.
+- `GET /health` dan `POST /command/arm` selalu melihat nilai `connected` yang sama pada waktu yang sama.
+
+---
+
+## Fase 2 - Kontrak Response Konsisten
+
+Tujuan: frontend bisa percaya format response tanpa if-else acak per endpoint.
+
+- [x] `POST /command/arm` pakai `CommandResponse`.
+- [X] Semua endpoint command (`arm`, `disarm`, `takeoff`, `land`, `set_takeoff_altitude`) pakai `CommandResponse`.
+- [X] Semua `error_code` ambil dari enum `ErrorCode` (hindari string hardcoded yang beda-beda).
+- [X] Semua jalur invalid request return `400` dengan `error_code=INVALID_REQUEST`.
+
+DoD:
+
+- Struktur response sukses/error seragam di semua endpoint command.
+- Tidak ada `error_code` liar di luar enum.
+
+---
+
+## Fase 3 - Validasi Request yang Aman
+
+Tujuan: request jelek tidak meledak jadi `500`.
+
+- [x] Validasi tipe `altitude_m` (harus numerik).
+- [X] Tangani body kosong / field hilang dengan pesan yang jelas.
+- [X] Semua kasus input invalid berhenti di `400`, bukan exception runtime.
+- [X] Reuse `CommandValidator` untuk aturan yang sudah ada.
+
+DoD:
+
+- Mengirim `{"altitude_m": "abc"}` tidak bikin traceback, tapi response `400`.
+- Semua validasi punya pesan error yang konsisten.
+
+---
+
+## Fase 4 - Service Layer untuk Command
+
+Tujuan: route tipis, logic pindah ke service.
+
+- [X] Implement `CommandService` di `src-tauri/src-py/app/services/command.py`.
+- [X] Pindahkan logic `arm/disarm/takeoff/land` dari route ke service.
+- [X] Route hanya: parse request -> call service -> return response.
+- [X] Validator dipakai di service, bukan di route.
+
+DoD:
+
+- File route tidak lagi berisi business logic command.
+- Service bisa dipanggil dari test tanpa HTTP layer.
+
+---
+
+## Fase 5 - Rapikan Blueprint dan Wiring App
+
+Tujuan: `main.py` jadi bootstrap, bukan campur route + business logic.
+
+- [X] Pindahkan route health ke `app/routes/health.py`.
+- [X] Pindahkan route telemetry ke `app/routes/telemetry.py`.
+- [X] Register semua blueprint di satu tempat yang jelas.
+- [X] `main.py` fokus ke init app, init dependency, start background loop.
+
+DoD:
+
+- Tidak ada endpoint business route yang didefinisikan langsung di `main.py`.
+- Struktur project kebaca jelas dari folder `routes/`, `services/`, `utils/`.
+
+---
+
+## Fase 6 - Manual Test (Wajib Sebelum MAVSDK Action Real)
+
+Tujuan: pastikan flow endpoint benar dulu sebelum nembak action MAVSDK sungguhan.
+
+- [X] Test `GET /health` saat belum connect.
+- [X] Test `GET /telemetry` saat belum connect.
+- [X] Test `POST /command/arm` saat `connected=false`.
+- [ ] Simulasikan `connected=true`, test `POST /command/arm` sukses.
+- [ ] Test `POST /command/takeoff` dengan altitude invalid (string, <2, >50).
+- [ ] Test `POST /command/takeoff` dengan altitude valid.
+
+Contoh cepat:
+
+```bash
+curl -X POST http://127.0.0.1:5001/command/arm
+curl -X POST http://127.0.0.1:5001/command/takeoff -H "Content-Type: application/json" -d '{"altitude_m":10}'
+```
+
+DoD:
+
+- Semua test manual di atas menghasilkan status code dan body sesuai kontrak.
+
+---
+
+## Fase 7 - Integrasi MAVSDK Action Real
+
+Tujuan: ganti placeholder sukses jadi action asli.
+
+- [ ] Implement panggilan MAVSDK action untuk `arm/disarm/takeoff/land`.
+- [ ] Tambah timeout handling.
+- [ ] Map exception MAVSDK ke `ErrorCode` yang sesuai.
+- [ ] Tetapkan aturan retry/recover yang jelas saat koneksi drop.
+
+DoD:
+
+- Command benar-benar mengeksekusi action, bukan sekadar mock response.
+- Failure dari MAVSDK tetap keluar sebagai response API yang rapi.
+
+---
+
+## Fase 8 - Hardening & Siap Dipakai Frontend
+
+Tujuan: stabil untuk dipakai tim lain.
+
+- [ ] Tambah logging request/response command penting.
+- [ ] Tambah unit test untuk validator dan command service.
+- [ ] Tambah integration smoke test endpoint utama.
+- [ ] Bersihkan TODO lama yang sudah tidak relevan.
+
+DoD:
+
+- Jalur command utama punya test minimum.
+- Tidak ada warning/error statik di workspace Python backend.
+
+---
+
+## Definition of Done (Akhir)
+
+- [ ] State tunggal, tanpa race/conflict antar endpoint.
+- [ ] Semua command endpoint pakai kontrak response yang sama.
+- [ ] Route tipis, service dominan.
+- [ ] Manual test pass.
+- [ ] Action MAVSDK real sudah terintegrasi dan ditangani error-nya.
