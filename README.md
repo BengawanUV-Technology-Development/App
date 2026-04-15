@@ -1,1 +1,234 @@
-# Ground Station Backend ChecklistDokumen ini dipakai sebagai jalur kerja backend Python (Flask + MAVSDK) sampai siap dipakai frontend.Fokusnya command API: konsisten, aman, dan gampang di-maintain.## Roadmap Fitur FullStatus saat ini:- Core backend command dan telemetry dasar sudah ada.- Fase 1 sampai 8 di checklist backend sudah selesai.- Fitur yang masih perlu dibangun mostly ada di luar command dasar, terutama mission, reboot, dan logging persisten.### 1. ARM- Backend: selesai.- Status: siap dipakai frontend.### 2. Flight Modes- Backend monitoring: selesai.- Backend switching mode: belum ada.- Mode yang perlu ditambah kalau mau full control: `FBWA`, `Q_STABILIZE`, `Q_HOVER`, `Q_LAND`, `AUTO`, `MANUAL`.### 3. Reboot- Backend: belum ada endpoint reboot.- Perlu: aksi reboot MAVSDK atau mekanisme restart yang aman.### 4. Connect Telemetri- Backend: selesai.- Status: state koneksi, retry, recover, health, telemetry sudah ada.### 5. GPS & Maps- Backend monitoring posisi UAV: selesai.- Bikin waypoint: belum ada.- Upload/execute mission: belum ada.### 6. HUD- Backend data dasar: sudah ada untuk connected, armed, flight_mode, posisi, battery.- Data HUD lanjutan seperti heading, speed, attitude, dan indikator navigasi masih bisa ditambah.### 7. Data Log- Backend: belum ada logging persisten.- Perlu: file log atau storage lain kalau mau histori flight dan command.## Progress Backend- Fase 1: selesai.- Fase 2: selesai.- Fase 3: selesai.- Fase 4: selesai.- Fase 5: selesai.- Fase 6: selesai.- Fase 7: selesai.- Fase 8: selesai.## Rekomendasi Urutan Kerja BerikutnyaKalau mau aman dan efisien, backend sebaiknya dikejar sampai minimal fitur kontrol yang dipakai frontend sudah stabil:1. Tambah flight mode switching.2. Tambah reboot.3. Tambah waypoint/mission backend.4. Tambah data logging persisten.Kalau tujuanmu adalah cepat bikin UI jalan, frontend boleh mulai sekarang karena kontrak command dasar sudah ada. Tapi backend masih perlu dilanjutkan untuk fitur yang sifatnya kontrol mission dan logging.## Cara Pakai Dokumen Ini- Kerjakan dari atas ke bawah.- Jangan lompat fase kalau checkbox fase sebelumnya belum beres.- Tiap fase punya indikator selesai (DoD).---## Fase 1 - Fondasi State TunggalTujuan: semua endpoint baca state yang sama, tidak ada state dobel.- [x] `StateManager` jadi source of truth utama.- [x] Update telemetry di loop MAVSDK pakai `state_manager.update(...)`.- [x] Endpoint command baca state dari `StateManager`, bukan dari dict global.- [X] Hapus semua sisa state lama (`_state_lock`, `_telemetry_state`, helper legacy) kalau masih tersisa.DoD:- Tidak ada lagi path baca/tulis state selain `StateManager`.- `GET /health` dan `POST /command/arm` selalu melihat nilai `connected` yang sama pada waktu yang sama.---## Fase 2 - Kontrak Response KonsistenTujuan: frontend bisa percaya format response tanpa if-else acak per endpoint.- [x] `POST /command/arm` pakai `CommandResponse`.- [X] Semua endpoint command (`arm`, `disarm`, `takeoff`, `land`, `set_takeoff_altitude`) pakai `CommandResponse`.- [X] Semua `error_code` ambil dari enum `ErrorCode` (hindari string hardcoded yang beda-beda).- [X] Semua jalur invalid request return `400` dengan `error_code=INVALID_REQUEST`.DoD:- Struktur response sukses/error seragam di semua endpoint command.- Tidak ada `error_code` liar di luar enum.---## Fase 3 - Validasi Request yang AmanTujuan: request jelek tidak meledak jadi `500`.- [x] Validasi tipe `altitude_m` (harus numerik).- [X] Tangani body kosong / field hilang dengan pesan yang jelas.- [X] Semua kasus input invalid berhenti di `400`, bukan exception runtime.- [X] Reuse `CommandValidator` untuk aturan yang sudah ada.DoD:- Mengirim `{"altitude_m": "abc"}` tidak bikin traceback, tapi response `400`.- Semua validasi punya pesan error yang konsisten.---## Fase 4 - Service Layer untuk CommandTujuan: route tipis, logic pindah ke service.- [X] Implement `CommandService` di `src-tauri/src-py/app/services/command.py`.- [X] Pindahkan logic `arm/disarm/takeoff/land` dari route ke service.- [X] Route hanya: parse request -> call service -> return response.- [X] Validator dipakai di service, bukan di route.DoD:- File route tidak lagi berisi business logic command.- Service bisa dipanggil dari test tanpa HTTP layer.---## Fase 5 - Rapikan Blueprint dan Wiring AppTujuan: `main.py` jadi bootstrap, bukan campur route + business logic.- [X] Pindahkan route health ke `app/routes/health.py`.- [X] Pindahkan route telemetry ke `app/routes/telemetry.py`.- [X] Register semua blueprint di satu tempat yang jelas.- [X] `main.py` fokus ke init app, init dependency, start background loop.DoD:- Tidak ada endpoint business route yang didefinisikan langsung di `main.py`.- Struktur project kebaca jelas dari folder `routes/`, `services/`, `utils/`.---## Fase 6 - Manual Test (Wajib Sebelum MAVSDK Action Real)Tujuan: pastikan flow endpoint benar dulu sebelum nembak action MAVSDK sungguhan.- [X] Test `GET /health` saat belum connect.- [X] Test `GET /telemetry` saat belum connect.- [X] Test `POST /command/arm` saat `connected=false`.- [X] Simulasikan `connected=true`, test `POST /command/arm` sukses.- [X] Test `POST /command/takeoff` dengan altitude invalid (string, <2, >50).- [X] Test `POST /command/takeoff` dengan altitude valid.Contoh cepat:```bashcurl -X POST http://127.0.0.1:5001/command/armcurl -X POST http://127.0.0.1:5001/command/takeoff -H "Content-Type: application/json" -d '{"altitude_m":10}'```DoD:- Semua test manual di atas menghasilkan status code dan body sesuai kontrak.---## Fase 7 - Integrasi MAVSDK Action RealTujuan: ganti placeholder sukses jadi action asli.- [X] Implement panggilan MAVSDK action untuk `arm/disarm/takeoff/land`.- [X] Tambah timeout handling.- [X] Map exception MAVSDK ke `ErrorCode` yang sesuai.- [X] Tetapkan aturan retry/recover yang jelas saat koneksi drop.DoD:- Command benar-benar mengeksekusi action, bukan sekadar mock response.- Failure dari MAVSDK tetap keluar sebagai response API yang rapi.---## Fase 8 - Hardening & Siap Dipakai FrontendTujuan: stabil untuk dipakai tim lain.- [X] Tambah logging request/response command penting.- [X] Tambah unit test untuk validator dan command service.- [X] Tambah integration smoke test endpoint utama.- [X] Bersihkan TODO lama yang sudah tidak relevan.DoD:- Jalur command utama punya test minimum.- Tidak ada warning/error statik di workspace Python backend.---## Definition of Done (Akhir)- [ ] State tunggal, tanpa race/conflict antar endpoint.- [ ] Semua command endpoint pakai kontrak response yang sama.- [ ] Route tipis, service dominan.- [ ] Manual test pass.- [ ] Action MAVSDK real sudah terintegrasi dan ditangani error-nya.
+# Mission Planner
+
+**Bengawan UAV – Technology Development Team**
+
+---
+
+## Overview
+
+Mission Planner adalah aplikasi ground control station (GCS) yang dikembangkan oleh Technology Development Team Bengawan UAV untuk mendukung perencanaan, eksekusi, dan analisis misi UAV secara terintegrasi.
+
+Aplikasi ini dirancang untuk mempermudah operator dalam mengontrol UAV, mengatur misi penerbangan, serta melakukan monitoring dan evaluasi performa sistem secara real-time maupun pasca penerbangan.
+
+---
+
+## Fitur Utama Aplikasi
+
+### 1. Koneksi & Sistem Dasar
+
+* **Connect Telemetri**
+
+  * Koneksi langsung ke UAV melalui modul telemetri
+* **Reboot System**
+
+  * Restart flight controller dari aplikasi
+* **ARM / DISARM**
+
+  * Kontrol status keamanan UAV sebelum dan sesudah flight
+
+---
+
+### 2. Flight Modes
+
+Aplikasi mendukung berbagai mode penerbangan:
+
+* **MANUAL** – Kontrol penuh oleh pilot
+* **FBWA (Fly By Wire A)** – Stabilized manual flight
+* **AUTO** – Eksekusi misi waypoint otomatis
+* **Q_STABILIZE** – Stabilize mode untuk VTOL
+* **Q_HOVER** – Hover di posisi tertentu
+* **Q_LAND** – Landing vertikal otomatis
+
+---
+
+### 3. Navigasi & Mission Planning
+
+* **GPS & Maps Integration**
+
+  * Tampilan peta berbasis koordinat real-time
+* **Waypoint Planning**
+
+  * Membuat, mengedit, dan mengatur jalur misi
+* **Monitor Posisi UAV**
+
+  * Tracking posisi UAV secara langsung di peta
+
+---
+
+### 4. Monitoring & Visualisasi
+
+* **HUD (Heads-Up Display)**
+
+  * Informasi attitude (roll, pitch, yaw)
+  * Airspeed, altitude, heading
+* **Real-Time Telemetry Data**
+
+  * Status UAV secara langsung
+
+---
+
+### 5. Data Logging & Analisis
+
+* **Data Log Recording**
+
+  * Penyimpanan seluruh data penerbangan
+* **Post-Flight Analysis**
+
+  * Evaluasi performa UAV setelah misi
+* **3D Model Simulation (Post-Flight)**
+
+  * Visualisasi ulang flight dalam bentuk simulasi 3D
+
+---
+
+## Fitur Opsional (Advanced Configuration)
+
+### 1. Pre-Flight & Kalibrasi
+
+* Pre-flight Airspeed Calibration
+* Compass Calibration
+* Level Calibration
+* Accelerometer Calibration
+
+---
+
+### 2. Hardware Testing
+
+* Motor Test
+* Sensor validation
+
+---
+
+### 3. Parameter Configuration
+
+Konfigurasi parameter lanjutan untuk tuning sistem:
+
+#### VTOL & Frame Configuration
+
+* `Q_ENABLE`
+* `Q_FRAME_CLASS`
+* `Q_FRAME_TYPE`
+* `Q_TILT_ENABLE`
+* `Q_TILT_MASK`
+
+#### Airspeed Configuration
+
+* `ARSPD_USE`
+* `ARSPD_TYPE`
+* `ARSPD_PIN`
+* `ARSPD_AUTOCAL`
+* `ARSPD_FBW_MIN`
+
+#### Servo & Control
+
+* `SERVO[X]_FUNCTION`
+
+#### Flight Behavior & Transition
+
+* `Q_VFWD_GAIN`
+* `Q_RTL_MODE`
+* `Q_TRANS_FAIL`
+* `Q_TRANS_DURATION` / `Q_TRANSITION_MS`
+
+---
+
+## Arsitektur Sistem
+
+* **Frontend (UI/UX)**
+
+  * Interface interaktif untuk operator
+  * Visualisasi peta dan HUD
+
+* **Backend**
+
+  * Pengolahan data misi
+  * Manajemen komunikasi UAV
+
+* **Communication Layer**
+
+  * Protokol MAVLink untuk komunikasi telemetri
+
+* **Data Storage**
+
+  * Penyimpanan mission plan dan log penerbangan
+
+---
+
+## Instalasi
+
+### Prasyarat
+
+* OS: Windows / Linux
+* Python / environment sesuai stack
+* UAV / simulator kompatibel
+
+### Langkah Instalasi
+
+```bash
+git clone https://github.com/BengawanUV-Technology-Development/App
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Jalankan aplikasi
+python main.py
+```
+
+---
+
+## Cara Penggunaan
+
+1. Jalankan aplikasi Mission Planner
+2. Hubungkan telemetri UAV
+3. Lakukan ARM jika sistem siap
+4. Pilih flight mode sesuai kebutuhan
+5. Buat dan upload waypoint mission
+6. Monitor UAV melalui HUD dan map
+7. Setelah flight, analisis data log
+
+---
+
+## Struktur Proyek
+
+```
+mission-planner/
+│── src/                # Source code utama
+│── configs/            # File konfigurasi parameter
+│── assets/             # UI, icon, dan map assets
+│── logs/               # Data log penerbangan
+│── simulation/         # 3D replay & simulation
+│── tests/              # Unit & integration tests
+│── docs/               # Dokumentasi
+│── main.py             # Entry point aplikasi
+```
+
+---
+
+## Roadmap Pengembangan
+
+* Integrasi AI untuk optimasi rute
+* Peningkatan akurasi simulasi 3D
+* UI/UX lebih intuitif
+* Dukungan multi-UAV
+
+---
+
+## Kontribusi
+
+* Gunakan branch terpisah untuk setiap fitur
+* Ikuti coding standard tim
+* Pastikan semua testing lolos sebelum PR
+
+---
+
+## Tim
+
+**Bengawan UAV – Technology Development Team**
+
+---
+
+## Kontak
+
+Silakan hubungi tim melalui kanal komunikasi internal Bengawan UAV untuk kolaborasi atau pertanyaan teknis.
+
+---
