@@ -5,45 +5,66 @@ Ini yang baru akan kita implement untuk MVP command layer.
 # TODO: Implement command execution with preflight validation
 from time import time
 from typing import Any
-import uuid
+import uuid, asyncio
+from mavsdk import System
+from mavsdk.action import ActionError 
 from app.models import CommandResponse
 from app.utils.state import StateManager
 from app.validators import CommandValidator
 
 class CommandService:
-    def __init__(self, state_manager: StateManager):
+    def __init__(self, state_manager: StateManager, drone: System):
         self.state_manager = state_manager
+        self.drone = drone
         self.validator = CommandValidator(state_manager)
 
-    def execute_arm(self):
+    async def _run_action(self, coroutine, timeout=5.0):
+        try:
+            return await asyncio.wait_for(coroutine, timeout=timeout)
+        except asyncio.TimeoutError:
+            raise RuntimeError("Command execution timed out")
+        except ActionError as e:
+            raise RuntimeError(f"Command execution failed: {str(e)}")
+
+    async def execute_arm(self):
         self.validator.validate_is_connected()
-        #Panggil MAVSDK arm command di sini
-        print("Execute arm command for drone")
-        return self._build_success_payload("arm", "Vehicle armed successfully")
+        try: 
+            await self._run_action(self.drone.action.arm())
+            return self._build_success_payload("arm", "Vehicle armed successfully")
+        except ActionError as e:
+            raise RuntimeError(f"Failed to arm vehicle: {str(e)}")
     
-    def execute_disarm(self):
+    async def execute_disarm(self):
         self.validator.validate_is_connected()
-        #Panggil MAVSDK disarm command di sini
-        print("Execute disarm command for drone")
-        return self._build_success_payload("disarm", "Vehicle disarmed successfully")
-    
-    def execute_takeoff(self, altitude_m: Any) -> dict:
+        try:
+            await self._run_action(self.drone.action.disarm())
+            return self._build_success_payload("disarm", "Vehicle disarmed successfully")
+        except ActionError as e:
+            raise RuntimeError(f"Failed to disarm vehicle: {str(e)}")
+
+    async def execute_takeoff(self, altitude_m: Any) -> dict:
         validated_alt = self.validator.validate_takeoff_request(altitude_m)
-        #Panggil MAVSDK takeoff command dengan validated_alt di sini
-        print(f"Execute takeoff command for drone with altitude {validated_alt} m")
-        return self._build_success_payload("takeoff", f"Takeoff initiated to {validated_alt} meters")
+        try:
+            await self._run_action(self.drone.action.takeoff())
+            return self._build_success_payload("takeoff", f"Takeoff initiated to {validated_alt} meters")
+        except ActionError as e:
+            raise RuntimeError(f"Failed to initiate takeoff: {str(e)}")
     
-    def execute_land(self):
+    async def execute_land(self):
         self.validator.validate_is_connected()
-        #Panggil MAVSDK land command di sini
-        print("Execute land command for drone")
-        return self._build_success_payload("land", "Landing initiated")
+        try:
+            await self._run_action(self.drone.action.land())
+            return self._build_success_payload("land", "Landing initiated")
+        except ActionError as e:
+            raise RuntimeError(f"Failed to initiate landing: {str(e)}")
     
-    def execute_set_takeoff_altitude(self, altitude_m: Any) -> dict:
+    async def execute_set_takeoff_altitude(self, altitude_m: Any) -> dict:
         validated_alt = self.validator.validate_takeoff_request(altitude_m)
-        #Panggil MAVSDK command untuk set takeoff altitude dengan validated_alt di sini
-        print(f"Set takeoff altitude to {validated_alt} m for drone")
-        return self._build_success_payload("set_takeoff_altitude", f"Takeoff altitude set to {validated_alt} meters")
+        try:
+            await self._run_action(self.drone.action.set_takeoff_altitude(altitude_m))
+            return self._build_success_payload("set_takeoff_altitude", f"Takeoff altitude set to {validated_alt} meters")
+        except ActionError as e:
+            raise RuntimeError(f"Failed to set takeoff altitude: {str(e)}")
 
     def _build_success_payload(self, command: str, message: str) -> dict:
         resp = CommandResponse(

@@ -98,9 +98,9 @@ Tujuan: pastikan flow endpoint benar dulu sebelum nembak action MAVSDK sungguhan
 - [X] Test `GET /health` saat belum connect.
 - [X] Test `GET /telemetry` saat belum connect.
 - [X] Test `POST /command/arm` saat `connected=false`.
-- [ ] Simulasikan `connected=true`, test `POST /command/arm` sukses.
-- [ ] Test `POST /command/takeoff` dengan altitude invalid (string, <2, >50).
-- [ ] Test `POST /command/takeoff` dengan altitude valid.
+- [X] Simulasikan `connected=true`, test `POST /command/arm` sukses.
+- [X] Test `POST /command/takeoff` dengan altitude invalid (string, <2, >50).
+- [X] Test `POST /command/takeoff` dengan altitude valid.
 
 Contoh cepat:
 
@@ -119,9 +119,9 @@ DoD:
 
 Tujuan: ganti placeholder sukses jadi action asli.
 
-- [ ] Implement panggilan MAVSDK action untuk `arm/disarm/takeoff/land`.
-- [ ] Tambah timeout handling.
-- [ ] Map exception MAVSDK ke `ErrorCode` yang sesuai.
+- [X] Implement panggilan MAVSDK action untuk `arm/disarm/takeoff/land`.
+- [X] Tambah timeout handling.
+- [X] Map exception MAVSDK ke `ErrorCode` yang sesuai.
 - [ ] Tetapkan aturan retry/recover yang jelas saat koneksi drop.
 
 DoD:

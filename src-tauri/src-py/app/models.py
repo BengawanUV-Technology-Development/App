@@ -21,7 +21,7 @@ class TelemetryState:
     last_update: Optional[float] = None
     error: Optional[str] = None
     source: str = "mavsdk"
-    system_address: str = "serial://COM6:115200"
+    system_address: str = "serial://COM9:115200"
 
     def to_dict(self):
         return asdict(self)

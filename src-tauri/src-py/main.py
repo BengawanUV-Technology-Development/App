@@ -16,8 +16,9 @@ app = Flask(__name__)
 CORS(app)
 
 state_manager = StateManager()
+drone = System()
 
-init_command_routes(state_manager)
+init_command_routes(state_manager, drone)
 init_telemetry_routes(state_manager)
 init_health_routes(state_manager) 
 
@@ -25,12 +26,13 @@ app.register_blueprint(command_bp)
 app.register_blueprint(telemetry_bp)
 app.register_blueprint(health_bp)
 
-MAVSDK_ADDRESS = os.getenv("MAVSDK_ADDRESS", "serial://COM6:115200")
+MAVSDK_ADDRESS = os.getenv("MAVSDK_ADDRESS", "serial://COM9:115200")
 API_PORT = int(os.getenv("API_PORT", "5001"))
 CONNECT_TIMEOUT_SECONDS = float(os.getenv("CONNECT_TIMEOUT_SECONDS", "8"))
 CONNECT_CALL_TIMEOUT_SECONDS = float(os.getenv("CONNECT_CALL_TIMEOUT_SECONDS", "5"))
 
 state_manager.update(system_address=MAVSDK_ADDRESS)
+
 
 async def _consume_position(drone):
     async for pos in drone.telemetry.position():
@@ -65,7 +67,6 @@ async def _consume_battery(drone):
 
 async def _mavsdk_loop():
     while True:
-        drone = System()
         try:
             state_manager.update(connected=False, error=None, last_update=time.time())
             await asyncio.wait_for(
