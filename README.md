@@ -3,6 +3,73 @@
 Dokumen ini dipakai sebagai jalur kerja backend Python (Flask + MAVSDK) sampai siap dipakai frontend.
 Fokusnya command API: konsisten, aman, dan gampang di-maintain.
 
+## Roadmap Fitur Full
+
+Status saat ini:
+
+- Core backend command dan telemetry dasar sudah ada.
+- Fase 1 sampai 8 di checklist backend sudah selesai.
+- Fitur yang masih perlu dibangun mostly ada di luar command dasar, terutama mission, reboot, dan logging persisten.
+
+### 1. ARM
+
+- Backend: selesai.
+- Status: siap dipakai frontend.
+
+### 2. Flight Modes
+
+- Backend monitoring: selesai.
+- Backend switching mode: belum ada.
+- Mode yang perlu ditambah kalau mau full control: `FBWA`, `Q_STABILIZE`, `Q_HOVER`, `Q_LAND`, `AUTO`, `MANUAL`.
+
+### 3. Reboot
+
+- Backend: belum ada endpoint reboot.
+- Perlu: aksi reboot MAVSDK atau mekanisme restart yang aman.
+
+### 4. Connect Telemetri
+
+- Backend: selesai.
+- Status: state koneksi, retry, recover, health, telemetry sudah ada.
+
+### 5. GPS & Maps
+
+- Backend monitoring posisi UAV: selesai.
+- Bikin waypoint: belum ada.
+- Upload/execute mission: belum ada.
+
+### 6. HUD
+
+- Backend data dasar: sudah ada untuk connected, armed, flight_mode, posisi, battery.
+- Data HUD lanjutan seperti heading, speed, attitude, dan indikator navigasi masih bisa ditambah.
+
+### 7. Data Log
+
+- Backend: belum ada logging persisten.
+- Perlu: file log atau storage lain kalau mau histori flight dan command.
+
+## Progress Backend
+
+- Fase 1: selesai.
+- Fase 2: selesai.
+- Fase 3: selesai.
+- Fase 4: selesai.
+- Fase 5: selesai.
+- Fase 6: selesai.
+- Fase 7: selesai.
+- Fase 8: selesai.
+
+## Rekomendasi Urutan Kerja Berikutnya
+
+Kalau mau aman dan efisien, backend sebaiknya dikejar sampai minimal fitur kontrol yang dipakai frontend sudah stabil:
+
+1. Tambah flight mode switching.
+2. Tambah reboot.
+3. Tambah waypoint/mission backend.
+4. Tambah data logging persisten.
+
+Kalau tujuanmu adalah cepat bikin UI jalan, frontend boleh mulai sekarang karena kontrak command dasar sudah ada. Tapi backend masih perlu dilanjutkan untuk fitur yang sifatnya kontrol mission dan logging.
+
 ## Cara Pakai Dokumen Ini
 
 - Kerjakan dari atas ke bawah.
