@@ -122,7 +122,7 @@ Tujuan: ganti placeholder sukses jadi action asli.
 - [X] Implement panggilan MAVSDK action untuk `arm/disarm/takeoff/land`.
 - [X] Tambah timeout handling.
 - [X] Map exception MAVSDK ke `ErrorCode` yang sesuai.
-- [ ] Tetapkan aturan retry/recover yang jelas saat koneksi drop.
+- [X] Tetapkan aturan retry/recover yang jelas saat koneksi drop.
 
 DoD:
 
@@ -135,10 +135,10 @@ DoD:
 
 Tujuan: stabil untuk dipakai tim lain.
 
-- [ ] Tambah logging request/response command penting.
-- [ ] Tambah unit test untuk validator dan command service.
-- [ ] Tambah integration smoke test endpoint utama.
-- [ ] Bersihkan TODO lama yang sudah tidak relevan.
+- [X] Tambah logging request/response command penting.
+- [X] Tambah unit test untuk validator dan command service.
+- [X] Tambah integration smoke test endpoint utama.
+- [X] Bersihkan TODO lama yang sudah tidak relevan.
 
 DoD:
 

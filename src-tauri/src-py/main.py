@@ -2,7 +2,7 @@
 import asyncio
 import os
 import time
-
+import random
 from flask import Flask, jsonify
 from flask_cors import CORS
 from mavsdk import System
@@ -16,9 +16,9 @@ app = Flask(__name__)
 CORS(app)
 
 state_manager = StateManager()
-drone = System()
+drone: System | None = None
 
-init_command_routes(state_manager, drone)
+init_command_routes(state_manager, lambda: drone)
 init_telemetry_routes(state_manager)
 init_health_routes(state_manager) 
 
@@ -30,6 +30,10 @@ MAVSDK_ADDRESS = os.getenv("MAVSDK_ADDRESS", "serial://COM9:115200")
 API_PORT = int(os.getenv("API_PORT", "5001"))
 CONNECT_TIMEOUT_SECONDS = float(os.getenv("CONNECT_TIMEOUT_SECONDS", "8"))
 CONNECT_CALL_TIMEOUT_SECONDS = float(os.getenv("CONNECT_CALL_TIMEOUT_SECONDS", "5"))
+RETRY_DELAY_SECONDS = float(os.getenv("RETRY_DELAY_SECONDS", "2"))
+SERIAL_ACCESS_DENIED_RETRY_DELAY_SECONDS = float(
+    os.getenv("SERIAL_ACCESS_DENIED_RETRY_DELAY_SECONDS", "10")
+)
 
 state_manager.update(system_address=MAVSDK_ADDRESS)
 
@@ -65,9 +69,42 @@ async def _consume_battery(drone):
         )
 
 
+def _is_serial_disconnect_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "readfile failure" in message
+        or "connection reset" in message
+        or "access is denied" in message
+        or "serial" in message
+    )
+
+
+def _get_retry_delay_seconds(exc: Exception) -> float:
+    if _is_serial_disconnect_error(exc):
+        return SERIAL_ACCESS_DENIED_RETRY_DELAY_SECONDS
+    return RETRY_DELAY_SECONDS
+
+
+def _get_friendly_error_message(exc: Exception) -> str:
+    message = str(exc)
+    lowered = message.lower()
+    if "readfile failure" in lowered or "connection reset" in lowered:
+        return "MAVSDK serial connection lost"
+    if "access is denied" in lowered:
+        return "Serial port is in use or blocked"
+    return message
+
+
 async def _mavsdk_loop():
+    base_delay = 2.0
+    max_delay = 10.0
+    current_delay = base_delay
+    global drone
+
     while True:
         try:
+            drone = System()
+
             state_manager.update(connected=False, error=None, last_update=time.time())
             await asyncio.wait_for(
                 drone.connect(system_address=MAVSDK_ADDRESS),
@@ -90,6 +127,8 @@ async def _mavsdk_loop():
                 raise TimeoutError(
                     f"No MAVLink heartbeat on {MAVSDK_ADDRESS} within {CONNECT_TIMEOUT_SECONDS:.0f}s"
                 )
+            
+            current_delay = base_delay
 
             consumers = [
                 asyncio.create_task(_consume_position(drone)),
@@ -107,8 +146,21 @@ async def _mavsdk_loop():
                     raise exc
 
         except Exception as exc:
-            state_manager.update(connected=False, error=str(exc), last_update=time.time())
-            await asyncio.sleep(2)
+            friendly_error = _get_friendly_error_message(exc)
+            state_manager.update(connected=False, error=friendly_error, last_update=time.time())
+            if drone is not None:
+                try:
+                    drone._stop_mavsdk_server()
+                except Exception:
+                    pass
+                drone = None
+
+            retry_delay = max(current_delay, _get_retry_delay_seconds(exc))
+            jitter = random.uniform(-0.1, 0.1) * retry_delay
+            sleep_time = retry_delay + jitter
+            print(f"Connection error: {friendly_error}. Retrying in {sleep_time:.1f} seconds...")
+            await asyncio.sleep(sleep_time)
+            current_delay = min(current_delay * 2, max_delay)
 
 
 def _start_mavsdk_background_thread():
