@@ -6,7 +6,7 @@ from typing import Callable, Protocol
 
 from mavsdk.action import ActionError
 from app.models import CommandResponse
-from app.utils.errors import NotConnectedError
+from app.utils.errors import CommandFailedError, CommandTimeoutError, NotConnectedError
 from app.utils.state import StateManager
 from app.validators import CommandValidator
 
@@ -44,7 +44,7 @@ class CommandService:
         try:
             return await asyncio.wait_for(coroutine, timeout=timeout)
         except asyncio.TimeoutError:
-            raise RuntimeError("Command execution timed out")
+            raise CommandTimeoutError()
 
     async def execute_arm(self):
         self.validator.validate_is_connected()
@@ -52,7 +52,7 @@ class CommandService:
             await self._run_action(self.drone.action.arm())
             return self._build_success_payload("arm", "Vehicle armed successfully")
         except ActionError as e:
-            raise RuntimeError(f"Failed to arm vehicle: {str(e)}")
+            raise CommandFailedError(f"Failed to arm vehicle: {str(e)}")
     
     async def execute_disarm(self):
         self.validator.validate_is_connected()
@@ -60,7 +60,7 @@ class CommandService:
             await self._run_action(self.drone.action.disarm())
             return self._build_success_payload("disarm", "Vehicle disarmed successfully")
         except ActionError as e:
-            raise RuntimeError(f"Failed to disarm vehicle: {str(e)}")
+            raise CommandFailedError(f"Failed to disarm vehicle: {str(e)}")
 
     async def execute_takeoff(self, altitude_m: Any) -> dict:
         validated_alt = self.validator.validate_takeoff_request(altitude_m)
@@ -69,7 +69,7 @@ class CommandService:
             await self._run_action(self.drone.action.takeoff())
             return self._build_success_payload("takeoff", f"Takeoff initiated to {validated_alt} meters")
         except ActionError as e:
-            raise RuntimeError(f"Failed to initiate takeoff: {str(e)}")
+            raise CommandFailedError(f"Failed to initiate takeoff: {str(e)}")
         
     async def execute_set_takeoff_altitude(self, altitude_m: Any) -> dict:
         validated_alt = self.validator.validate_takeoff_request(altitude_m)
@@ -77,7 +77,7 @@ class CommandService:
             await self._run_action(self.drone.action.set_takeoff_altitude(validated_alt))
             return self._build_success_payload("set_takeoff_altitude", f"Takeoff altitude set to {validated_alt} meters")
         except ActionError as e:
-            raise RuntimeError(f"Failed to set takeoff altitude: {str(e)}")
+            raise CommandFailedError(f"Failed to set takeoff altitude: {str(e)}")
         
     async def execute_land(self):
         self.validator.validate_is_connected()
@@ -85,7 +85,7 @@ class CommandService:
             await self._run_action(self.drone.action.land())
             return self._build_success_payload("land", "Landing initiated")
         except ActionError as e:
-            raise RuntimeError(f"Failed to initiate landing: {str(e)}")
+            raise CommandFailedError(f"Failed to initiate landing: {str(e)}")
 
     def _build_success_payload(self, command: str, message: str) -> dict:
         resp = CommandResponse(

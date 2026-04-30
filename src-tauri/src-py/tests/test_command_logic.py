@@ -12,7 +12,7 @@ if VENV_SITE_PACKAGES.exists() and str(VENV_SITE_PACKAGES) not in sys.path:
     sys.path.insert(0, str(VENV_SITE_PACKAGES))
 
 from app.services.command import CommandService
-from app.utils.errors import InvalidRequestError, NotConnectedError
+from app.utils.errors import CommandTimeoutError, InvalidRequestError, NotConnectedError
 from app.utils.state import StateManager
 from app.validators import CommandValidator
 
@@ -111,6 +111,10 @@ class CommandServiceTests(unittest.TestCase):
 
         with self.assertRaises(NotConnectedError):
             asyncio.run(service.execute_arm())
+
+    def test_run_action_maps_asyncio_timeout_to_domain_timeout_error(self):
+        with self.assertRaises(CommandTimeoutError):
+            asyncio.run(self.service._run_action(asyncio.sleep(0.05), timeout=0.001))
 
 
 if __name__ == "__main__":

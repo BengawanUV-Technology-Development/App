@@ -12,6 +12,7 @@ if VENV_SITE_PACKAGES.exists() and str(VENV_SITE_PACKAGES) not in sys.path:
 
 import app.routes.commands as commands_module
 from main import app, state_manager
+from app.utils.errors import CommandFailedError, CommandTimeoutError, InvalidRequestError
 
 
 class FakeCommandService:
@@ -78,6 +79,82 @@ class HttpSmokeTests(unittest.TestCase):
         payload = response.get_json()
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["command"], "takeoff")
+
+    def test_takeoff_invalid_request_uses_error_contract(self):
+        class InvalidTakeoffService:
+            async def execute_takeoff(self, altitude_m):
+                raise InvalidRequestError("invalid altitude")
+
+        commands_module._command_service = InvalidTakeoffService()
+
+        response = self.client.post(
+            "/command/takeoff",
+            json={"altitude_m": "abc"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error_code"], "INVALID_REQUEST")
+
+    def test_arm_timeout_uses_timeout_error_contract(self):
+        class TimeoutArmService:
+            async def execute_arm(self):
+                raise CommandTimeoutError()
+
+        commands_module._command_service = TimeoutArmService()
+
+        response = self.client.post("/command/arm")
+
+        self.assertEqual(response.status_code, 504)
+        payload = response.get_json()
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error_code"], "TIMEOUT")
+
+    def test_disarm_command_failed_uses_error_contract(self):
+        class FailedDisarmService:
+            async def execute_disarm(self):
+                raise CommandFailedError("failed to disarm vehicle")
+
+        commands_module._command_service = FailedDisarmService()
+
+        response = self.client.post("/command/disarm")
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error_code"], "COMMAND_FAILED")
+
+    def test_land_timeout_uses_error_contract(self):
+        class TimeoutLandService:
+            async def execute_land(self):
+                raise CommandTimeoutError()
+
+        commands_module._command_service = TimeoutLandService()
+
+        response = self.client.post("/command/land")
+
+        self.assertEqual(response.status_code, 504)
+        payload = response.get_json()
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error_code"], "TIMEOUT")
+
+    def test_set_takeoff_altitude_invalid_request_uses_error_contract(self):
+        class InvalidAltitudeService:
+            async def execute_set_takeoff_altitude(self, altitude_m):
+                raise InvalidRequestError("invalid altitude")
+
+        commands_module._command_service = InvalidAltitudeService()
+
+        response = self.client.post(
+            "/command/set_takeoff_altitude",
+            json={"altitude_m": "abc"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error_code"], "INVALID_REQUEST")
 
 
 if __name__ == "__main__":

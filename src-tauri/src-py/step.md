@@ -1,7 +1,7 @@
 # Ground Station Backend Checklist
 
 Dokumen ini dipakai sebagai jalur kerja backend Python (Flask + MAVSDK) sampai siap dipakai frontend.
-Fokusnya command API: konsisten, aman, dan gampang di-maintain.
+Fokusnya command API: konsisten, aman, gampang di-maintain, dan cukup lengkap untuk dipakai UI tanpa banyak asumsi tambahan.
 
 ## Roadmap Fitur Full
 
@@ -10,6 +10,19 @@ Status saat ini:
 - Core backend command dan telemetry dasar sudah ada.
 - Fase 1 sampai 8 di checklist backend sudah selesai.
 - Fitur yang masih perlu dibangun mostly ada di luar command dasar, terutama mission, reboot, dan logging persisten.
+
+### Scope backend yang sebaiknya dianggap "full"
+
+Supaya plan backend tidak terlalu sempit, scope akhirnya sebaiknya mencakup:
+
+- Connection lifecycle: connect, reconnect, health, dan recovery saat link putus.
+- Command control: arm, disarm, takeoff, land, set takeoff altitude.
+- Flight mode control: monitoring mode dan switching mode yang aman.
+- Mission workflow: waypoint, upload mission, start, stop, dan progress monitor.
+- Safety and reboot: reboot flight controller dengan guard yang jelas.
+- Telemetry/HUD data: posisi, altitude, battery, attitude, speed, heading, dan status navigasi.
+- Persistent logging: command event, telemetry ringkas, dan audit flight session.
+- API contract consistency: error code, HTTP status, dan response body harus stabil di semua route.
 
 ### 1. ARM
 
@@ -26,6 +39,7 @@ Status saat ini:
 
 - Backend: belum ada endpoint reboot.
 - Perlu: aksi reboot MAVSDK atau mekanisme restart yang aman.
+- Perlu juga guard agar reboot tidak bisa dipanggil dalam kondisi yang tidak diizinkan tim.
 
 ### 4. Connect Telemetri
 
@@ -42,11 +56,19 @@ Status saat ini:
 
 - Backend data dasar: sudah ada untuk connected, armed, flight_mode, posisi, battery.
 - Data HUD lanjutan seperti heading, speed, attitude, dan indikator navigasi masih bisa ditambah.
+- Kalau frontend butuh overlay penerbangan yang enak dipakai, data attitude, groundspeed, vertical speed, dan heading sebaiknya masuk roadmap berikutnya.
 
 ### 7. Data Log
 
 - Backend: belum ada logging persisten.
 - Perlu: file log atau storage lain kalau mau histori flight dan command.
+
+### 8. Opsional tapi berguna
+
+- Endpoint disconnect/manual stop untuk memutus session dengan rapi.
+- Endpoint status ringkas untuk frontend bootstrap.
+- Audit trail command untuk debug insiden.
+- Standardisasi nama field telemetry bila nanti ada kebutuhan sinkronisasi dengan UI atau mobile client.
 
 ## Progress Backend
 
@@ -59,6 +81,25 @@ Status saat ini:
 - Fase 7: selesai.
 - Fase 8: selesai.
 
+## Audit Kesiapan Backend (22 April 2026)
+
+Validasi yang sudah dicek ulang:
+
+- Test backend lulus: 11/11.
+- Endpoint command utama tersedia: `arm`, `disarm`, `takeoff`, `land`, `set_takeoff_altitude`.
+- Telemetry + health endpoint tersedia dan terpasang.
+
+Temuan penting sebelum lanjut ke fitur baru:
+
+- Konsistensi error handling antar endpoint command belum seragam penuh.
+- Di service layer, error MAVSDK saat ini dilempar sebagai `RuntimeError`, sehingga mapping `CommandFailedError` belum konsisten terpakai.
+- Belum ada endpoint untuk flight mode switching, reboot, waypoint/mission, dan data log persisten.
+
+Keputusan gate:
+
+- Backend core sudah stabil untuk command dasar.
+- Belum ideal lompat langsung ke fitur besar berikutnya sebelum gate konsistensi API dibereskan.
+
 ## Rekomendasi Urutan Kerja Berikutnya
 
 Kalau mau aman dan efisien, backend sebaiknya dikejar sampai minimal fitur kontrol yang dipakai frontend sudah stabil:
@@ -69,6 +110,87 @@ Kalau mau aman dan efisien, backend sebaiknya dikejar sampai minimal fitur kontr
 4. Tambah data logging persisten.
 
 Kalau tujuanmu adalah cepat bikin UI jalan, frontend boleh mulai sekarang karena kontrak command dasar sudah ada. Tapi backend masih perlu dilanjutkan untuk fitur yang sifatnya kontrol mission dan logging.
+
+## Tahap Selanjutnya (Backend)
+
+Urutan ini disarankan supaya kamu (backend) tetap aman dari regresi:
+
+### Fase 9 - API Consistency Gate (Wajib)
+
+Tujuan: pastikan semua endpoint command selalu mengembalikan kontrak response yang konsisten untuk semua error path.
+
+- [x] Samakan penanganan exception di semua route command (`arm`, `disarm`, `takeoff`, `land`, `set_takeoff_altitude`).
+- [x] Ubah service agar melempar exception domain (`CommandFailedError`, `NotConnectedError`, `InvalidRequestError`) alih-alih `RuntimeError` generik.
+- [x] Tambah mapping timeout ke `ErrorCode.TIMEOUT`.
+- [x] Tambah test negatif untuk tiap endpoint command (MAVSDK gagal, timeout, invalid request).
+
+DoD:
+
+- Semua endpoint command menghasilkan format response error yang seragam.
+- Tidak ada error path yang lolos menjadi HTML `500` default Flask.
+- Route command dasar sudah punya cakupan negatif yang cukup untuk validasi response contract.
+
+### Fase 10 - Flight Mode Switching
+
+Tujuan: backend bisa ganti mode flight dari API.
+
+- [ ] Tambah endpoint `POST /command/set_flight_mode`.
+- [ ] Validasi mode yang diizinkan: `FBWA`, `Q_STABILIZE`, `Q_HOVER`, `Q_LAND`, `AUTO`, `MANUAL`.
+- [ ] Implement mapping mode -> MAVSDK action/API yang sesuai.
+- [ ] Tambah unit + smoke test untuk mode valid/invalid.
+- [ ] Tentukan apakah mode-switching ini hanya monitoring atau benar-benar bisa dieksekusi dari backend; kalau MAVSDK tidak mendukung mode tertentu, dokumentasikan fallback-nya.
+
+DoD:
+
+- Frontend bisa memicu perubahan mode via endpoint dengan response kontrak yang sama.
+
+### Fase 11 - Reboot Endpoint
+
+Tujuan: backend mendukung reboot flight controller secara aman.
+
+- [ ] Tambah endpoint `POST /command/reboot`.
+- [ ] Tambah safety guard (misal wajib `connected=true`, opsi cek `armed=false` sesuai kebijakan tim).
+- [ ] Tambah timeout + retry policy yang jelas.
+- [ ] Tambah test sukses/gagal.
+- [ ] Putuskan apakah reboot dilakukan lewat MAVSDK action, command wrapper, atau service eksternal supaya implementasinya tidak ambigu.
+
+DoD:
+
+- Reboot bisa dieksekusi dengan error handling yang konsisten.
+
+### Fase 12 - Waypoint & Mission Basic
+
+Tujuan: mulai dukung workflow mission planning minimal.
+
+- [ ] Definisikan kontrak waypoint payload (lat, lng, alt, urutan).
+- [ ] Tambah endpoint upload mission.
+- [ ] Tambah endpoint start/stop mission.
+- [ ] Tambah endpoint monitor progress mission.
+- [ ] Tambah validation untuk waypoint kosong, urutan duplikat, dan koordinat di luar range.
+- [ ] Pertimbangkan payload mission yang bisa dipakai ulang oleh frontend tanpa transformasi tambahan.
+
+DoD:
+
+- Mission sederhana bisa diupload dan dieksekusi dari backend.
+
+### Fase 13 - Data Logging Persisten
+
+Tujuan: data command + telemetry tersimpan untuk analisis pasca-flight.
+
+- [ ] Tentukan format log (JSONL/CSV/SQLite).
+- [ ] Simpan event command penting + telemetry interval.
+- [ ] Tambah endpoint baca log ringkas.
+- [ ] Tambah rotasi/limit file log.
+- [ ] Tambah metadata session minimal: start time, end time, system address, dan ringkasan error terakhir.
+
+DoD:
+
+- Minimal 1 sesi flight bisa direkam dan dibaca ulang.
+
+## Status Pindah Tahap (Per 22 April 2026)
+
+- Status saat ini: boleh lanjut kerja backend, tapi masuk dulu ke Fase 9 (API Consistency Gate).
+- Belum disarankan langsung lompat ke Fase 10+ sebelum Fase 9 selesai.
 
 ## Cara Pakai Dokumen Ini
 

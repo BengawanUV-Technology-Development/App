@@ -4,7 +4,13 @@ import logging
 import uuid
 from flask import Blueprint, request, jsonify, abort
 from app.models import CommandResponse
-from app.utils.errors import CommandFailedError, ErrorCode, InvalidRequestError, NotConnectedError
+from app.utils.errors import (
+    CommandFailedError,
+    CommandTimeoutError,
+    ErrorCode,
+    InvalidRequestError,
+    NotConnectedError,
+)
 from app.services.command import CommandService
 
 command_bp = Blueprint("command", __name__, url_prefix="/command")
@@ -34,6 +40,9 @@ def arm_command():
     except CommandFailedError as e:
         logger.warning("command_response arm ok=false error_code=%s error=%s", ErrorCode.COMMAND_FAILED.value, e)
         return _error_response("arm", ErrorCode.COMMAND_FAILED, str(e), 400)
+    except CommandTimeoutError as e:
+        logger.warning("command_response arm ok=false error_code=%s error=%s", ErrorCode.TIMEOUT.value, e)
+        return _error_response("arm", ErrorCode.TIMEOUT, str(e), 504)
     except Exception as e:
         logger.exception("command_response arm ok=false error_code=%s", ErrorCode.INTERNAL_ERROR.value)
         return _error_response("arm", ErrorCode.INTERNAL_ERROR, str(e), 500)
@@ -50,6 +59,15 @@ def disarm_command():
     except NotConnectedError:
         logger.info("command_response disarm ok=false error_code=%s", ErrorCode.NOT_CONNECTED.value)
         return _error_response("disarm", ErrorCode.NOT_CONNECTED, "Vehicle is not connected")
+    except CommandFailedError as e:
+        logger.warning("command_response disarm ok=false error_code=%s error=%s", ErrorCode.COMMAND_FAILED.value, e)
+        return _error_response("disarm", ErrorCode.COMMAND_FAILED, str(e), 400)
+    except CommandTimeoutError as e:
+        logger.warning("command_response disarm ok=false error_code=%s error=%s", ErrorCode.TIMEOUT.value, e)
+        return _error_response("disarm", ErrorCode.TIMEOUT, str(e), 504)
+    except Exception as e:
+        logger.exception("command_response disarm ok=false error_code=%s", ErrorCode.INTERNAL_ERROR.value)
+        return _error_response("disarm", ErrorCode.INTERNAL_ERROR, str(e), 500)
 
 @command_bp.route("/takeoff", methods=["POST"])
 def takeoff_command():
@@ -66,7 +84,15 @@ def takeoff_command():
     except InvalidRequestError as e:
         logger.info("command_response takeoff ok=false error_code=%s error=%s", ErrorCode.INVALID_REQUEST.value, e)
         return _error_response("takeoff", ErrorCode.INVALID_REQUEST, str(e))
-                
+    except CommandFailedError as e:
+        logger.warning("command_response takeoff ok=false error_code=%s error=%s", ErrorCode.COMMAND_FAILED.value, e)
+        return _error_response("takeoff", ErrorCode.COMMAND_FAILED, str(e), 400)
+    except CommandTimeoutError as e:
+        logger.warning("command_response takeoff ok=false error_code=%s error=%s", ErrorCode.TIMEOUT.value, e)
+        return _error_response("takeoff", ErrorCode.TIMEOUT, str(e), 504)
+    except Exception as e:
+        logger.exception("command_response takeoff ok=false error_code=%s", ErrorCode.INTERNAL_ERROR.value)
+        return _error_response("takeoff", ErrorCode.INTERNAL_ERROR, str(e), 500)
 
 @command_bp.route("/land", methods=["POST"])
 def land_command():
@@ -80,6 +106,15 @@ def land_command():
     except NotConnectedError:
         logger.info("command_response land ok=false error_code=%s", ErrorCode.NOT_CONNECTED.value)
         return _error_response("land", ErrorCode.NOT_CONNECTED, "Vehicle is not connected")
+    except CommandFailedError as e:
+        logger.warning("command_response land ok=false error_code=%s error=%s", ErrorCode.COMMAND_FAILED.value, e)
+        return _error_response("land", ErrorCode.COMMAND_FAILED, str(e), 400)
+    except CommandTimeoutError as e:
+        logger.warning("command_response land ok=false error_code=%s error=%s", ErrorCode.TIMEOUT.value, e)
+        return _error_response("land", ErrorCode.TIMEOUT, str(e), 504)
+    except Exception as e:
+        logger.exception("command_response land ok=false error_code=%s", ErrorCode.INTERNAL_ERROR.value)
+        return _error_response("land", ErrorCode.INTERNAL_ERROR, str(e), 500)
 
 @command_bp.route("/set_takeoff_altitude", methods=["POST"])
 def set_takeoff_altitude_command():
@@ -97,6 +132,15 @@ def set_takeoff_altitude_command():
     except InvalidRequestError as e:
         logger.info("command_response set_takeoff_altitude ok=false error_code=%s error=%s", ErrorCode.INVALID_REQUEST.value, e)
         return _error_response("set_takeoff_altitude", ErrorCode.INVALID_REQUEST, str(e))
+    except CommandFailedError as e:
+        logger.warning("command_response set_takeoff_altitude ok=false error_code=%s error=%s", ErrorCode.COMMAND_FAILED.value, e)
+        return _error_response("set_takeoff_altitude", ErrorCode.COMMAND_FAILED, str(e), 400)
+    except CommandTimeoutError as e:
+        logger.warning("command_response set_takeoff_altitude ok=false error_code=%s error=%s", ErrorCode.TIMEOUT.value, e)
+        return _error_response("set_takeoff_altitude", ErrorCode.TIMEOUT, str(e), 504)
+    except Exception as e:
+        logger.exception("command_response set_takeoff_altitude ok=false error_code=%s", ErrorCode.INTERNAL_ERROR.value)
+        return _error_response("set_takeoff_altitude", ErrorCode.INTERNAL_ERROR, str(e), 500)
 
 def _error_response(command_name: str, error_code: ErrorCode, error_message: str, status_code: int = 400):
     resp = CommandResponse(

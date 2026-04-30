@@ -34,6 +34,12 @@ class CommandFailedError(GroundStationError):
         super().__init__(ErrorCode.COMMAND_FAILED, message)
 
 
+class CommandTimeoutError(GroundStationError):
+    """Command execution timeout"""
+    def __init__(self, message: str = "Command execution timed out"):
+        super().__init__(ErrorCode.TIMEOUT, message)
+
+
 class InvalidRequestError(GroundStationError):
     """Request body invalid"""
     def __init__(self, message: str):
