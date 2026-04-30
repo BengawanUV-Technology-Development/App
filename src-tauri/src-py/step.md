@@ -9,7 +9,7 @@ Status saat ini:
 
 - Core backend command dan telemetry dasar sudah ada.
 - Fase 1 sampai 8 di checklist backend sudah selesai.
-- Fitur yang masih perlu dibangun mostly ada di luar command dasar, terutama mission, reboot, dan logging persisten.
+- Fitur yang masih perlu dibangun mostly ada di luar command dasar, terutama telemetry HUD lanjutan, reconnect hardening, dan fitur frontend yang lebih lengkap.
 
 ### Scope backend yang sebaiknya dianggap "full"
 
@@ -94,9 +94,9 @@ Validasi yang sudah dicek ulang:
 
 Temuan penting sebelum lanjut ke fitur baru:
 
-- Konsistensi error handling antar endpoint command belum seragam penuh.
-- Di service layer, error MAVSDK saat ini dilempar sebagai `RuntimeError`, sehingga mapping `CommandFailedError` belum konsisten terpakai.
-- Belum ada endpoint untuk flight mode switching, reboot, waypoint/mission, dan data log persisten.
+- Konsistensi error handling antar endpoint command sudah jauh lebih seragam.
+- Di service layer, error MAVSDK sudah dipetakan ke exception domain yang lebih stabil.
+- Endpoint untuk flight mode switching, reboot, waypoint/mission, dan data log persisten sudah tersedia.
 
 Keputusan gate:
 
@@ -107,12 +107,12 @@ Keputusan gate:
 
 Kalau mau aman dan efisien, backend sebaiknya dikejar sampai minimal fitur kontrol yang dipakai frontend sudah stabil:
 
-1. Tambah flight mode switching.
-2. Tambah reboot.
-3. Tambah waypoint/mission backend.
-4. Tambah data logging persisten.
+1. Tambah HUD data lanjutan.
+2. Tambah endpoint disconnect/manual stop.
+3. Tambah perapihan frontend mission/log viewer.
+4. Tambah hardening reconnect dan rotasi log jika diperlukan.
 
-Kalau tujuanmu adalah cepat bikin UI jalan, frontend boleh mulai sekarang karena kontrak command dasar sudah ada. Tapi backend masih perlu dilanjutkan untuk fitur yang sifatnya kontrol mission dan logging.
+Kalau tujuanmu adalah cepat bikin UI jalan, frontend boleh mulai sekarang karena kontrak command dasar dan mission/logging sudah ada. Backend berikutnya lebih cocok ke penyempurnaan HUD dan workflow operasional.
 
 ## Tahap Selanjutnya (Backend)
 
@@ -179,11 +179,11 @@ DoD:
 
 Tujuan: data command + telemetry tersimpan untuk analisis pasca-flight.
 
-- [ ] Tentukan format log (JSONL/CSV/SQLite).
-- [ ] Simpan event command penting + telemetry interval.
-- [ ] Tambah endpoint baca log ringkas.
-- [ ] Tambah rotasi/limit file log.
-- [ ] Tambah metadata session minimal: start time, end time, system address, dan ringkasan error terakhir.
+- [x] Tentukan format log (JSONL/CSV/SQLite).
+- [x] Simpan event command penting + telemetry interval.
+- [x] Tambah endpoint baca log ringkas.
+- [x] Tambah rotasi/limit file log.
+- [x] Tambah metadata session minimal: start time, end time, system address, dan ringkasan error terakhir.
 
 DoD:
 
@@ -192,7 +192,7 @@ DoD:
 ## Status Pindah Tahap (Per 22 April 2026)
 
 - Status saat ini: API consistency, flight mode switching, dan reboot endpoint sudah selesai.
-- Backend berikutnya paling masuk akal lanjut ke Fase 12 (waypoint/mission basic) atau Fase 13 (data logging persisten), tergantung prioritas tim.
+- Backend berikutnya paling masuk akal lanjut ke HUD data lanjutan, endpoint disconnect/manual stop, atau perapihan frontend mission/log viewer.
 
 ## Cara Pakai Dokumen Ini
 

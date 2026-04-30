@@ -236,6 +236,66 @@ button:disabled {
   color: rgba(226, 232, 240, 0.9);
 }
 
+.mission-panel {
+  margin-top: 20px;
+}
+
+.mission-header {
+  align-items: flex-start;
+}
+
+.mission-meta {
+  display: grid;
+  gap: 8px;
+  min-width: 210px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.84);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  color: rgba(226, 232, 240, 0.84);
+}
+
+.mission-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(220px, 0.7fr);
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.mission-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.mission-editor span {
+  font-size: 0.86rem;
+  color: rgba(226, 232, 240, 0.72);
+}
+
+.mission-editor textarea {
+  min-height: 220px;
+  width: 100%;
+  resize: vertical;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 18px;
+  padding: 14px;
+  background: rgba(15, 23, 42, 0.92);
+  color: #f8fafc;
+  line-height: 1.55;
+  outline: none;
+}
+
+.mission-editor textarea:focus {
+  border-color: rgba(94, 234, 212, 0.7);
+  box-shadow: 0 0 0 4px rgba(94, 234, 212, 0.12);
+}
+
+.mission-actions {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
 @media (max-width: 920px) {
 
   .hero-panel,
@@ -255,5 +315,13 @@ button:disabled {
 
   .action-chips {
     justify-content: flex-start;
+  }
+
+  .mission-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .mission-meta {
+    min-width: 0;
   }
 }

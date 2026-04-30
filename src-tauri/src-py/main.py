@@ -7,27 +7,12 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 from mavsdk import System
 from app.routes.mission import mission_bp, init_mission_routes
+from app.routes.logs import logs_bp, init_log_routes
 from app.routes.telemetry import telemetry_bp, init_telemetry_routes
 from app.routes.health import health_bp, init_health_routes
 from app.routes.commands import command_bp, init_command_routes
 from app.utils.state import StateManager
-
-
-app = Flask(__name__)
-CORS(app)
-
-state_manager = StateManager()
-drone: System | None = None
-
-init_command_routes(state_manager, lambda: drone)
-init_mission_routes(state_manager, lambda: drone)
-init_telemetry_routes(state_manager)
-init_health_routes(state_manager) 
-
-app.register_blueprint(command_bp)
-app.register_blueprint(mission_bp)
-app.register_blueprint(telemetry_bp)
-app.register_blueprint(health_bp)
+from app.utils.session_log import SessionLogStore
 
 MAVSDK_ADDRESS = os.getenv("MAVSDK_ADDRESS", "serial://COM9:115200")
 API_PORT = int(os.getenv("API_PORT", "5001"))
@@ -38,8 +23,28 @@ SERIAL_ACCESS_DENIED_RETRY_DELAY_SECONDS = float(
     os.getenv("SERIAL_ACCESS_DENIED_RETRY_DELAY_SECONDS", "10")
 )
 
-state_manager.update(system_address=MAVSDK_ADDRESS)
 
+app = Flask(__name__)
+CORS(app)
+
+state_manager = StateManager()
+drone: System | None = None
+session_log_store: SessionLogStore | None = None
+
+state_manager.update(system_address=MAVSDK_ADDRESS)
+session_log_store = SessionLogStore(system_address=MAVSDK_ADDRESS)
+
+init_command_routes(state_manager, lambda: drone, session_log_store)
+init_mission_routes(state_manager, lambda: drone, session_log_store)
+init_telemetry_routes(state_manager)
+init_health_routes(state_manager) 
+init_log_routes(session_log_store)
+
+app.register_blueprint(command_bp)
+app.register_blueprint(mission_bp)
+app.register_blueprint(logs_bp)
+app.register_blueprint(telemetry_bp)
+app.register_blueprint(health_bp)
 
 async def _consume_position(drone):
     async for pos in drone.telemetry.position():
@@ -51,6 +56,8 @@ async def _consume_position(drone):
             last_update=time.time(),
             error=None,
         )
+        if session_log_store is not None:
+            session_log_store.record_telemetry(state_manager.get())
 
 
 async def _consume_armed(drone):
@@ -130,6 +137,9 @@ async def _mavsdk_loop():
                 raise TimeoutError(
                     f"No MAVLink heartbeat on {MAVSDK_ADDRESS} within {CONNECT_TIMEOUT_SECONDS:.0f}s"
                 )
+
+            if session_log_store is not None:
+                session_log_store.record_event("connection_state", "Vehicle connected", connected=True)
             
             current_delay = base_delay
 
@@ -151,6 +161,13 @@ async def _mavsdk_loop():
         except Exception as exc:
             friendly_error = _get_friendly_error_message(exc)
             state_manager.update(connected=False, error=friendly_error, last_update=time.time())
+            if session_log_store is not None:
+                session_log_store.record_event(
+                    "connection_error",
+                    friendly_error,
+                    error=friendly_error,
+                    system_address=MAVSDK_ADDRESS,
+                )
             if drone is not None:
                 try:
                     drone._stop_mavsdk_server()

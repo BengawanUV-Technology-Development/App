@@ -49,10 +49,11 @@ class FlightModeCommand(str, Enum):
     MANUAL = "MANUAL"
 
 class CommandService:
-    def __init__(self, state_manager: StateManager, drone_getter: Callable[[], DroneProtocol | None]):
+    def __init__(self, state_manager: StateManager, drone_getter: Callable[[], DroneProtocol | None], event_logger: Any | None = None):
         self.state_manager = state_manager
         self.drone_getter = drone_getter
         self.validator = CommandValidator(state_manager)
+        self.event_logger = event_logger
 
     @property
     def drone(self):
@@ -67,94 +68,160 @@ class CommandService:
         except asyncio.TimeoutError:
             raise CommandTimeoutError()
 
+    def _record_command(self, command: str, ok: bool, message: str | None = None, error: str | None = None, error_code: str | None = None, **data: Any):
+        if self.event_logger is not None:
+            self.event_logger.record_command(command, ok, message=message, error=error, error_code=error_code, **data)
+
+    def _error_code_for_exception(self, exc: Exception) -> str:
+        if isinstance(exc, NotConnectedError):
+            return "NOT_CONNECTED"
+        if isinstance(exc, InvalidRequestError):
+            return "INVALID_REQUEST"
+        if isinstance(exc, CommandTimeoutError):
+            return "TIMEOUT"
+        return "COMMAND_FAILED"
+
     async def execute_arm(self):
-        self.validator.validate_is_connected()
         try: 
+            self.validator.validate_is_connected()
             await self._run_action(self.drone.action.arm())
-            return self._build_success_payload("arm", "Vehicle armed successfully")
+            result = self._build_success_payload("arm", "Vehicle armed successfully")
+            self._record_command("arm", True, message=result["message"])
+            return result
+        except (NotConnectedError, InvalidRequestError, CommandTimeoutError) as exc:
+            self._record_command("arm", False, error=str(exc), error_code=self._error_code_for_exception(exc))
+            raise
         except ActionError as e:
-            raise CommandFailedError(f"Failed to arm vehicle: {str(e)}")
+            error_message = f"Failed to arm vehicle: {str(e)}"
+            self._record_command("arm", False, error=error_message, error_code="COMMAND_FAILED")
+            raise CommandFailedError(error_message)
     
     async def execute_disarm(self):
-        self.validator.validate_is_connected()
         try:
+            self.validator.validate_is_connected()
             await self._run_action(self.drone.action.disarm())
-            return self._build_success_payload("disarm", "Vehicle disarmed successfully")
+            result = self._build_success_payload("disarm", "Vehicle disarmed successfully")
+            self._record_command("disarm", True, message=result["message"])
+            return result
+        except (NotConnectedError, InvalidRequestError, CommandTimeoutError) as exc:
+            self._record_command("disarm", False, error=str(exc), error_code=self._error_code_for_exception(exc))
+            raise
         except ActionError as e:
-            raise CommandFailedError(f"Failed to disarm vehicle: {str(e)}")
+            error_message = f"Failed to disarm vehicle: {str(e)}"
+            self._record_command("disarm", False, error=error_message, error_code="COMMAND_FAILED")
+            raise CommandFailedError(error_message)
 
     async def execute_takeoff(self, altitude_m: Any) -> dict:
-        validated_alt = self.validator.validate_takeoff_request(altitude_m)
         try:
+            validated_alt = self.validator.validate_takeoff_request(altitude_m)
             await self._run_action(self.drone.action.set_takeoff_altitude(validated_alt))
             await self._run_action(self.drone.action.takeoff())
-            return self._build_success_payload("takeoff", f"Takeoff initiated to {validated_alt} meters")
+            result = self._build_success_payload("takeoff", f"Takeoff initiated to {validated_alt} meters")
+            self._record_command("takeoff", True, message=result["message"], altitude_m=validated_alt)
+            return result
+        except (NotConnectedError, InvalidRequestError, CommandTimeoutError) as exc:
+            self._record_command("takeoff", False, error=str(exc), error_code=self._error_code_for_exception(exc), altitude_m=altitude_m)
+            raise
         except ActionError as e:
-            raise CommandFailedError(f"Failed to initiate takeoff: {str(e)}")
+            error_message = f"Failed to initiate takeoff: {str(e)}"
+            self._record_command("takeoff", False, error=error_message, error_code="COMMAND_FAILED", altitude_m=altitude_m)
+            raise CommandFailedError(error_message)
         
     async def execute_set_takeoff_altitude(self, altitude_m: Any) -> dict:
-        validated_alt = self.validator.validate_takeoff_request(altitude_m)
         try:
+            validated_alt = self.validator.validate_takeoff_request(altitude_m)
             await self._run_action(self.drone.action.set_takeoff_altitude(validated_alt))
-            return self._build_success_payload("set_takeoff_altitude", f"Takeoff altitude set to {validated_alt} meters")
+            result = self._build_success_payload("set_takeoff_altitude", f"Takeoff altitude set to {validated_alt} meters")
+            self._record_command("set_takeoff_altitude", True, message=result["message"], altitude_m=validated_alt)
+            return result
+        except (NotConnectedError, InvalidRequestError, CommandTimeoutError) as exc:
+            self._record_command("set_takeoff_altitude", False, error=str(exc), error_code=self._error_code_for_exception(exc), altitude_m=altitude_m)
+            raise
         except ActionError as e:
-            raise CommandFailedError(f"Failed to set takeoff altitude: {str(e)}")
+            error_message = f"Failed to set takeoff altitude: {str(e)}"
+            self._record_command("set_takeoff_altitude", False, error=error_message, error_code="COMMAND_FAILED", altitude_m=altitude_m)
+            raise CommandFailedError(error_message)
         
     async def execute_land(self):
-        self.validator.validate_is_connected()
         try:
+            self.validator.validate_is_connected()
             await self._run_action(self.drone.action.land())
-            return self._build_success_payload("land", "Landing initiated")
+            result = self._build_success_payload("land", "Landing initiated")
+            self._record_command("land", True, message=result["message"])
+            return result
+        except (NotConnectedError, InvalidRequestError, CommandTimeoutError) as exc:
+            self._record_command("land", False, error=str(exc), error_code=self._error_code_for_exception(exc))
+            raise
         except ActionError as e:
-            raise CommandFailedError(f"Failed to initiate landing: {str(e)}")
+            error_message = f"Failed to initiate landing: {str(e)}"
+            self._record_command("land", False, error=error_message, error_code="COMMAND_FAILED")
+            raise CommandFailedError(error_message)
 
     async def execute_set_flight_mode(self, flight_mode: Any) -> dict:
-        normalized_mode = self._normalize_flight_mode(flight_mode)
-        self.validator.validate_is_connected()
-
-        if normalized_mode == FlightModeCommand.FBWA:
-            action_label = "transition_to_fixedwing"
-            coroutine = self.drone.action.transition_to_fixedwing()
-            message = "Flight mode transition requested: FBWA / fixed wing"
-        elif normalized_mode == FlightModeCommand.Q_HOVER:
-            action_label = "hold"
-            coroutine = self.drone.action.hold()
-            message = "Flight mode transition requested: Q_HOVER / hold"
-        elif normalized_mode == FlightModeCommand.Q_LAND:
-            action_label = "land"
-            coroutine = self.drone.action.land()
-            message = "Flight mode transition requested: Q_LAND / land"
-        elif normalized_mode == FlightModeCommand.AUTO:
-            action_label = "return_to_launch"
-            coroutine = self.drone.action.return_to_launch()
-            message = "Flight mode transition requested: AUTO / return to launch"
-        elif normalized_mode == FlightModeCommand.MANUAL:
-            action_label = "transition_to_multicopter"
-            coroutine = self.drone.action.transition_to_multicopter()
-            message = "Flight mode transition requested: MANUAL / multicopter"
-        else:
-            raise InvalidRequestError(
-                f"Mode {normalized_mode.value} belum didukung oleh backend MAVSDK ini"
-            )
-
         try:
+            normalized_mode = self._normalize_flight_mode(flight_mode)
+            self.validator.validate_is_connected()
+
+            if normalized_mode == FlightModeCommand.FBWA:
+                action_label = "transition_to_fixedwing"
+                coroutine = self.drone.action.transition_to_fixedwing()
+                message = "Flight mode transition requested: FBWA / fixed wing"
+            elif normalized_mode == FlightModeCommand.Q_HOVER:
+                action_label = "hold"
+                coroutine = self.drone.action.hold()
+                message = "Flight mode transition requested: Q_HOVER / hold"
+            elif normalized_mode == FlightModeCommand.Q_LAND:
+                action_label = "land"
+                coroutine = self.drone.action.land()
+                message = "Flight mode transition requested: Q_LAND / land"
+            elif normalized_mode == FlightModeCommand.AUTO:
+                action_label = "return_to_launch"
+                coroutine = self.drone.action.return_to_launch()
+                message = "Flight mode transition requested: AUTO / return to launch"
+            elif normalized_mode == FlightModeCommand.MANUAL:
+                action_label = "transition_to_multicopter"
+                coroutine = self.drone.action.transition_to_multicopter()
+                message = "Flight mode transition requested: MANUAL / multicopter"
+            else:
+                raise InvalidRequestError(
+                    f"Mode {normalized_mode.value} belum didukung oleh backend MAVSDK ini"
+                )
+
             await self._run_action(coroutine)
-            return self._build_success_payload("set_flight_mode", message)
+            result = self._build_success_payload("set_flight_mode", message)
+            self._record_command("set_flight_mode", True, message=result["message"], requested_mode=normalized_mode.value, action_label=action_label)
+            return result
+        except (NotConnectedError, InvalidRequestError, CommandTimeoutError) as exc:
+            requested_mode = flight_mode.value if isinstance(flight_mode, FlightModeCommand) else flight_mode
+            self._record_command("set_flight_mode", False, error=str(exc), error_code=self._error_code_for_exception(exc), requested_mode=requested_mode)
+            raise
         except ActionError as e:
-            raise CommandFailedError(f"Failed to execute {action_label}: {str(e)}")
+            error_message = f"Failed to execute {action_label}: {str(e)}"
+            requested_mode = flight_mode.value if isinstance(flight_mode, FlightModeCommand) else flight_mode
+            self._record_command("set_flight_mode", False, error=error_message, error_code="COMMAND_FAILED", requested_mode=requested_mode)
+            raise CommandFailedError(error_message)
 
     async def execute_reboot(self) -> dict:
         self.validator.validate_is_connected()
 
         state = self.state_manager.get()
         if state.armed:
-            raise InvalidRequestError("Reboot hanya boleh saat vehicle disarmed")
+            error_message = "Reboot hanya boleh saat vehicle disarmed"
+            self._record_command("reboot", False, error=error_message, error_code="INVALID_REQUEST")
+            raise InvalidRequestError(error_message)
 
         try:
             await self._run_action(self.drone.action.reboot())
-            return self._build_success_payload("reboot", "Reboot requested successfully")
+            result = self._build_success_payload("reboot", "Reboot requested successfully")
+            self._record_command("reboot", True, message=result["message"])
+            return result
+        except (NotConnectedError, InvalidRequestError, CommandTimeoutError) as exc:
+            self._record_command("reboot", False, error=str(exc), error_code=self._error_code_for_exception(exc))
+            raise
         except ActionError as e:
-            raise CommandFailedError(f"Failed to execute reboot: {str(e)}")
+            error_message = f"Failed to execute reboot: {str(e)}"
+            self._record_command("reboot", False, error=error_message, error_code="COMMAND_FAILED")
+            raise CommandFailedError(error_message)
 
     def _normalize_flight_mode(self, flight_mode: Any) -> FlightModeCommand:
         if isinstance(flight_mode, FlightModeCommand):

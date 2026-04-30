@@ -1,3 +1,5 @@
+import os
+import tempfile
 import sys
 import unittest
 from pathlib import Path
@@ -10,8 +12,13 @@ VENV_SITE_PACKAGES = PROJECT_ROOT / ".venv" / "Lib" / "site-packages"
 if VENV_SITE_PACKAGES.exists() and str(VENV_SITE_PACKAGES) not in sys.path:
     sys.path.insert(0, str(VENV_SITE_PACKAGES))
 
+TEST_LOG_DIR = Path(tempfile.mkdtemp(prefix="gs-backend-logs-"))
+os.environ.setdefault("SESSION_LOG_DIR", str(TEST_LOG_DIR))
+
 import app.routes.commands as commands_module
+import app.routes.logs as logs_module
 import app.routes.mission as mission_module
+from app.utils.session_log import SessionLogStore
 from main import app, state_manager
 from app.utils.errors import CommandFailedError, CommandTimeoutError, InvalidRequestError
 
@@ -106,13 +113,16 @@ class HttpSmokeTests(unittest.TestCase):
     def setUp(self):
         self.client = app.test_client()
         self.previous_service = commands_module._command_service
+        self.previous_log_store = logs_module._session_log_store
         self.previous_mission_service = mission_module._mission_service
         commands_module._command_service = FakeCommandService()
         mission_module._mission_service = FakeMissionService()
+        logs_module._session_log_store = SessionLogStore(log_dir=TEST_LOG_DIR, system_address="serial://COM9:115200")
         state_manager.update(connected=True, error=None)
 
     def tearDown(self):
         commands_module._command_service = self.previous_service
+        logs_module._session_log_store = self.previous_log_store
         mission_module._mission_service = self.previous_mission_service
 
     def test_health_endpoint_returns_json(self):
@@ -305,6 +315,32 @@ class HttpSmokeTests(unittest.TestCase):
         self.assertEqual(payload["command"], "mission_progress")
         self.assertEqual(payload["current"], 1)
         self.assertEqual(payload["total"], 3)
+
+    def test_log_summary_endpoint_returns_session_metadata(self):
+        session_log_store = logs_module._session_log_store
+        assert session_log_store is not None
+        session_log_store.record_command("arm", True, message="Vehicle armed successfully")
+
+        response = self.client.get("/logs/summary")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertIn("session_id", payload["session"])
+        self.assertGreaterEqual(payload["session"]["command_count"], 1)
+
+    def test_recent_logs_endpoint_returns_events(self):
+        session_log_store = logs_module._session_log_store
+        assert session_log_store is not None
+        session_log_store.record_telemetry(state_manager.get())
+
+        response = self.client.get("/logs/recent?limit=1")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["items"][0]["type"], "telemetry")
 
 
 if __name__ == "__main__":

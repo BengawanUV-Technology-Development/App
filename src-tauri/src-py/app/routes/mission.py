@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request, abort
 
 from app.models import CommandResponse
 from app.services.mission import MissionService
+from app.utils.session_log import SessionLogStore
 from app.utils.errors import (
     CommandFailedError,
     CommandTimeoutError,
@@ -20,9 +21,9 @@ _mission_service: MissionService | None = None
 logger = logging.getLogger(__name__)
 
 
-def init_mission_routes(state_manager, drone_getter):
+def init_mission_routes(state_manager, drone_getter, event_logger: SessionLogStore | None = None):
     global _mission_service
-    _mission_service = MissionService(state_manager, drone_getter)
+    _mission_service = MissionService(state_manager, drone_getter, event_logger)
 
 
 def _get_service_or_abort():

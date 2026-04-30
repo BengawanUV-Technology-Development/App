@@ -19,6 +19,18 @@ function App() {
   const [statusText, setStatusText] = useState("Menghubungkan ke backend Python...");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [modeStatus, setModeStatus] = useState("-");
+  const [missionDraft, setMissionDraft] = useState(`[
+  {
+    "seq": 0,
+    "latitude_deg": -6.2001,
+    "longitude_deg": 106.8166,
+    "relative_altitude_m": 15,
+    "speed_m_s": 5,
+    "is_fly_through": false
+  }
+]`);
+  const [missionStatus, setMissionStatus] = useState("-");
+  const [missionProgress, setMissionProgress] = useState("-");
 
   const setFlightMode = async (mode) => {
     try {
@@ -57,6 +69,62 @@ function App() {
     } catch (error) {
       setModeStatus(String(error));
       console.error("Error rebooting vehicle:", error);
+    }
+  };
+
+  const uploadMission = async () => {
+    try {
+      const waypoints = JSON.parse(missionDraft);
+      const response = await fetch(`${API_BASE}/mission/upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ waypoints }),
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || payload.message || "Gagal upload mission");
+      }
+
+      setMissionStatus(payload.message || "Mission uploaded");
+      await fetchTelemetry();
+    } catch (error) {
+      setMissionStatus(String(error));
+      console.error("Error uploading mission:", error);
+    }
+  };
+
+  const runMissionCommand = async (path, label) => {
+    try {
+      const response = await fetch(`${API_BASE}${path}`, { method: "POST" });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || payload.message || `Gagal ${label}`);
+      }
+
+      setMissionStatus(payload.message || `${label} requested`);
+      await fetchTelemetry();
+    } catch (error) {
+      setMissionStatus(String(error));
+      console.error(`Error ${label}:`, error);
+    }
+  };
+
+  const refreshMissionProgress = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/mission/progress`);
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || payload.message || "Gagal ambil progress mission");
+      }
+
+      setMissionProgress(
+        payload.current === undefined || payload.total === undefined ? "-" : `${payload.current}/${payload.total}`,
+      );
+      setMissionStatus("Mission progress diperbarui");
+    } catch (error) {
+      setMissionStatus(String(error));
+      console.error("Error reading mission progress:", error);
     }
   };
 
@@ -215,6 +283,49 @@ function App() {
           </button>
         </div>
         <p className="hero-copy compact">Status mode: {modeStatus}</p>
+      </section>
+
+      <section className="panel mission-panel">
+        <div className="panel-header mission-header">
+          <div>
+            <p className="panel-label">Mission</p>
+            <h2>Upload waypoint sederhana</h2>
+            <p className="hero-copy compact">
+              UI ini sengaja minimal supaya backend bisa dicoba sekarang, lalu nanti frontend bisa ganti ke form yang lebih lengkap.
+            </p>
+          </div>
+          <div className="mission-meta">
+            <span>Upload: {missionStatus}</span>
+            <span>Progress: {missionProgress}</span>
+          </div>
+        </div>
+
+        <div className="mission-layout">
+          <label className="mission-editor">
+            <span>Waypoint JSON</span>
+            <textarea
+              value={missionDraft}
+              onChange={(event) => setMissionDraft(event.target.value)}
+              spellCheck={false}
+            />
+          </label>
+
+          <div className="mission-actions">
+            <button onClick={uploadMission} disabled={!health.connected}>Upload</button>
+            <button onClick={() => runMissionCommand("/mission/start", "start mission")} disabled={!health.connected}>
+              Start
+            </button>
+            <button onClick={() => runMissionCommand("/mission/pause", "pause mission")} disabled={!health.connected}>
+              Pause
+            </button>
+            <button onClick={() => runMissionCommand("/mission/clear", "clear mission")} disabled={!health.connected}>
+              Clear
+            </button>
+            <button onClick={refreshMissionProgress} disabled={!health.connected}>
+              Refresh Progress
+            </button>
+          </div>
+        </div>
       </section>
     </main>
   );

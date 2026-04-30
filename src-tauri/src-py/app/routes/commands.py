@@ -12,14 +12,15 @@ from app.utils.errors import (
     NotConnectedError,
 )
 from app.services.command import CommandService
+from app.utils.session_log import SessionLogStore
 
 command_bp = Blueprint("command", __name__, url_prefix="/command")
 _command_service: CommandService | None = None
 logger = logging.getLogger(__name__)
 
-def init_command_routes(state_manager, drone_getter):
+def init_command_routes(state_manager, drone_getter, event_logger: SessionLogStore | None = None):
     global _command_service
-    _command_service = CommandService(state_manager, drone_getter)
+    _command_service = CommandService(state_manager, drone_getter, event_logger)
 
 def _get_service_or_abort():
     if _command_service is None:
