@@ -33,6 +33,21 @@ class FakeAction:
     async def land(self):
         self.calls.append("land")
 
+    async def hold(self):
+        self.calls.append("hold")
+
+    async def return_to_launch(self):
+        self.calls.append("return_to_launch")
+
+    async def transition_to_fixedwing(self):
+        self.calls.append("transition_to_fixedwing")
+
+    async def transition_to_multicopter(self):
+        self.calls.append("transition_to_multicopter")
+
+    async def reboot(self):
+        self.calls.append("reboot")
+
     async def set_takeoff_altitude(self, altitude):
         self.calls.append(("set_takeoff_altitude", altitude))
 
@@ -105,6 +120,30 @@ class CommandServiceTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["command"], "set_takeoff_altitude")
         self.assertEqual(self.drone.action.calls, [("set_takeoff_altitude", 15.0)])
+
+    def test_execute_set_flight_mode_maps_supported_mode_to_action(self):
+        result = asyncio.run(self.service.execute_set_flight_mode("Q_HOVER"))
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["command"], "set_flight_mode")
+        self.assertEqual(self.drone.action.calls, ["hold"])
+
+    def test_execute_set_flight_mode_rejects_unsupported_mode(self):
+        with self.assertRaises(InvalidRequestError):
+            asyncio.run(self.service.execute_set_flight_mode("Q_STABILIZE"))
+
+    def test_execute_reboot_calls_mavsdk_reboot_when_disarmed(self):
+        result = asyncio.run(self.service.execute_reboot())
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["command"], "reboot")
+        self.assertEqual(self.drone.action.calls, ["reboot"])
+
+    def test_execute_reboot_rejects_when_armed(self):
+        self.state_manager.update(armed=True)
+
+        with self.assertRaises(InvalidRequestError):
+            asyncio.run(self.service.execute_reboot())
 
     def test_execute_arm_raises_when_drone_missing(self):
         service = CommandService(self.state_manager, lambda: None)

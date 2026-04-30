@@ -142,6 +142,57 @@ def set_takeoff_altitude_command():
         logger.exception("command_response set_takeoff_altitude ok=false error_code=%s", ErrorCode.INTERNAL_ERROR.value)
         return _error_response("set_takeoff_altitude", ErrorCode.INTERNAL_ERROR, str(e), 500)
 
+@command_bp.route("/set_flight_mode", methods=["POST"])
+def set_flight_mode_command():
+    data = request.get_json(silent=True) or {}
+    service = _get_service_or_abort()
+
+    logger.info("command_request set_flight_mode mode=%s", data.get("mode"))
+    try:
+        result = asyncio.run(service.execute_set_flight_mode(data.get("mode")))
+        logger.info("command_response set_flight_mode ok=true command_id=%s", result.get("command_id"))
+        return jsonify(result), 200
+    except NotConnectedError:
+        logger.info("command_response set_flight_mode ok=false error_code=%s", ErrorCode.NOT_CONNECTED.value)
+        return _error_response("set_flight_mode", ErrorCode.NOT_CONNECTED, "Vehicle is not connected")
+    except InvalidRequestError as e:
+        logger.info("command_response set_flight_mode ok=false error_code=%s error=%s", ErrorCode.INVALID_REQUEST.value, e)
+        return _error_response("set_flight_mode", ErrorCode.INVALID_REQUEST, str(e))
+    except CommandFailedError as e:
+        logger.warning("command_response set_flight_mode ok=false error_code=%s error=%s", ErrorCode.COMMAND_FAILED.value, e)
+        return _error_response("set_flight_mode", ErrorCode.COMMAND_FAILED, str(e), 400)
+    except CommandTimeoutError as e:
+        logger.warning("command_response set_flight_mode ok=false error_code=%s error=%s", ErrorCode.TIMEOUT.value, e)
+        return _error_response("set_flight_mode", ErrorCode.TIMEOUT, str(e), 504)
+    except Exception as e:
+        logger.exception("command_response set_flight_mode ok=false error_code=%s", ErrorCode.INTERNAL_ERROR.value)
+        return _error_response("set_flight_mode", ErrorCode.INTERNAL_ERROR, str(e), 500)
+
+@command_bp.route("/reboot", methods=["POST"])
+def reboot_command():
+    service = _get_service_or_abort()
+
+    logger.info("command_request reboot")
+    try:
+        result = asyncio.run(service.execute_reboot())
+        logger.info("command_response reboot ok=true command_id=%s", result.get("command_id"))
+        return jsonify(result), 200
+    except NotConnectedError:
+        logger.info("command_response reboot ok=false error_code=%s", ErrorCode.NOT_CONNECTED.value)
+        return _error_response("reboot", ErrorCode.NOT_CONNECTED, "Vehicle is not connected")
+    except InvalidRequestError as e:
+        logger.info("command_response reboot ok=false error_code=%s error=%s", ErrorCode.INVALID_REQUEST.value, e)
+        return _error_response("reboot", ErrorCode.INVALID_REQUEST, str(e))
+    except CommandFailedError as e:
+        logger.warning("command_response reboot ok=false error_code=%s error=%s", ErrorCode.COMMAND_FAILED.value, e)
+        return _error_response("reboot", ErrorCode.COMMAND_FAILED, str(e), 400)
+    except CommandTimeoutError as e:
+        logger.warning("command_response reboot ok=false error_code=%s error=%s", ErrorCode.TIMEOUT.value, e)
+        return _error_response("reboot", ErrorCode.TIMEOUT, str(e), 504)
+    except Exception as e:
+        logger.exception("command_response reboot ok=false error_code=%s", ErrorCode.INTERNAL_ERROR.value)
+        return _error_response("reboot", ErrorCode.INTERNAL_ERROR, str(e), 500)
+
 def _error_response(command_name: str, error_code: ErrorCode, error_message: str, status_code: int = 400):
     resp = CommandResponse(
         ok=False,

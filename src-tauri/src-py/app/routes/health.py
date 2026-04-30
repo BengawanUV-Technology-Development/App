@@ -20,10 +20,3 @@ def health():
         "last_update": state.last_update,
         "system_address": state.system_address,
     })
-
-@health_bp.route("/", methods=["GET"])
-def index():
-    return jsonify({
-        "message": "Python backend is running",
-        "hint": "Use /health, /telemetry, or /command endpoints",
-    })

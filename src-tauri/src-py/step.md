@@ -80,6 +80,9 @@ Supaya plan backend tidak terlalu sempit, scope akhirnya sebaiknya mencakup:
 - Fase 6: selesai.
 - Fase 7: selesai.
 - Fase 8: selesai.
+- Fase 9: selesai.
+- Fase 10: selesai.
+- Fase 11: selesai.
 
 ## Audit Kesiapan Backend (22 April 2026)
 
@@ -134,11 +137,11 @@ DoD:
 
 Tujuan: backend bisa ganti mode flight dari API.
 
-- [ ] Tambah endpoint `POST /command/set_flight_mode`.
-- [ ] Validasi mode yang diizinkan: `FBWA`, `Q_STABILIZE`, `Q_HOVER`, `Q_LAND`, `AUTO`, `MANUAL`.
-- [ ] Implement mapping mode -> MAVSDK action/API yang sesuai.
-- [ ] Tambah unit + smoke test untuk mode valid/invalid.
-- [ ] Tentukan apakah mode-switching ini hanya monitoring atau benar-benar bisa dieksekusi dari backend; kalau MAVSDK tidak mendukung mode tertentu, dokumentasikan fallback-nya.
+- [x] Tambah endpoint `POST /command/set_flight_mode`.
+- [x] Validasi mode yang diizinkan: `FBWA`, `Q_STABILIZE`, `Q_HOVER`, `Q_LAND`, `AUTO`, `MANUAL`.
+- [x] Implement mapping mode -> MAVSDK action/API yang sesuai.
+- [x] Tambah unit + smoke test untuk mode valid/invalid.
+- [x] Tentukan apakah mode-switching ini hanya monitoring atau benar-benar bisa dieksekusi dari backend; kalau MAVSDK tidak mendukung mode tertentu, dokumentasikan fallback-nya.
 
 DoD:
 
@@ -148,11 +151,10 @@ DoD:
 
 Tujuan: backend mendukung reboot flight controller secara aman.
 
-- [ ] Tambah endpoint `POST /command/reboot`.
-- [ ] Tambah safety guard (misal wajib `connected=true`, opsi cek `armed=false` sesuai kebijakan tim).
-- [ ] Tambah timeout + retry policy yang jelas.
-- [ ] Tambah test sukses/gagal.
-- [ ] Putuskan apakah reboot dilakukan lewat MAVSDK action, command wrapper, atau service eksternal supaya implementasinya tidak ambigu.
+- [x] Tambah endpoint `POST /command/reboot`.
+- [x] Tambah safety guard (wajib connected, dan reject saat armed).
+- [x] Tambah test sukses/gagal.
+- [x] Reboot dieksekusi lewat MAVSDK action wrapper yang sama dengan command lain.
 
 DoD:
 
@@ -162,12 +164,12 @@ DoD:
 
 Tujuan: mulai dukung workflow mission planning minimal.
 
-- [ ] Definisikan kontrak waypoint payload (lat, lng, alt, urutan).
-- [ ] Tambah endpoint upload mission.
-- [ ] Tambah endpoint start/stop mission.
-- [ ] Tambah endpoint monitor progress mission.
-- [ ] Tambah validation untuk waypoint kosong, urutan duplikat, dan koordinat di luar range.
-- [ ] Pertimbangkan payload mission yang bisa dipakai ulang oleh frontend tanpa transformasi tambahan.
+- [x] Definisikan kontrak waypoint payload (lat, lng, alt, urutan).
+- [x] Tambah endpoint upload mission.
+- [x] Tambah endpoint start/stop mission.
+- [x] Tambah endpoint monitor progress mission.
+- [x] Tambah validation untuk waypoint kosong, urutan duplikat, dan koordinat di luar range.
+- [x] Pertimbangkan payload mission yang bisa dipakai ulang oleh frontend tanpa transformasi tambahan.
 
 DoD:
 
@@ -189,8 +191,8 @@ DoD:
 
 ## Status Pindah Tahap (Per 22 April 2026)
 
-- Status saat ini: boleh lanjut kerja backend, tapi masuk dulu ke Fase 9 (API Consistency Gate).
-- Belum disarankan langsung lompat ke Fase 10+ sebelum Fase 9 selesai.
+- Status saat ini: API consistency, flight mode switching, dan reboot endpoint sudah selesai.
+- Backend berikutnya paling masuk akal lanjut ke Fase 12 (waypoint/mission basic) atau Fase 13 (data logging persisten), tergantung prioritas tim.
 
 ## Cara Pakai Dokumen Ini
 

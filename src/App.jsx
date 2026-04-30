@@ -18,6 +18,47 @@ function App() {
   });
   const [statusText, setStatusText] = useState("Menghubungkan ke backend Python...");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [modeStatus, setModeStatus] = useState("-");
+
+  const setFlightMode = async (mode) => {
+    try {
+      const response = await fetch(`${API_BASE}/command/set_flight_mode`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || payload.message || "Gagal mengubah flight mode");
+      }
+
+      setModeStatus(payload.message || `Flight mode ${mode} dikirim`);
+      await fetchTelemetry();
+    } catch (error) {
+      setModeStatus(String(error));
+      console.error("Error setting flight mode:", error);
+    }
+  };
+
+  const rebootVehicle = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/command/reboot`, {
+        method: "POST",
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || payload.message || "Gagal reboot vehicle");
+      }
+
+      setModeStatus(payload.message || "Reboot requested successfully");
+      await fetchTelemetry();
+    } catch (error) {
+      setModeStatus(String(error));
+      console.error("Error rebooting vehicle:", error);
+    }
+  };
 
   const fetchTelemetry = async () => {
     setIsRefreshing(true);
@@ -157,18 +198,23 @@ function App() {
       <section className="panel action-panel">
         <div>
           <p className="panel-label">MVP 1</p>
-          <h2>Action controls next</h2>
+          <h2>Action controls</h2>
           <p className="hero-copy compact">
-            Setelah koneksi stabil, langkah berikutnya adalah menambah command layer untuk arm, disarm, takeoff, dan land.
+            Backend sekarang bisa menerima command flight mode untuk aksi yang memang didukung MAVSDK.
           </p>
         </div>
         <div className="action-chips">
-          <span>Connect</span>
-          <span>Telemetry</span>
-          <span>Arm</span>
-          <span>Takeoff</span>
-          <span>Land</span>
+          <button onClick={() => setFlightMode("FBWA")} disabled={!health.connected}>FBWA</button>
+          <button onClick={() => setFlightMode("Q_HOVER")} disabled={!health.connected}>Q_HOVER</button>
+          <button onClick={() => setFlightMode("Q_LAND")} disabled={!health.connected}>Q_LAND</button>
+          <button onClick={() => setFlightMode("AUTO")} disabled={!health.connected}>AUTO</button>
+          <button onClick={() => setFlightMode("MANUAL")} disabled={!health.connected}>MANUAL</button>
+          <button onClick={() => setFlightMode("Q_STABILIZE")} disabled={!health.connected}>Q_STABILIZE</button>
+          <button onClick={rebootVehicle} disabled={!health.connected || telemetry.armed}>
+            Reboot
+          </button>
         </div>
+        <p className="hero-copy compact">Status mode: {modeStatus}</p>
       </section>
     </main>
   );

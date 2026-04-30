@@ -6,6 +6,7 @@ import random
 from flask import Flask, jsonify
 from flask_cors import CORS
 from mavsdk import System
+from app.routes.mission import mission_bp, init_mission_routes
 from app.routes.telemetry import telemetry_bp, init_telemetry_routes
 from app.routes.health import health_bp, init_health_routes
 from app.routes.commands import command_bp, init_command_routes
@@ -19,10 +20,12 @@ state_manager = StateManager()
 drone: System | None = None
 
 init_command_routes(state_manager, lambda: drone)
+init_mission_routes(state_manager, lambda: drone)
 init_telemetry_routes(state_manager)
 init_health_routes(state_manager) 
 
 app.register_blueprint(command_bp)
+app.register_blueprint(mission_bp)
 app.register_blueprint(telemetry_bp)
 app.register_blueprint(health_bp)
 
