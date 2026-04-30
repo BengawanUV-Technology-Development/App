@@ -158,6 +158,7 @@ class CommandService:
             raise CommandFailedError(error_message)
 
     async def execute_set_flight_mode(self, flight_mode: Any) -> dict:
+        action_label = "set_flight_mode"
         try:
             normalized_mode = self._normalize_flight_mode(flight_mode)
             self.validator.validate_is_connected()

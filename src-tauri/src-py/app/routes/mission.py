@@ -2,6 +2,7 @@ from time import time
 import asyncio
 import logging
 import uuid
+from typing import Any, cast
 from flask import Blueprint, jsonify, request, abort
 
 from app.models import CommandResponse
@@ -36,7 +37,12 @@ def _get_service_or_abort():
 def upload_mission_command():
     data = request.get_json(silent=True) or {}
     service = _get_service_or_abort()
-    waypoints = data.get("waypoints")
+    waypoints_raw = data.get("waypoints")
+
+    if not isinstance(waypoints_raw, list):
+        raise InvalidRequestError("waypoints must be a list of waypoint objects")
+
+    waypoints = cast(list[dict[str, Any]], waypoints_raw)
 
     logger.info("mission_request upload waypoints=%s", len(waypoints) if isinstance(waypoints, list) else None)
     try:
