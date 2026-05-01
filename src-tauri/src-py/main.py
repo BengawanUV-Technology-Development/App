@@ -3,9 +3,27 @@ import asyncio
 import os
 import time
 import random
+import subprocess
 from flask import Flask, jsonify
 from flask_cors import CORS
 from mavsdk import System
+
+# ... (rest of imports)
+
+def _kill_mavsdk_server():
+    """Forcefully terminate any hanging mavsdk_server processes to release serial ports."""
+    try:
+        if os.name == "nt":  # Windows
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "mavsdk_server.exe", "/T"],
+                capture_output=True,
+                check=False,
+            )
+        else:  # Linux/Mac
+            subprocess.run(["pkill", "-9", "mavsdk_server"], capture_output=True, check=False)
+    except Exception:
+        pass
+
 from app.routes.mission import mission_bp, init_mission_routes
 from app.routes.logs import logs_bp, init_log_routes
 from app.routes.telemetry import telemetry_bp, init_telemetry_routes
@@ -182,10 +200,11 @@ async def _mavsdk_loop():
                 except Exception:
                     pass
                 finally:
-                    # del drone is safe here because it's in global/outer scope if needed, 
-                    # but since drone is global, we set it to None.
                     # MAVSDK System object deletion triggers cleanup in __del__
                     drone = None
+            
+            # Force kill any remaining server processes to break the C++ error loop
+            _kill_mavsdk_server()
 
             retry_delay = max(current_delay, _get_retry_delay_seconds(exc))
             jitter = random.uniform(-0.1, 0.1) * retry_delay
