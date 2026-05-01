@@ -30,12 +30,13 @@ CORS(app)
 state_manager = StateManager()
 drone: System | None = None
 session_log_store: SessionLogStore | None = None
+mavsdk_loop: asyncio.AbstractEventLoop | None = None
 
 state_manager.update(system_address=MAVSDK_ADDRESS)
 session_log_store = SessionLogStore(system_address=MAVSDK_ADDRESS)
 
-init_command_routes(state_manager, lambda: drone, session_log_store)
-init_mission_routes(state_manager, lambda: drone, session_log_store)
+init_command_routes(state_manager, lambda: drone, session_log_store, lambda: mavsdk_loop)
+init_mission_routes(state_manager, lambda: drone, session_log_store, lambda: mavsdk_loop)
 init_telemetry_routes(state_manager)
 init_health_routes(state_manager) 
 init_log_routes(session_log_store)
@@ -109,7 +110,8 @@ async def _mavsdk_loop():
     base_delay = 2.0
     max_delay = 10.0
     current_delay = base_delay
-    global drone
+    global drone, mavsdk_loop
+    mavsdk_loop = asyncio.get_running_loop()
 
     while True:
         try:

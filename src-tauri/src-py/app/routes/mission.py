@@ -19,18 +19,32 @@ from app.utils.errors import (
 
 mission_bp = Blueprint("mission", __name__, url_prefix="/mission")
 _mission_service: MissionService | None = None
+_loop_getter = None
 logger = logging.getLogger(__name__)
 
 
-def init_mission_routes(state_manager, drone_getter, event_logger: SessionLogStore | None = None):
-    global _mission_service
+def init_mission_routes(state_manager, drone_getter, event_logger: SessionLogStore | None = None, loop_getter = None):
+    global _mission_service, _loop_getter
     _mission_service = MissionService(state_manager, drone_getter, event_logger)
+    _loop_getter = loop_getter
 
 
 def _get_service_or_abort():
     if _mission_service is None:
         abort(500, description="Mission routes not initialized")
     return _mission_service
+
+
+def _run_sync(coro):
+    if _loop_getter is None:
+        return asyncio.run(coro)
+    
+    loop = _loop_getter()
+    if loop is None:
+        return asyncio.run(coro)
+    
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result()
 
 
 @mission_bp.route("/upload", methods=["POST"])
@@ -46,7 +60,7 @@ def upload_mission_command():
 
     logger.info("mission_request upload waypoints=%s", len(waypoints) if isinstance(waypoints, list) else None)
     try:
-        result = asyncio.run(service.execute_upload_mission(waypoints))
+        result = _run_sync(service.execute_upload_mission(waypoints))
         logger.info("mission_response upload ok=true command_id=%s", result.get("command_id"))
         return jsonify(result), 200
     except NotConnectedError:
@@ -68,7 +82,7 @@ def start_mission_command():
 
     logger.info("mission_request start")
     try:
-        result = asyncio.run(service.execute_start_mission())
+        result = _run_sync(service.execute_start_mission())
         logger.info("mission_response start ok=true command_id=%s", result.get("command_id"))
         return jsonify(result), 200
     except NotConnectedError:
@@ -88,7 +102,7 @@ def pause_mission_command():
 
     logger.info("mission_request pause")
     try:
-        result = asyncio.run(service.execute_pause_mission())
+        result = _run_sync(service.execute_pause_mission())
         logger.info("mission_response pause ok=true command_id=%s", result.get("command_id"))
         return jsonify(result), 200
     except NotConnectedError:
@@ -108,7 +122,7 @@ def clear_mission_command():
 
     logger.info("mission_request clear")
     try:
-        result = asyncio.run(service.execute_clear_mission())
+        result = _run_sync(service.execute_clear_mission())
         logger.info("mission_response clear ok=true command_id=%s", result.get("command_id"))
         return jsonify(result), 200
     except NotConnectedError:
@@ -128,7 +142,7 @@ def mission_progress_command():
 
     logger.info("mission_request progress")
     try:
-        result = asyncio.run(service.execute_mission_progress())
+        result = _run_sync(service.execute_mission_progress())
         logger.info("mission_response progress ok=true command_id=%s", result.get("command_id"))
         return jsonify(result), 200
     except NotConnectedError:

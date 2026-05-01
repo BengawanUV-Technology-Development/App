@@ -16,23 +16,37 @@ from app.utils.session_log import SessionLogStore
 
 command_bp = Blueprint("command", __name__, url_prefix="/command")
 _command_service: CommandService | None = None
+_loop_getter = None
 logger = logging.getLogger(__name__)
 
-def init_command_routes(state_manager, drone_getter, event_logger: SessionLogStore | None = None):
-    global _command_service
+def init_command_routes(state_manager, drone_getter, event_logger: SessionLogStore | None = None, loop_getter = None):
+    global _command_service, _loop_getter
     _command_service = CommandService(state_manager, drone_getter, event_logger)
+    _loop_getter = loop_getter
 
 def _get_service_or_abort():
     if _command_service is None:
         abort(500, description="Command routes not initialized")
     return _command_service
 
+def _run_sync(coro):
+    if _loop_getter is None:
+        return asyncio.run(coro)
+    
+    loop = _loop_getter()
+    if loop is None:
+        # Fallback if loop not yet captured
+        return asyncio.run(coro)
+    
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result()
+
 @command_bp.route("/arm", methods=["POST"])
 def arm_command():
     service = _get_service_or_abort()
     logger.info("command_request arm")
     try:
-        result = asyncio.run(service.execute_arm())
+        result = _run_sync(service.execute_arm())
         logger.info("command_response arm ok=true command_id=%s", result.get("command_id"))
         return jsonify(result), 200
     except NotConnectedError:
@@ -54,7 +68,7 @@ def disarm_command():
 
     logger.info("command_request disarm")
     try:
-        result = asyncio.run(service.execute_disarm())
+        result = _run_sync(service.execute_disarm())
         logger.info("command_response disarm ok=true command_id=%s", result.get("command_id"))
         return jsonify(result), 200
     except NotConnectedError:
@@ -76,7 +90,7 @@ def takeoff_command():
     service = _get_service_or_abort()
     logger.info("command_request takeoff altitude_m=%s", data.get("altitude_m"))
     try:
-        result = asyncio.run(service.execute_takeoff(data.get("altitude_m")))
+        result = _run_sync(service.execute_takeoff(data.get("altitude_m")))
         logger.info("command_response takeoff ok=true command_id=%s", result.get("command_id"))
         return jsonify(result), 200
     except NotConnectedError:
@@ -101,7 +115,7 @@ def land_command():
 
     logger.info("command_request land")
     try:
-        result = asyncio.run(service.execute_land())
+        result = _run_sync(service.execute_land())
         logger.info("command_response land ok=true command_id=%s", result.get("command_id"))
         return jsonify(result), 200
     except NotConnectedError:
@@ -124,7 +138,7 @@ def set_takeoff_altitude_command():
 
     logger.info("command_request set_takeoff_altitude altitude_m=%s", data.get("altitude_m"))
     try:
-        result = asyncio.run(service.execute_set_takeoff_altitude(data.get("altitude_m")))
+        result = _run_sync(service.execute_set_takeoff_altitude(data.get("altitude_m")))
         logger.info("command_response set_takeoff_altitude ok=true command_id=%s", result.get("command_id"))
         return jsonify(result), 200
     except NotConnectedError:
@@ -150,7 +164,7 @@ def set_flight_mode_command():
 
     logger.info("command_request set_flight_mode mode=%s", data.get("mode"))
     try:
-        result = asyncio.run(service.execute_set_flight_mode(data.get("mode")))
+        result = _run_sync(service.execute_set_flight_mode(data.get("mode")))
         logger.info("command_response set_flight_mode ok=true command_id=%s", result.get("command_id"))
         return jsonify(result), 200
     except NotConnectedError:
@@ -175,7 +189,7 @@ def reboot_command():
 
     logger.info("command_request reboot")
     try:
-        result = asyncio.run(service.execute_reboot())
+        result = _run_sync(service.execute_reboot())
         logger.info("command_response reboot ok=true command_id=%s", result.get("command_id"))
         return jsonify(result), 200
     except NotConnectedError:
