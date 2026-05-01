@@ -153,7 +153,11 @@ class CommandService:
             self._record_command("land", False, error=str(exc), error_code=self._error_code_for_exception(exc))
             raise
         except ActionError as e:
-            error_message = f"Failed to initiate landing: {str(e)}"
+            error_str = str(e)
+            if "UNSUPPORTED" in error_str:
+                 error_message = "Wahana menolak perintah land (Mungkin harus di udara atau menggunakan mode Q_LAND)."
+            else:
+                 error_message = f"Failed to initiate landing: {error_str}"
             self._record_command("land", False, error=error_message, error_code="COMMAND_FAILED")
             raise CommandFailedError(error_message)
 
@@ -163,10 +167,19 @@ class CommandService:
             normalized_mode = self._normalize_flight_mode(flight_mode)
             self.validator.validate_is_connected()
 
+            if normalized_mode == FlightModeCommand.Q_STABILIZE:
+                raise InvalidRequestError(
+                    "Mode Q_STABILIZE belum didukung oleh backend MAVSDK ini"
+                )
+
             if normalized_mode == FlightModeCommand.FBWA:
                 action_label = "transition_to_fixedwing"
                 coroutine = self.drone.action.transition_to_fixedwing()
-                message = "Flight mode transition requested: FBWA / fixed wing"
+                message = "Flight mode transition requested: FBWA (Fixed Wing)"
+            elif normalized_mode == FlightModeCommand.Q_STABILIZE:
+                action_label = "transition_to_multicopter"
+                coroutine = self.drone.action.transition_to_multicopter()
+                message = "Flight mode transition requested: Q_STABILIZE (Multicopter)"
             elif normalized_mode == FlightModeCommand.Q_HOVER:
                 action_label = "hold"
                 coroutine = self.drone.action.hold()
@@ -178,11 +191,11 @@ class CommandService:
             elif normalized_mode == FlightModeCommand.AUTO:
                 action_label = "return_to_launch"
                 coroutine = self.drone.action.return_to_launch()
-                message = "Flight mode transition requested: AUTO / return to launch"
+                message = "Flight mode transition requested: AUTO / RTL"
             elif normalized_mode == FlightModeCommand.MANUAL:
-                action_label = "transition_to_multicopter"
+                action_label = "manual"
                 coroutine = self.drone.action.transition_to_multicopter()
-                message = "Flight mode transition requested: MANUAL / multicopter"
+                message = "Flight mode transition requested: MANUAL (Emergency recovery to Multicopter)"
             else:
                 raise InvalidRequestError(
                     f"Mode {normalized_mode.value} belum didukung oleh backend MAVSDK ini"
@@ -198,6 +211,10 @@ class CommandService:
             raise
         except ActionError as e:
             error_message = f"Failed to execute {action_label}: {str(e)}"
+            if "NO_VTOL_TRANSITION_SUPPORT" in str(e):
+                error_message = "Wahana tidak mem-broadcast kemampuan VTOL ke MAVSDK. Perintah transisi (FBWA/Q_STABILIZE) ditolak oleh FC."
+            else:
+                error_message = f"Gagal eksekusi {action_label}: {str(e)}"
             requested_mode = flight_mode.value if isinstance(flight_mode, FlightModeCommand) else flight_mode
             self._record_command("set_flight_mode", False, error=error_message, error_code="COMMAND_FAILED", requested_mode=requested_mode)
             raise CommandFailedError(error_message)

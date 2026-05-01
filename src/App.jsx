@@ -284,7 +284,7 @@ function App() {
           <button onClick={() => setFlightMode("Q_LAND")} disabled={!health.connected}>Q_LAND</button>
           <button onClick={() => setFlightMode("AUTO")} disabled={!health.connected}>AUTO</button>
           <button onClick={() => setFlightMode("MANUAL")} disabled={!health.connected}>MANUAL</button>
-          <button onClick={() => setFlightMode("Q_STABILIZE")} disabled={!health.connected}>Q_STABILIZE</button>
+          <button onClick={() => setFlightMode("Q_STABILIZE")} disabled title="Belum didukung backend">Q_STABILIZE</button>
           <button onClick={rebootVehicle} disabled={!health.connected || telemetry.armed}>
             Reboot
           </button>

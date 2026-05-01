@@ -52,14 +52,13 @@ def upload_mission_command():
     data = request.get_json(silent=True) or {}
     service = _get_service_or_abort()
     waypoints_raw = data.get("waypoints")
-
-    if not isinstance(waypoints_raw, list):
-        raise InvalidRequestError("waypoints must be a list of waypoint objects")
-
-    waypoints = cast(list[dict[str, Any]], waypoints_raw)
-
-    logger.info("mission_request upload waypoints=%s", len(waypoints) if isinstance(waypoints, list) else None)
     try:
+        if not isinstance(waypoints_raw, list):
+            raise InvalidRequestError("waypoints must be a list of waypoint objects")
+
+        waypoints = cast(list[dict[str, Any]], waypoints_raw)
+
+        logger.info("mission_request upload waypoints=%s", len(waypoints) if isinstance(waypoints, list) else None)
         result = _run_sync(service.execute_upload_mission(waypoints))
         logger.info("mission_response upload ok=true command_id=%s", result.get("command_id"))
         return jsonify(result), 200

@@ -306,6 +306,17 @@ class HttpSmokeTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["command"], "mission_upload")
 
+    def test_mission_upload_invalid_request_uses_error_contract(self):
+        response = self.client.post(
+            "/mission/upload",
+            json={"waypoints": "not-a-list"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error_code"], "INVALID_REQUEST")
+
     def test_mission_progress_endpoint_uses_command_contract(self):
         response = self.client.get("/mission/progress")
 

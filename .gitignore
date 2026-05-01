@@ -21,6 +21,7 @@ node_modules
 dist
 dist-ssr
 *.local
+GEMINI.md
 
 # Editor directories and files
 .vscode/*
