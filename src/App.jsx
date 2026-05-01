@@ -65,7 +65,7 @@ function App() {
       // Clear status immediately to show something is happening
       setModeStatus("Sending reboot request...");
       setStatusText("FC is rebooting...");
-      
+
       const response = await fetch(`${API_BASE}/command/reboot`, {
         method: "POST",
       });
@@ -78,7 +78,7 @@ function App() {
       setModeStatus("Reboot request success. Waiting for FC to reconnect...");
       // Also clear health state locally for immediate feedback
       setHealth((previous) => ({ ...previous, connected: false, status: "REBOOTING" }));
-      
+
       await fetchTelemetry();
     } catch (error) {
       setModeStatus(String(error));
