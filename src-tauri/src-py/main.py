@@ -6,6 +6,8 @@ import random
 import subprocess
 import serial
 import serial.tools.list_ports
+import sys
+from contextlib import redirect_stderr
 from flask import Flask, jsonify
 from flask_cors import CORS
 from mavsdk import System
@@ -160,10 +162,14 @@ async def _mavsdk_loop():
             drone = System()
 
             state_manager.update(connected=False, error=None, last_update=time.time())
-            await asyncio.wait_for(
-                drone.connect(system_address=MAVSDK_ADDRESS),
-                timeout=CONNECT_CALL_TIMEOUT_SECONDS,
-            )
+
+            # Redirect stderr to devnull while connecting to silence C++ serial errors
+            with open(os.devnull, 'w') as f_null:
+                with redirect_stderr(f_null):
+                    await asyncio.wait_for(
+                        drone.connect(system_address=MAVSDK_ADDRESS),
+                        timeout=CONNECT_CALL_TIMEOUT_SECONDS,
+                    )
 
             connected = False
             heartbeat_stream = drone.core.connection_state()
@@ -192,10 +198,6 @@ async def _mavsdk_loop():
                 asyncio.create_task(_consume_armed(drone)),
                 asyncio.create_task(_consume_flight_mode(drone)),
                 asyncio.create_task(_consume_battery(drone))
-                # asyncio.create_task(_consume_attitude(drone)),
-                # asyncio.create_task(_consume_velocity(drone)),
-                # asyncio.create_task(_consume_airspeed(drone)),
-                # asyncio.create_task(_consume_heading(drone)),
             ]
 
             done, pending = await asyncio.wait(consumers, return_when=asyncio.FIRST_EXCEPTION)
@@ -224,7 +226,6 @@ async def _mavsdk_loop():
                 except Exception:
                     pass
                 finally:
-                    # MAVSDK System object deletion triggers cleanup in __del__
                     drone = None
             
             # Force kill any remaining server processes to break the C++ error loop

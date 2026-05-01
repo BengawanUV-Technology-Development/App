@@ -62,6 +62,9 @@ function App() {
 
   const rebootVehicle = async () => {
     try {
+      // Clear status immediately to show something is happening
+      setModeStatus("Sending reboot request...");
+      
       const response = await fetch(`${API_BASE}/command/reboot`, {
         method: "POST",
       });
@@ -71,7 +74,11 @@ function App() {
         throw new Error(payload.error || payload.message || "Gagal reboot vehicle");
       }
 
-      setModeStatus(payload.message || "Reboot requested successfully");
+      setModeStatus("Reboot request success. Waiting for FC to reconnect...");
+      // Also clear health state locally for immediate feedback
+      setHealth(h => ({ ...h, connected: false }));
+      setStatusText("FC is rebooting...");
+      
       await fetchTelemetry();
     } catch (error) {
       setModeStatus(String(error));
