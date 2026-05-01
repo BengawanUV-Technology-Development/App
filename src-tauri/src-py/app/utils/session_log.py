@@ -29,7 +29,11 @@ class SessionLogSummary:
 
 class SessionLogStore:
     def __init__(self, log_dir: str | Path | None = None, session_id: str | None = None, system_address: str = "-"):
-        base_dir = Path(log_dir or os.getenv("SESSION_LOG_DIR") or Path(__file__).resolve().parents[2] / "runtime" / "logs")
+        base_dir = Path(
+            log_dir
+            or os.getenv("SESSION_LOG_DIR")
+            or self._default_log_dir()
+        )
         base_dir.mkdir(parents=True, exist_ok=True)
 
         self.log_dir = base_dir
@@ -43,6 +47,14 @@ class SessionLogStore:
             log_path=str(self.path),
         )
         self.record_event("session_start", message="Session started", system_address=system_address)
+
+    def _default_log_dir(self) -> Path:
+        if os.name == "nt":
+            root_dir = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA") or str(Path.home())
+        else:
+            root_dir = os.getenv("XDG_STATE_HOME") or os.getenv("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+
+        return Path(root_dir) / "BengawanUV" / "test" / "logs"
 
     def record_event(self, event_type: str, message: str | None = None, **data: Any) -> dict:
         entry = {
