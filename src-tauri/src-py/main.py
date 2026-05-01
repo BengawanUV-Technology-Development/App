@@ -147,11 +147,11 @@ async def _mavsdk_loop():
                 asyncio.create_task(_consume_position(drone)),
                 asyncio.create_task(_consume_armed(drone)),
                 asyncio.create_task(_consume_flight_mode(drone)),
-                asyncio.create_task(_consume_battery(drone)),
-                asyncio.create_task(_consume_attitude(drone)),
-                asyncio.create_task(_consume_velocity(drone)),
-                asyncio.create_task(_consume_airspeed(drone)),
-                asyncio.create_task(_consume_heading(drone)),
+                asyncio.create_task(_consume_battery(drone))
+                # asyncio.create_task(_consume_attitude(drone)),
+                # asyncio.create_task(_consume_velocity(drone)),
+                # asyncio.create_task(_consume_airspeed(drone)),
+                # asyncio.create_task(_consume_heading(drone)),
             ]
 
             done, pending = await asyncio.wait(consumers, return_when=asyncio.FIRST_EXCEPTION)

@@ -8,62 +8,31 @@
 
 Mission Planner adalah aplikasi ground control station (GCS) yang dikembangkan oleh Technology Development Team Bengawan UAV untuk mendukung perencanaan, eksekusi, dan analisis misi UAV secara terintegrasi.
 
-Aplikasi ini dirancang untuk mempermudah operator dalam mengontrol UAV, mengatur misi penerbangan, serta melakukan monitoring dan evaluasi performa sistem secara real-time maupun pasca penerbangan.
+Aplikasi ini memiliki fokus khusus pada **Misi Search and Rescue (SAR)**, di mana UAV dibekali dengan kecerdasan buatan untuk membantu tim penyelamat menemukan korban bencana secara lebih cepat dan akurat melalui teknologi Computer Vision.
 
 ---
 
-## Fitur Utama Aplikasi
+## Fitur Utama & SAR Intelligence
 
-### 1. Koneksi & Sistem Dasar
+### 1. Computer Vision Victim Detection
+* **Real-Time Object Detection**: Menggunakan pipeline AI (YOLO/PyTorch) untuk mendeteksi tanda-tanda keberadaan korban (pakaian, bagian tubuh, dll) langsung dari stream video UAV.
+* **Visual Bounding Box**: Menampilkan kotak deteksi secara real-time pada interface operator untuk memudahkan identifikasi.
 
-* **Connect Telemetri**
+### 2. Auto-Marking & Geotagging
+* **Precision Geotagging**: Menghitung koordinat GPS objek di darat secara otomatis dengan menggabungkan data posisi UAV, altitude, attitude (gyro), dan sudut kamera.
+* **Instant Map Markers**: Setiap temuan akan langsung ditandai di peta digital sebagai Point of Interest (POI) permanen untuk disurvei oleh tim darat.
 
-  * Koneksi langsung ke UAV melalui modul telemetri
-* **Reboot System**
+### 3. Koneksi & Sistem Dasar
+* **Connect Telemetri**: Koneksi langsung ke UAV melalui modul telemetri via MAVLink.
+* **Flight Control**: Kontrol status ARM/DISARM dan sistem dasar flight controller.
 
-  * Restart flight controller dari aplikasi
-* **ARM / DISARM**
+### 4. Flight Modes & Navigasi
+* **Multi-Mode Support**: MANUAL, FBWA, AUTO (Waypoint), Q_STABILIZE, Q_HOVER, dan Q_LAND.
+* **GPS & Maps Integration**: Tampilan peta berbasis koordinat real-time dengan tracking posisi UAV yang presisi.
 
-  * Kontrol status keamanan UAV sebelum dan sesudah flight
-
----
-
-### 2. Flight Modes
-
-Aplikasi mendukung berbagai mode penerbangan:
-
-* **MANUAL** – Kontrol penuh oleh pilot
-* **FBWA (Fly By Wire A)** – Stabilized manual flight
-* **AUTO** – Eksekusi misi waypoint otomatis
-* **Q_STABILIZE** – Stabilize mode untuk VTOL
-* **Q_HOVER** – Hover di posisi tertentu
-* **Q_LAND** – Landing vertikal otomatis
-
----
-
-### 3. Navigasi & Mission Planning
-
-* **GPS & Maps Integration**
-
-  * Tampilan peta berbasis koordinat real-time
-* **Waypoint Planning**
-
-  * Membuat, mengedit, dan mengatur jalur misi
-* **Monitor Posisi UAV**
-
-  * Tracking posisi UAV secara langsung di peta
-
----
-
-### 4. Monitoring & Visualisasi
-
-* **HUD (Heads-Up Display)**
-
-  * Informasi attitude (roll, pitch, yaw)
-  * Airspeed, altitude, heading
-* **Real-Time Telemetry Data**
-
-  * Status UAV secara langsung
+### 5. Monitoring & Visualisasi (HUD)
+* **Advanced HUD**: Informasi attitude (roll, pitch, yaw), airspeed, altitude, dan heading dalam satu tampilan intuitif.
+* **Real-Time Telemetry**: Status kesehatan sistem UAV yang terpantau setiap detik.
 
 ---
 
