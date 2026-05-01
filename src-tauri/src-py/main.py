@@ -1,13 +1,9 @@
 # src-tauri/src-python/main.py
 import asyncio
+import logging
 import os
 import time
 import random
-import subprocess
-import serial
-import serial.tools.list_ports
-import sys
-from contextlib import redirect_stderr
 from flask import Flask, jsonify
 from flask_cors import CORS
 from mavsdk import System
@@ -40,6 +36,22 @@ mavsdk_loop: asyncio.AbstractEventLoop | None = None
 state_manager.update(system_address=MAVSDK_ADDRESS)
 session_log_store = SessionLogStore(system_address=MAVSDK_ADDRESS)
 
+
+class _MavsdkServerNoiseFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        noisy_fragments = (
+            "ReadFile failure",
+            "Sending message failed",
+            "The device does not recognize the command.",
+            "serial_connection.cpp:310",
+            "mavsdk_impl.cpp:801",
+        )
+        return not any(fragment in message for fragment in noisy_fragments)
+
+
+logging.getLogger("mavsdk_server").addFilter(_MavsdkServerNoiseFilter())
+
 init_command_routes(state_manager, lambda: drone, session_log_store, lambda: mavsdk_loop)
 init_mission_routes(state_manager, lambda: drone, session_log_store, lambda: mavsdk_loop)
 init_telemetry_routes(state_manager)
@@ -51,41 +63,6 @@ app.register_blueprint(mission_bp)
 app.register_blueprint(logs_bp)
 app.register_blueprint(telemetry_bp)
 app.register_blueprint(health_bp)
-
-def _kill_mavsdk_server():
-    """Forcefully terminate any hanging mavsdk_server processes to release serial ports."""
-    try:
-        if os.name == "nt":  # Windows
-            subprocess.run(
-                ["taskkill", "/F", "/IM", "mavsdk_server.exe", "/T"],
-                capture_output=True,
-                check=False,
-            )
-        else:  # Linux/Mac
-            subprocess.run(["pkill", "-9", "mavsdk_server"], capture_output=True, check=False)
-    except Exception:
-        pass
-
-def _validate_serial_port(address: str) -> bool:
-    """Check if the serial port exists and is accessible using pyserial."""
-    if not address.startswith("serial://"):
-        return True # Not a serial connection
-    
-    # Extract COM port name (e.g., COM9)
-    port_name = address.replace("serial://", "").split(":")[0]
-    
-    # Check if port exists in system
-    available_ports = [p.device for p in serial.tools.list_ports.comports()]
-    if port_name not in available_ports:
-        return False
-        
-    # Try to open briefly to ensure it's not locked by another process
-    try:
-        test_ser = serial.Serial(port_name)
-        test_ser.close()
-        return True
-    except (serial.SerialException, PermissionError):
-        return False
 
 async def _consume_position(drone):
     async for pos in drone.telemetry.position():
@@ -152,24 +129,21 @@ async def _mavsdk_loop():
     current_delay = base_delay
     global drone, mavsdk_loop
     mavsdk_loop = asyncio.get_running_loop()
+    last_reported_online: bool | None = None
 
     while True:
         try:
-            # PRE-VALIDATION: Check serial port before MAVSDK touches it
-            if not _validate_serial_port(MAVSDK_ADDRESS):
-                raise ConnectionError(f"Serial port {MAVSDK_ADDRESS} is not available or access is denied.")
-
             drone = System()
 
             state_manager.update(connected=False, error=None, last_update=time.time())
+            if last_reported_online is not False:
+                print(f"[status] connecting to vehicle at {MAVSDK_ADDRESS}...")
+                last_reported_online = False
 
-            # Redirect stderr to devnull while connecting to silence C++ serial errors
-            with open(os.devnull, 'w') as f_null:
-                with redirect_stderr(f_null):
-                    await asyncio.wait_for(
-                        drone.connect(system_address=MAVSDK_ADDRESS),
-                        timeout=CONNECT_CALL_TIMEOUT_SECONDS,
-                    )
+            await asyncio.wait_for(
+                drone.connect(system_address=MAVSDK_ADDRESS),
+                timeout=CONNECT_CALL_TIMEOUT_SECONDS,
+            )
 
             connected = False
             heartbeat_stream = drone.core.connection_state()
@@ -181,6 +155,9 @@ async def _mavsdk_loop():
                 state_manager.update(connected=connection_state.is_connected, last_update=time.time())
                 if connection_state.is_connected:
                     connected = True
+                    if last_reported_online is not True:
+                        print(f"[status] vehicle online at {MAVSDK_ADDRESS}")
+                        last_reported_online = True
                     break
 
             if not connected:
@@ -218,6 +195,10 @@ async def _mavsdk_loop():
                     error=friendly_error,
                     system_address=MAVSDK_ADDRESS,
                 )
+
+            if last_reported_online is not False:
+                print(f"[status] vehicle disconnected: {friendly_error}")
+                last_reported_online = False
             
             # Enhanced cleanup: explicitly stop and delete the drone object
             if drone is not None:
@@ -227,9 +208,6 @@ async def _mavsdk_loop():
                     pass
                 finally:
                     drone = None
-            
-            # Force kill any remaining server processes to break the C++ error loop
-            _kill_mavsdk_server()
 
             retry_delay = max(current_delay, _get_retry_delay_seconds(exc))
             jitter = random.uniform(-0.1, 0.1) * retry_delay

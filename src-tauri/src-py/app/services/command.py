@@ -176,10 +176,6 @@ class CommandService:
                 action_label = "transition_to_fixedwing"
                 coroutine = self.drone.action.transition_to_fixedwing()
                 message = "Flight mode transition requested: FBWA (Fixed Wing)"
-            elif normalized_mode == FlightModeCommand.Q_STABILIZE:
-                action_label = "transition_to_multicopter"
-                coroutine = self.drone.action.transition_to_multicopter()
-                message = "Flight mode transition requested: Q_STABILIZE (Multicopter)"
             elif normalized_mode == FlightModeCommand.Q_HOVER:
                 action_label = "hold"
                 coroutine = self.drone.action.hold()
@@ -229,8 +225,10 @@ class CommandService:
             raise InvalidRequestError(error_message)
 
         try:
+            print("[status] reboot requested")
             await self._run_action(self.drone.action.reboot())
             result = self._build_success_payload("reboot", "Reboot requested successfully")
+            print("[status] reboot command sent")
             self._record_command("reboot", True, message=result["message"])
             return result
         except (NotConnectedError, InvalidRequestError, CommandTimeoutError) as exc:

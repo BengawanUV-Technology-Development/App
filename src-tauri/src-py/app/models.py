@@ -11,6 +11,7 @@ from datetime import datetime
 class TelemetryState:
     """Vehicle telemetry state"""
     connected: bool = False
+    status: str = "OFFLINE" # OFFLINE, REBOOTING, CONNECTING, ACTIVE
     lat: Optional[float] = None
     lng: Optional[float] = None
     alt: Optional[float] = None
