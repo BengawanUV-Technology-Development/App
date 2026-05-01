@@ -13,6 +13,13 @@ function App() {
     armed: null,
     flight_mode: null,
     battery_percent: null,
+    roll_deg: null,
+    pitch_deg: null,
+    yaw_deg: null,
+    heading_deg: null,
+    airspeed_m_s: null,
+    groundspeed_m_s: null,
+    v_speed_m_s: null,
     last_update: null,
     error: null,
   });

@@ -191,8 +191,53 @@ DoD:
 
 ## Status Pindah Tahap (Per 22 April 2026)
 
-- Status saat ini: API consistency, flight mode switching, dan reboot endpoint sudah selesai.
-- Backend berikutnya paling masuk akal lanjut ke HUD data lanjutan, endpoint disconnect/manual stop, atau perapihan frontend mission/log viewer.
+- Status saat ini: API consistency, flight mode switching, reboot endpoint, mission basic, data logging, dan HUD Expansion (Fase 14) sudah selesai.
+- Backend berikutnya paling masuk akal lanjut ke Integrasi Peta, Computer Vision, dan Sinkronisasi Koordinat (Auto-marking).
+
+## Tahap Lanjutan: SAR Intelligence & Computer Vision
+
+### Fase 14 - HUD Expansion (Selesai)
+
+Tujuan: backend mengonsumsi data attitude, speed, dan heading untuk keperluan visualisasi dan kalkulasi AI.
+
+- [x] Tambahkan field data baru di `StateManager` (roll, pitch, yaw, heading, airspeed, groundspeed, v_speed).
+- [x] Tambahkan MAVSDK consumer untuk attitude, velocity, dan heading di `main.py`.
+- [x] Tampilkan data di dashboard Frontend (`App.jsx`).
+
+### Fase 15 - Integrasi Peta Interaktif (Leafmap/Leaflet)
+
+Tujuan: frontend tidak lagi menampilkan koordinat angka, tapi peta visual.
+
+- [ ] Tambahkan library peta (misal: react-leaflet atau komponen berbasis iframe/webview jika menggunakan Leafmap Python).
+- [ ] Render posisi UAV secara real-time sebagai icon pesawat/drone di peta.
+- [ ] Tampilkan jalur (waypoint) dari `missionDraft`.
+
+### Fase 16 - Computer Vision Integration (Object Detection Pipeline)
+
+Tujuan: backend bisa memproses video stream dan mendeteksi objek.
+
+- [ ] Setup virtual environment/dependency AI (OpenCV, YOLO/PyTorch).
+- [ ] Buat script Python (terpisah dari `main.py` utama atau sebagai thread khusus) untuk menerima stream video (RTSP/UDP).
+- [ ] Implementasikan object detection model sederhana.
+- [ ] Siapkan endpoint atau WebSocket untuk mengirim hasil bounding box/deteksi ke Frontend.
+
+### Fase 17 - Auto-Marking System (Geotagging Discovery)
+
+Tujuan: menghitung koordinat GPS dari objek yang terdeteksi dan menandainya di peta.
+
+- [ ] Buat formula kalkulasi (Posisi UAV + Altitude + Roll/Pitch/Yaw + Sudut Gimbal + Posisi Piksel Bounding Box) -> (Lat/Lng Objek di tanah).
+- [ ] Backend memancarkan (emit) event penemuan (POI) lengkap dengan koordinat.
+- [ ] Frontend mendengarkan event POI dan menambahkan marker (warna berbeda) secara permanen di peta.
+
+### Fase 18 - Video Stream Overlay & UI SAR Optimization
+
+Tujuan: menyatukan semua elemen SAR di layar GCS.
+
+- [ ] Frontend menampilkan feed video dengan bounding box langsung dari backend.
+- [ ] UI dibagi dua: Map View (kiri) dan Video/HUD View (kanan).
+- [ ] List log penemuan (Timestamp, Gambar Crop Objek, Koordinat) di panel terpisah.
+
+---
 
 ## Cara Pakai Dokumen Ini
 

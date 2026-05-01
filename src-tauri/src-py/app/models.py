@@ -18,6 +18,16 @@ class TelemetryState:
     armed: Optional[bool] = None
     flight_mode: Optional[str] = None
     battery_percent: Optional[float] = None
+    
+    # HUD Expansion
+    roll_deg: Optional[float] = None
+    pitch_deg: Optional[float] = None
+    yaw_deg: Optional[float] = None
+    heading_deg: Optional[float] = None
+    airspeed_m_s: Optional[float] = None
+    groundspeed_m_s: Optional[float] = None
+    v_speed_m_s: Optional[float] = None
+    
     last_update: Optional[float] = None
     error: Optional[str] = None
     source: str = "mavsdk"
