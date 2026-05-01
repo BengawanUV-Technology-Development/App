@@ -17,8 +17,8 @@ from app.utils.session_log import SessionLogStore
 MAVSDK_ADDRESS = os.getenv("MAVSDK_ADDRESS", "serial://COM9:115200")
 API_PORT = int(os.getenv("API_PORT", "5001"))
 CONNECT_TIMEOUT_SECONDS = float(os.getenv("CONNECT_TIMEOUT_SECONDS", "8"))
-CONNECT_CALL_TIMEOUT_SECONDS = float(os.getenv("CONNECT_CALL_TIMEOUT_SECONDS", "5"))
-RETRY_DELAY_SECONDS = float(os.getenv("RETRY_DELAY_SECONDS", "2"))
+CONNECT_CALL_TIMEOUT_SECONDS = float(os.getenv("CONNECT_CALL_TIMEOUT_SECONDS", "15"))
+RETRY_DELAY_SECONDS = float(os.getenv("RETRY_DELAY_SECONDS", "5"))
 SERIAL_ACCESS_DENIED_RETRY_DELAY_SECONDS = float(
     os.getenv("SERIAL_ACCESS_DENIED_RETRY_DELAY_SECONDS", "10")
 )
@@ -174,12 +174,18 @@ async def _mavsdk_loop():
                     error=friendly_error,
                     system_address=MAVSDK_ADDRESS,
                 )
+            
+            # Enhanced cleanup: explicitly stop and delete the drone object
             if drone is not None:
                 try:
                     drone._stop_mavsdk_server()
                 except Exception:
                     pass
-                drone = None
+                finally:
+                    # del drone is safe here because it's in global/outer scope if needed, 
+                    # but since drone is global, we set it to None.
+                    # MAVSDK System object deletion triggers cleanup in __del__
+                    drone = None
 
             retry_delay = max(current_delay, _get_retry_delay_seconds(exc))
             jitter = random.uniform(-0.1, 0.1) * retry_delay
