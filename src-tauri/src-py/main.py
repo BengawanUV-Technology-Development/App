@@ -4,26 +4,11 @@ import os
 import time
 import random
 import subprocess
+import serial
+import serial.tools.list_ports
 from flask import Flask, jsonify
 from flask_cors import CORS
 from mavsdk import System
-
-# ... (rest of imports)
-
-def _kill_mavsdk_server():
-    """Forcefully terminate any hanging mavsdk_server processes to release serial ports."""
-    try:
-        if os.name == "nt":  # Windows
-            subprocess.run(
-                ["taskkill", "/F", "/IM", "mavsdk_server.exe", "/T"],
-                capture_output=True,
-                check=False,
-            )
-        else:  # Linux/Mac
-            subprocess.run(["pkill", "-9", "mavsdk_server"], capture_output=True, check=False)
-    except Exception:
-        pass
-
 from app.routes.mission import mission_bp, init_mission_routes
 from app.routes.logs import logs_bp, init_log_routes
 from app.routes.telemetry import telemetry_bp, init_telemetry_routes
@@ -64,6 +49,41 @@ app.register_blueprint(mission_bp)
 app.register_blueprint(logs_bp)
 app.register_blueprint(telemetry_bp)
 app.register_blueprint(health_bp)
+
+def _kill_mavsdk_server():
+    """Forcefully terminate any hanging mavsdk_server processes to release serial ports."""
+    try:
+        if os.name == "nt":  # Windows
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "mavsdk_server.exe", "/T"],
+                capture_output=True,
+                check=False,
+            )
+        else:  # Linux/Mac
+            subprocess.run(["pkill", "-9", "mavsdk_server"], capture_output=True, check=False)
+    except Exception:
+        pass
+
+def _validate_serial_port(address: str) -> bool:
+    """Check if the serial port exists and is accessible using pyserial."""
+    if not address.startswith("serial://"):
+        return True # Not a serial connection
+    
+    # Extract COM port name (e.g., COM9)
+    port_name = address.replace("serial://", "").split(":")[0]
+    
+    # Check if port exists in system
+    available_ports = [p.device for p in serial.tools.list_ports.comports()]
+    if port_name not in available_ports:
+        return False
+        
+    # Try to open briefly to ensure it's not locked by another process
+    try:
+        test_ser = serial.Serial(port_name)
+        test_ser.close()
+        return True
+    except (serial.SerialException, PermissionError):
+        return False
 
 async def _consume_position(drone):
     async for pos in drone.telemetry.position():
@@ -133,6 +153,10 @@ async def _mavsdk_loop():
 
     while True:
         try:
+            # PRE-VALIDATION: Check serial port before MAVSDK touches it
+            if not _validate_serial_port(MAVSDK_ADDRESS):
+                raise ConnectionError(f"Serial port {MAVSDK_ADDRESS} is not available or access is denied.")
+
             drone = System()
 
             state_manager.update(connected=False, error=None, last_update=time.time())
