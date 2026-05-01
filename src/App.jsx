@@ -4,7 +4,7 @@ import "./App.css";
 const API_BASE = "http://localhost:5001";
 
 function App() {
-  const [health, setHealth] = useState({ connected: false, error: null, last_update: null, system_address: "-" });
+  const [health, setHealth] = useState({ connected: false, status: "OFFLINE", error: null, last_update: null, system_address: "-" });
   const [telemetry, setTelemetry] = useState({
     lat: null,
     lng: null,
@@ -64,6 +64,7 @@ function App() {
     try {
       // Clear status immediately to show something is happening
       setModeStatus("Sending reboot request...");
+      setStatusText("FC is rebooting...");
       
       const response = await fetch(`${API_BASE}/command/reboot`, {
         method: "POST",
@@ -76,8 +77,7 @@ function App() {
 
       setModeStatus("Reboot request success. Waiting for FC to reconnect...");
       // Also clear health state locally for immediate feedback
-      setHealth(h => ({ ...h, connected: false }));
-      setStatusText("FC is rebooting...");
+      setHealth((previous) => ({ ...previous, connected: false, status: "REBOOTING" }));
       
       await fetchTelemetry();
     } catch (error) {
@@ -159,7 +159,9 @@ function App() {
 
       setHealth(healthData);
       setTelemetry(telemetryData);
-      if (healthData.connected) {
+      if (healthData.status === "REBOOTING") {
+        setStatusText("FC is rebooting...");
+      } else if (healthData.connected) {
         setStatusText("FC terhubung");
       } else if (healthData.error) {
         setStatusText(`Retrying: ${healthData.error}`);
@@ -196,10 +198,10 @@ function App() {
           </p>
         </div>
 
-        <div className={`status-pill ${health.connected ? "is-online" : "is-waiting"}`}>
+        <div className={`status-pill ${health.status === "REBOOTING" ? "is-rebooting" : health.connected ? "is-online" : "is-waiting"}`}>
           <span className="status-dot" />
           <div>
-            <strong>{health.connected ? "Connected" : "Waiting"}</strong>
+            <strong>{health.status === "REBOOTING" ? "Rebooting" : health.connected ? "Connected" : "Waiting"}</strong>
             <span>{statusText}</span>
           </div>
         </div>
@@ -225,6 +227,10 @@ function App() {
             <div className="metric-card">
               <span>Backend Error</span>
               <strong>{health.error || "None"}</strong>
+            </div>
+            <div className="metric-card">
+              <span>Connection Status</span>
+              <strong>{health.status || "OFFLINE"}</strong>
             </div>
             <div className="metric-card">
               <span>Last Health Update</span>

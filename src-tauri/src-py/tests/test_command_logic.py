@@ -52,6 +52,12 @@ class FakeAction:
         self.calls.append(("set_takeoff_altitude", altitude))
 
 
+class DisconnectingRebootAction(FakeAction):
+    async def reboot(self):
+        self.calls.append("reboot")
+        raise RuntimeError("UNAVAILABLE: connection reset by remote host")
+
+
 class FakeDrone:
     def __init__(self):
         self._action = FakeAction()
@@ -59,6 +65,11 @@ class FakeDrone:
     @property
     def action(self):
         return self._action
+
+
+class DisconnectingRebootDrone(FakeDrone):
+    def __init__(self):
+        self._action = DisconnectingRebootAction()
 
 
 class CommandValidatorTests(unittest.TestCase):
@@ -138,6 +149,14 @@ class CommandServiceTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["command"], "reboot")
         self.assertEqual(self.drone.action.calls, ["reboot"])
+
+    def test_execute_reboot_treats_disconnect_as_success(self):
+        disconnecting_service = CommandService(self.state_manager, lambda: DisconnectingRebootDrone())
+
+        result = asyncio.run(disconnecting_service.execute_reboot())
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["command"], "reboot")
 
     def test_execute_reboot_rejects_when_armed(self):
         self.state_manager.update(armed=True)

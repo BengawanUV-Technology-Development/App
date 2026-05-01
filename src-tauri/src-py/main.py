@@ -52,6 +52,10 @@ class _MavsdkServerNoiseFilter(logging.Filter):
 
 logging.getLogger("mavsdk_server").addFilter(_MavsdkServerNoiseFilter())
 
+
+class RebootRequestedSignal(Exception):
+    pass
+
 init_command_routes(state_manager, lambda: drone, session_log_store, lambda: mavsdk_loop)
 init_mission_routes(state_manager, lambda: drone, session_log_store, lambda: mavsdk_loop)
 init_telemetry_routes(state_manager)
@@ -97,6 +101,13 @@ async def _consume_battery(drone):
         )
 
 
+async def _watch_reboot_request():
+    while True:
+        await asyncio.sleep(0.25)
+        if state_manager.get().status == "REBOOTING":
+            raise RebootRequestedSignal()
+
+
 def _is_serial_disconnect_error(exc: Exception) -> bool:
     message = str(exc).lower()
     return (
@@ -135,10 +146,17 @@ async def _mavsdk_loop():
         try:
             drone = System()
 
-            state_manager.update(connected=False, error=None, last_update=time.time())
-            if last_reported_online is not False:
-                print(f"[status] connecting to vehicle at {MAVSDK_ADDRESS}...")
-                last_reported_online = False
+            current_state = state_manager.get()
+            if current_state.status != "REBOOTING":
+                state_manager.update(connected=False, status="CONNECTING", error=None, last_update=time.time())
+                if last_reported_online is not False:
+                    print(f"[status] connecting to vehicle at {MAVSDK_ADDRESS}...")
+                    last_reported_online = False
+            else:
+                state_manager.update(connected=False, status="REBOOTING", error=None, last_update=time.time())
+                if last_reported_online is not False:
+                    print(f"[status] vehicle rebooting, waiting to reconnect at {MAVSDK_ADDRESS}...")
+                    last_reported_online = False
 
             await asyncio.wait_for(
                 drone.connect(system_address=MAVSDK_ADDRESS),
@@ -152,7 +170,7 @@ async def _mavsdk_loop():
             while time.time() < deadline:
                 remaining = max(0.1, deadline - time.time())
                 connection_state = await asyncio.wait_for(heartbeat_stream.__anext__(), timeout=remaining)
-                state_manager.update(connected=connection_state.is_connected, last_update=time.time())
+                state_manager.update(connected=connection_state.is_connected, status="ACTIVE" if connection_state.is_connected else "CONNECTING", last_update=time.time())
                 if connection_state.is_connected:
                     connected = True
                     if last_reported_online is not True:
@@ -174,7 +192,8 @@ async def _mavsdk_loop():
                 asyncio.create_task(_consume_position(drone)),
                 asyncio.create_task(_consume_armed(drone)),
                 asyncio.create_task(_consume_flight_mode(drone)),
-                asyncio.create_task(_consume_battery(drone))
+                asyncio.create_task(_consume_battery(drone)),
+                asyncio.create_task(_watch_reboot_request()),
             ]
 
             done, pending = await asyncio.wait(consumers, return_when=asyncio.FIRST_EXCEPTION)
@@ -186,17 +205,30 @@ async def _mavsdk_loop():
                     raise exc
 
         except Exception as exc:
-            friendly_error = _get_friendly_error_message(exc)
-            state_manager.update(connected=False, error=friendly_error, last_update=time.time())
-            if session_log_store is not None:
-                session_log_store.record_event(
-                    "connection_error",
-                    friendly_error,
-                    error=friendly_error,
-                    system_address=MAVSDK_ADDRESS,
-                )
+            current_state = state_manager.get()
+            if isinstance(exc, RebootRequestedSignal) or current_state.status == "REBOOTING":
+                friendly_error = "Vehicle rebooting"
+                state_manager.update(connected=False, status="REBOOTING", error=None, last_update=time.time())
+                if session_log_store is not None:
+                    session_log_store.record_event(
+                        "connection_state",
+                        friendly_error,
+                        system_address=MAVSDK_ADDRESS,
+                    )
+            else:
+                friendly_error = _get_friendly_error_message(exc)
+                state_manager.update(connected=False, status="OFFLINE", error=friendly_error, last_update=time.time())
+                if session_log_store is not None:
+                    session_log_store.record_event(
+                        "connection_error",
+                        friendly_error,
+                        error=friendly_error,
+                        system_address=MAVSDK_ADDRESS,
+                    )
 
-            if last_reported_online is not False:
+            if current_state.status == "REBOOTING" or isinstance(exc, RebootRequestedSignal):
+                print(f"[status] vehicle rebooting, reconnecting to {MAVSDK_ADDRESS}...")
+            elif last_reported_online is not False:
                 print(f"[status] vehicle disconnected: {friendly_error}")
                 last_reported_online = False
             

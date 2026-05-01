@@ -16,6 +16,7 @@ def health():
     state = _state_manager.get()
     return jsonify({
         "connected": state.connected,
+        "status": state.status,
         "error": state.error,
         "last_update": state.last_update,
         "system_address": state.system_address,

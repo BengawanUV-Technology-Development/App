@@ -225,8 +225,18 @@ class CommandService:
             raise InvalidRequestError(error_message)
 
         try:
+            self.state_manager.update(status="REBOOTING", error=None, last_update=time())
             print("[status] reboot requested")
-            await self._run_action(self.drone.action.reboot())
+            try:
+                await asyncio.wait_for(self.drone.action.reboot(), timeout=2.0)
+            except asyncio.TimeoutError:
+                print("[status] reboot command acknowledged, not waiting for FC restart")
+            except Exception as exc:
+                if self._is_expected_reboot_disconnect(exc):
+                    print(f"[status] reboot command sent, link reset as expected: {exc}")
+                else:
+                    raise
+
             result = self._build_success_payload("reboot", "Reboot requested successfully")
             print("[status] reboot command sent")
             self._record_command("reboot", True, message=result["message"])
@@ -238,6 +248,15 @@ class CommandService:
             error_message = f"Failed to execute reboot: {str(e)}"
             self._record_command("reboot", False, error=error_message, error_code="COMMAND_FAILED")
             raise CommandFailedError(error_message)
+
+    def _is_expected_reboot_disconnect(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        return (
+            "unavailable" in message
+            or "connection reset" in message
+            or "forcibly closed by the remote host" in message
+            or "wsagetoverlappedresult" in message
+        )
 
     def _normalize_flight_mode(self, flight_mode: Any) -> FlightModeCommand:
         if isinstance(flight_mode, FlightModeCommand):

@@ -151,6 +151,20 @@ button:disabled {
   box-shadow: 0 0 0 8px rgba(245, 158, 11, 0.14);
 }
 
+.status-pill.is-rebooting {
+  background: linear-gradient(135deg, rgba(251, 146, 60, 0.18), rgba(15, 23, 42, 0.92));
+  border-color: rgba(251, 146, 60, 0.32);
+}
+
+.status-pill.is-rebooting .status-dot {
+  background: #fb923c;
+  box-shadow: 0 0 0 8px rgba(251, 146, 60, 0.16);
+}
+
+.status-pill.is-rebooting strong {
+  color: #fdba74;
+}
+
 .grid-layout {
   display: grid;
   grid-template-columns: 1.15fr 0.85fr;
