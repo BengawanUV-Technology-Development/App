@@ -1,0 +1,67 @@
+/* src/components/centerarea/CenterArea.module.css */
+
+.container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  min-height: 400px; /* Tambahkan fallback min-height untuk tes */
+  background-color: #000;
+}
+
+/* Layer 0: Mapbox / Leaflet */
+.mapLayer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+
+/* Layer 1: HTML5 Canvas HUD */
+.hudLayer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 10;
+  pointer-events: none; /* SANGAT PENTING: Agar klik mouse tembus ke peta! */
+}
+
+/* Layer 2: Waypoint Manager Panel (Floating) */
+.waypointPanel {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 300px;
+  background-color: rgba(18, 18, 18, 0.9);
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 16px;
+  z-index: 20;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.panelHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #444;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
+
+.closeButton {
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.closeButton:hover {
+  color: var(--danger-red);
+}
