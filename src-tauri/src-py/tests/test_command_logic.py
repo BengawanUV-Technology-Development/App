@@ -52,24 +52,38 @@ class FakeAction:
         self.calls.append(("set_takeoff_altitude", altitude))
 
 
+class FakeMavlinkDirect:
+    def __init__(self):
+        self.calls = []
+
+    async def send_message(self, message):
+        self.calls.append(("send_message", message))
+
+
+class FakeDrone:
+    def __init__(self):
+        self._action = FakeAction()
+        self._mavlink_direct = FakeMavlinkDirect()
+
+    @property
+    def action(self):
+        return self._action
+
+    @property
+    def mavlink_direct(self):
+        return self._mavlink_direct
+
+
 class DisconnectingRebootAction(FakeAction):
     async def reboot(self):
         self.calls.append("reboot")
         raise RuntimeError("UNAVAILABLE: connection reset by remote host")
 
 
-class FakeDrone:
-    def __init__(self):
-        self._action = FakeAction()
-
-    @property
-    def action(self):
-        return self._action
-
-
 class DisconnectingRebootDrone(FakeDrone):
     def __init__(self):
         self._action = DisconnectingRebootAction()
+        self._mavlink_direct = FakeMavlinkDirect()
 
 
 class CommandValidatorTests(unittest.TestCase):
@@ -132,16 +146,32 @@ class CommandServiceTests(unittest.TestCase):
         self.assertEqual(result["command"], "set_takeoff_altitude")
         self.assertEqual(self.drone.action.calls, [("set_takeoff_altitude", 15.0)])
 
-    def test_execute_set_flight_mode_maps_supported_mode_to_action(self):
+    def test_execute_set_flight_mode_maps_ardupilot_bypass(self):
         result = asyncio.run(self.service.execute_set_flight_mode("Q_HOVER"))
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["command"], "set_flight_mode")
-        self.assertEqual(self.drone.action.calls, ["hold"])
+        # Should NOT call action.hold() anymore, but send direct message
+        self.assertEqual(self.drone.action.calls, [])
+        self.assertEqual(len(self.drone.mavlink_direct.calls), 1)
+        
+        call_type, message = self.drone.mavlink_direct.calls[0]
+        self.assertEqual(call_type, "send_message")
+        self.assertEqual(message.message_name, "SET_MODE")
+        
+        import json
+        fields = json.loads(message.fields_json)
+        self.assertEqual(fields["custom_mode"], 18) # QHOVER
 
-    def test_execute_set_flight_mode_rejects_unsupported_mode(self):
-        with self.assertRaises(InvalidRequestError):
-            asyncio.run(self.service.execute_set_flight_mode("Q_STABILIZE"))
+    def test_execute_set_flight_mode_supports_qstabilize_bypass(self):
+        # Previously rejected, now supported via bypass
+        result = asyncio.run(self.service.execute_set_flight_mode("Q_STABILIZE"))
+        self.assertTrue(result["ok"])
+        
+        call_type, message = self.drone.mavlink_direct.calls[0]
+        import json
+        fields = json.loads(message.fields_json)
+        self.assertEqual(fields["custom_mode"], 17) # QSTABILIZE
 
     def test_execute_reboot_calls_mavsdk_reboot_when_disarmed(self):
         result = asyncio.run(self.service.execute_reboot())

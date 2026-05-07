@@ -22,6 +22,7 @@ dist
 dist-ssr
 *.local
 GEMINI.md
+docs
 
 # Editor directories and files
 .vscode/*
