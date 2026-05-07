@@ -15,7 +15,7 @@ from app.routes.commands import command_bp, init_command_routes
 from app.utils.state import StateManager
 from app.utils.session_log import SessionLogStore
 
-MAVSDK_ADDRESS = os.getenv("MAVSDK_ADDRESS", "serial://COM9:115200")
+MAVSDK_ADDRESS = os.getenv("MAVSDK_ADDRESS", "serial://COM10:115200")
 API_PORT = int(os.getenv("API_PORT", "5001"))
 CONNECT_TIMEOUT_SECONDS = float(os.getenv("CONNECT_TIMEOUT_SECONDS", "8"))
 CONNECT_CALL_TIMEOUT_SECONDS = float(os.getenv("CONNECT_CALL_TIMEOUT_SECONDS", "15"))
