@@ -1,3 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Your existing global.css content (like :root variables, 
+  body resets, etc.) should remain exactly as it is down here.
+*/
+
 :root {
   --bg-dark: #121212;
   --text-white: #FFFFFF;
