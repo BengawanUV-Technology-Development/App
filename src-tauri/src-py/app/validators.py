@@ -13,6 +13,12 @@ class CommandValidator:
         if not state.connected:
             raise NotConnectedError()
         return True
+
+    def validate_is_armed(self) -> bool:
+        state = self.state_manager.get()
+        if not state.armed:
+            raise InvalidRequestError("Vehicle harus ARM sebelum ganti flight mode")
+        return True
     
     def validate_takeoff_request(self, altitude_m: Any) -> float:
         try:

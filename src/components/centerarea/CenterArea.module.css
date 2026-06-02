@@ -5,7 +5,8 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
-  min-height: 400px; /* Tambahkan fallback min-height untuk tes */
+  min-height: 400px;
+  /* Tambahkan fallback min-height untuk tes */
   background-color: #000;
 }
 
@@ -27,7 +28,8 @@
   width: 100%;
   height: 100%;
   z-index: 10;
-  pointer-events: none; /* SANGAT PENTING: Agar klik mouse tembus ke peta! */
+  pointer-events: none;
+  /* SANGAT PENTING: Agar klik mouse tembus ke peta! */
 }
 
 /* Layer 2: Waypoint Manager Panel (Floating) */
@@ -64,4 +66,41 @@
 
 .closeButton:hover {
   color: var(--danger-red);
+}
+
+.hudStatusBanner {
+  position: absolute;
+  left: 18px;
+  bottom: 18px;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(540px, calc(100% - 36px));
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 209, 102, 0.45);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(22, 24, 28, 0.92), rgba(12, 14, 18, 0.96));
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.hudStatusLabel {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #ffd166;
+  background: rgba(255, 209, 102, 0.12);
+}
+
+.hudStatusText {
+  color: #f3f4f6;
+  font-size: 0.92rem;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

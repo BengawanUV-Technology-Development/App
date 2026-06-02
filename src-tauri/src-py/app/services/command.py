@@ -37,6 +37,8 @@ ARDUPILOT_MODE_MAPPING: dict[str, int] = {
 
 # MAV_MODE_FLAG_CUSTOM_MODE_ENABLED  (decimal 1, bit 0)
 _MAV_MODE_FLAG_CUSTOM = 1
+# MAV_CMD_COMPONENT_ARM_DISARM (decimal 400)
+_MAV_CMD_COMPONENT_ARM_DISARM = 400
 # Default target identifiers (single-vehicle setup)
 _DEFAULT_TARGET_SYSID = 1
 _DEFAULT_TARGET_COMPID = 1
@@ -68,12 +70,22 @@ class DroneMavlinkDirectProtocol(Protocol):
     async def send_message(self, message: MavlinkMessage) -> None: ...
 
 
+class DroneParamProtocol(Protocol):
+    async def get_param_int(self, name: str) -> int: ...
+    async def get_param_float(self, name: str) -> float: ...
+    async def set_param_int(self, name: str, value: int) -> None: ...
+    async def set_param_float(self, name: str, value: float) -> None: ...
+
+
 class DroneProtocol(Protocol):
     @property
     def action(self) -> DroneActionProtocol: ...
 
     @property
     def mavlink_direct(self) -> DroneMavlinkDirectProtocol: ...
+
+    @property
+    def param(self) -> DroneParamProtocol: ...
 
 
 class FlightModeCommand(str, Enum):
@@ -124,15 +136,44 @@ class CommandService:
     async def execute_arm(self):
         try: 
             self.validator.validate_is_connected()
-            await self._run_action(self.drone.action.arm())
-            result = self._build_success_payload("arm", "Vehicle armed successfully")
-            self._record_command("arm", True, message=result["message"])
-            return result
+            last_error: ActionError | None = None
+            for attempt in range(3):
+                try:
+                    await self._run_action(self.drone.action.arm(), timeout=8.0)
+                    result = self._build_success_payload("arm", "Vehicle armed successfully")
+                    self._record_command("arm", True, message=result["message"])
+                    return result
+                except ActionError as exc:
+                    last_error = exc
+                    if attempt < 2:
+                        await asyncio.sleep(1.5 * (attempt + 1))
+                        continue
+                    raise
         except (NotConnectedError, InvalidRequestError, CommandTimeoutError) as exc:
             self._record_command("arm", False, error=str(exc), error_code=self._error_code_for_exception(exc))
             raise
         except ActionError as e:
             error_message = f"Failed to arm vehicle: {str(e)}"
+
+            # Enrich error with pre-arm health diagnostics
+            prearm = self.state_manager.get_prearm_health()
+            failing = prearm.summary_lines()
+            if failing:
+                error_message += f" | Failing pre-arm checks: {', '.join(failing)}"
+            elif not prearm.is_armable:
+                error_message += " | FC reports vehicle is NOT armable (check RC, battery, safety switch)"
+
+            # Include latest PreArm STATUSTEXT if available
+            prearm_texts = self.state_manager.get_prearm_texts()
+            if prearm_texts:
+                latest_prearm = prearm_texts[-1]["text"]
+                error_message += f" | FC message: {latest_prearm}"
+
+            # Push explicit alert to state so UI shows it in red
+            self.state_manager.update(status_text=f"[GCS ALERT] {error_message}", last_update=time())
+            
+            if any(fragment in error_message.lower() for fragment in ("failed", "telemetry", "not initialized", "lock")):
+                logger.warning("arm_action_retry_failed error=%s", e)
             self._record_command("arm", False, error=error_message, error_code="COMMAND_FAILED")
             raise CommandFailedError(error_message)
     
@@ -148,6 +189,7 @@ class CommandService:
             raise
         except ActionError as e:
             error_message = f"Failed to disarm vehicle: {str(e)}"
+            logger.warning("disarm_action_failed error=%s", e)
             self._record_command("disarm", False, error=error_message, error_code="COMMAND_FAILED")
             raise CommandFailedError(error_message)
 
@@ -230,11 +272,186 @@ class CommandService:
         )
         await self.drone.mavlink_direct.send_message(message)
 
+    async def _execute_arm_disarm_direct(self, arm: bool, force: bool = False) -> None:
+        """Send MAV_CMD_COMPONENT_ARM_DISARM via mavlink_direct.
+
+        When *force* is True, param2 is set to 21196 which tells ArduPilot
+        to bypass ALL pre-arm safety checks (use with extreme caution).
+        """
+        fields = {
+            "target_system": _DEFAULT_TARGET_SYSID,
+            "target_component": _DEFAULT_TARGET_COMPID,
+            "command": _MAV_CMD_COMPONENT_ARM_DISARM,
+            "confirmation": 0,
+            "param1": 1.0 if arm else 0.0,
+            "param2": 21196.0 if force else 0.0,
+            "param3": 0.0,
+            "param4": 0.0,
+            "param5": 0.0,
+            "param6": 0.0,
+            "param7": 0.0,
+        }
+
+        message = MavlinkMessage(
+            message_name="COMMAND_LONG",
+            system_id=0,
+            component_id=0,
+            target_system_id=_DEFAULT_TARGET_SYSID,
+            target_component_id=_DEFAULT_TARGET_COMPID,
+            fields_json=json.dumps(fields)
+        )
+
+        logger.info("ardupilot_direct_arm arm=%s force=%s", arm, force)
+        await self.drone.mavlink_direct.send_message(message)
+
+    # -------------------------------------------------------------------
+    # Parameter get / set
+    # -------------------------------------------------------------------
+
+    async def execute_param_get(self, param_name: str) -> dict:
+        """Read a single parameter from the FC via MAVSDK param plugin."""
+        self.validator.validate_is_connected()
+        param_name = param_name.strip().upper()
+        if not param_name:
+            raise InvalidRequestError("Parameter name is required")
+
+        # Try int first, fall back to float
+        value: int | float
+        param_type: str
+        try:
+            value = await self._run_action(self.drone.param.get_param_int(param_name), timeout=5.0)
+            param_type = "int"
+        except Exception:
+            try:
+                value = await self._run_action(self.drone.param.get_param_float(param_name), timeout=5.0)
+                param_type = "float"
+            except Exception as e:
+                error_message = f"Failed to read param {param_name}: {e}"
+                logger.warning("param_get_failed name=%s error=%s", param_name, e)
+                self._record_command("param_get", False, error=error_message, error_code="COMMAND_FAILED")
+                raise CommandFailedError(error_message)
+
+        result = {
+            **self._build_success_payload("param_get", f"Parameter {param_name} = {value}"),
+            "param_name": param_name,
+            "param_value": value,
+            "param_type": param_type,
+        }
+        self._record_command("param_get", True, message=result["message"])
+        return result
+
+    async def execute_param_set(self, param_name: str, value: Any, param_type: str = "auto") -> dict:
+        """Write a single parameter to the FC via MAVSDK param plugin."""
+        self.validator.validate_is_connected()
+        param_name = param_name.strip().upper()
+        if not param_name:
+            raise InvalidRequestError("Parameter name is required")
+
+        try:
+            if param_type == "float":
+                await self._run_action(self.drone.param.set_param_float(param_name, float(value)), timeout=5.0)
+            elif param_type == "int":
+                await self._run_action(self.drone.param.set_param_int(param_name, int(value)), timeout=5.0)
+            else:
+                # Auto-detect: try int first
+                try:
+                    int_val = int(value)
+                    await self._run_action(self.drone.param.set_param_int(param_name, int_val), timeout=5.0)
+                except (ValueError, TypeError):
+                    await self._run_action(self.drone.param.set_param_float(param_name, float(value)), timeout=5.0)
+        except CommandFailedError:
+            raise
+        except Exception as e:
+            error_message = f"Failed to set param {param_name}={value}: {e}"
+            logger.warning("param_set_failed name=%s value=%s error=%s", param_name, value, e)
+            self._record_command("param_set", False, error=error_message, error_code="COMMAND_FAILED")
+            raise CommandFailedError(error_message)
+
+        result = self._build_success_payload("param_set", f"Parameter {param_name} set to {value}")
+        self._record_command("param_set", True, message=result["message"])
+        return result
+
+    # -------------------------------------------------------------------
+    # Force arm (bypass pre-arm checks)
+    # -------------------------------------------------------------------
+
+    async def execute_force_arm(self) -> dict:
+        """Force-arm the vehicle by sending MAV_CMD_COMPONENT_ARM_DISARM
+        with param2=21196, bypassing ALL pre-arm safety checks.
+
+        ⚠  Use with extreme caution — this skips GPS, RC, calibration checks.
+        """
+        self.validator.validate_is_connected()
+        try:
+            await self._run_action(
+                self._execute_arm_disarm_direct(arm=True, force=True),
+                timeout=8.0,
+            )
+            result = self._build_success_payload("force_arm", "Vehicle FORCE armed (pre-arm checks bypassed)")
+            self.state_manager.update(status_text="[GCS] Force arm sent", last_update=time())
+            self._record_command("force_arm", True, message=result["message"])
+            return result
+        except Exception as e:
+            error_message = f"Force arm failed: {e}"
+            logger.warning("force_arm_failed error=%s", e)
+            self._record_command("force_arm", False, error=error_message, error_code="COMMAND_FAILED")
+            raise CommandFailedError(error_message)
+
+    # -------------------------------------------------------------------
+    # Convenience: disable RC pre-arm check for GCS-only operation
+    # -------------------------------------------------------------------
+
+    async def execute_disable_rc_check(self) -> dict:
+        """Disable RC-related pre-arm checks for GCS-only operation.
+
+        Sets:
+          - FS_THR_ENABLE  = 0   (disable throttle failsafe)
+          - ARMING_CHECK: clears bit 6 (RC Channels) if set
+
+        These changes persist on the FC across reboots.
+        """
+        self.validator.validate_is_connected()
+        results: list[str] = []
+
+        # 1. Disable throttle failsafe
+        try:
+            await self._run_action(self.drone.param.set_param_int("FS_THR_ENABLE", 0), timeout=5.0)
+            results.append("FS_THR_ENABLE=0")
+            logger.info("disable_rc_check set FS_THR_ENABLE=0")
+        except Exception as e:
+            results.append(f"FS_THR_ENABLE failed: {e}")
+            logger.warning("disable_rc_check FS_THR_ENABLE error=%s", e)
+
+        # 2. Clear RC Channels bit (bit 6 = 64) from ARMING_CHECK
+        try:
+            current_arming_check = await self._run_action(
+                self.drone.param.get_param_int("ARMING_CHECK"), timeout=5.0
+            )
+            _RC_BIT = 64  # bit 6
+            if current_arming_check & _RC_BIT:
+                new_val = current_arming_check & ~_RC_BIT
+                await self._run_action(
+                    self.drone.param.set_param_int("ARMING_CHECK", new_val), timeout=5.0
+                )
+                results.append(f"ARMING_CHECK {current_arming_check} -> {new_val} (RC bit cleared)")
+                logger.info("disable_rc_check ARMING_CHECK %d -> %d", current_arming_check, new_val)
+            else:
+                results.append(f"ARMING_CHECK={current_arming_check} (RC bit already clear)")
+        except Exception as e:
+            results.append(f"ARMING_CHECK failed: {e}")
+            logger.warning("disable_rc_check ARMING_CHECK error=%s", e)
+
+        summary = "; ".join(results)
+        result = self._build_success_payload("disable_rc_check", f"RC check disabled: {summary}")
+        self._record_command("disable_rc_check", True, message=result["message"])
+        return result
+
     async def execute_set_flight_mode(self, flight_mode: Any) -> dict:
         action_label = "set_flight_mode"
         try:
             normalized_mode = self._normalize_flight_mode(flight_mode)
             self.validator.validate_is_connected()
+            # self.validator.validate_is_armed() # Removed: ArduPilot allows mode change while disarmed
 
             # --- ArduPilot Direct Bypass ---
             # Resolve the canonical ArduPilot mode key for the mapping lookup.
@@ -359,6 +576,78 @@ class CommandService:
             error_message = f"Failed to execute reboot: {str(e)}"
             self._record_command("reboot", False, error=error_message, error_code="COMMAND_FAILED")
             raise CommandFailedError(error_message)
+
+    # --- PARAMETER MANAGEMENT ---
+
+    async def execute_param_get(self, name: str) -> dict:
+        self.validator.validate_is_connected()
+        if not name:
+            raise InvalidRequestError("Parameter name is required")
+        
+        try:
+            # Try int first then float
+            try:
+                val = await self.drone.param.get_param_int(name)
+                param_type = "int"
+            except:
+                val = await self.drone.param.get_param_float(name)
+                param_type = "float"
+            
+            return {
+                "ok": True,
+                "name": name,
+                "value": val,
+                "type": param_type
+            }
+        except Exception as e:
+            raise CommandFailedError(f"Failed to get param {name}: {e}")
+
+    async def execute_param_set(self, name: str, value: Any, param_type: str = "auto") -> dict:
+        self.validator.validate_is_connected()
+        if not name: raise InvalidRequestError("Parameter name is required")
+        
+        try:
+            if param_type == "int" or (param_type == "auto" and isinstance(value, int)):
+                await self.drone.param.set_param_int(name, int(value))
+            else:
+                await self.drone.param.set_param_float(name, float(value))
+            
+            msg = f"Param {name} set to {value}"
+            self.state_manager.update(status_text=f"[GCS] {msg}", last_update=time())
+            return self._build_success_payload("param_set", msg)
+        except Exception as e:
+            raise CommandFailedError(f"Failed to set param {name}: {e}")
+
+    async def execute_force_arm(self) -> dict:
+        # ArduPilot specific bypass for arming checks via MAVLink Direct
+        self.validator.validate_is_connected()
+        try:
+            # Send ARM command with param2=21196 (magic ArduPilot bypass value)
+            fields = {
+                "target_system": _DEFAULT_TARGET_SYSID,
+                "target_component": _DEFAULT_TARGET_COMPID,
+                "command": _MAV_CMD_COMPONENT_ARM_DISARM,
+                "confirmation": 0,
+                "param1": 1.0,
+                "param2": 21196.0, # Magic bypass
+                "param3": 0.0, "param4": 0.0, "param5": 0.0, "param6": 0.0, "param7": 0.0,
+            }
+            message = MavlinkMessage(
+                message_name="COMMAND_LONG", system_id=0, component_id=0,
+                target_system_id=_DEFAULT_TARGET_SYSID, target_component_id=_DEFAULT_TARGET_COMPID,
+                fields_json=json.dumps(fields)
+            )
+            await self.drone.mavlink_direct.send_message(message)
+            return self._build_success_payload("force_arm", "Force arm command sent (Bypass active)")
+        except Exception as e:
+            raise CommandFailedError(f"Force arm failed: {e}")
+
+    async def execute_disable_rc_check(self) -> dict:
+        # AR_CHECK (Pre-arm check bitmask). 
+        # Disabling RC check is common for GCS-only flight.
+        # We need to get current, clear bit, then set. For simplicity we use param_set.
+        return await self.execute_param_set("ARMING_CHECK", 0) # 0 disables ALL checks - use with caution!
+
 
     def _is_expected_reboot_disconnect(self, exc: Exception) -> bool:
         message = str(exc).lower()

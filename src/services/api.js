@@ -68,7 +68,11 @@ export const calibrateGyro = () => {
 };
 
 export const setParameter = (paramId, paramValue) => {
-  return sendRequest('/config/param', 'POST', { id: paramId, value: paramValue });
+  return sendRequest('/command/param', 'POST', { name: paramId, value: paramValue });
+};
+
+export const getParameter = (paramId) => {
+  return sendRequest(`/command/param?name=${paramId}`, 'GET');
 };
 
 export const setConnection = (address) => {

@@ -252,6 +252,105 @@ def reboot_command():
         logger.exception("command_response reboot ok=false error_code=%s", ErrorCode.INTERNAL_ERROR.value)
         return _error_response("reboot", ErrorCode.INTERNAL_ERROR, str(e), 500)
 
+# ---------------------------------------------------------------------------
+# Parameter get / set
+# ---------------------------------------------------------------------------
+
+@command_bp.route("/param", methods=["GET"])
+def param_get_command():
+    service = _get_service_or_abort()
+    param_name = request.args.get("name", "")
+    logger.info("command_request param_get name=%s", param_name)
+    try:
+        result = _run_sync(service.execute_param_get(param_name))
+        logger.info("command_response param_get ok=true name=%s", param_name)
+        return jsonify(result), 200
+    except NotConnectedError:
+        return _error_response("param_get", ErrorCode.NOT_CONNECTED, "Vehicle is not connected")
+    except InvalidRequestError as e:
+        return _error_response("param_get", ErrorCode.INVALID_REQUEST, str(e))
+    except CommandFailedError as e:
+        return _error_response("param_get", ErrorCode.COMMAND_FAILED, str(e), 400)
+    except CommandTimeoutError as e:
+        return _error_response("param_get", ErrorCode.TIMEOUT, str(e), 504)
+    except Exception as e:
+        logger.exception("command_response param_get ok=false")
+        return _error_response("param_get", ErrorCode.INTERNAL_ERROR, str(e), 500)
+
+@command_bp.route("/param", methods=["POST"])
+def param_set_command():
+    service = _get_service_or_abort()
+    data = request.get_json(silent=True) or {}
+    param_name = data.get("name", "")
+    param_value = data.get("value")
+    param_type = data.get("type", "auto")
+    logger.info("command_request param_set name=%s value=%s type=%s", param_name, param_value, param_type)
+
+    if param_value is None:
+        return _error_response("param_set", ErrorCode.INVALID_REQUEST, "Field 'value' is required")
+
+    try:
+        result = _run_sync(service.execute_param_set(param_name, param_value, param_type))
+        logger.info("command_response param_set ok=true name=%s", param_name)
+        return jsonify(result), 200
+    except NotConnectedError:
+        return _error_response("param_set", ErrorCode.NOT_CONNECTED, "Vehicle is not connected")
+    except InvalidRequestError as e:
+        return _error_response("param_set", ErrorCode.INVALID_REQUEST, str(e))
+    except CommandFailedError as e:
+        return _error_response("param_set", ErrorCode.COMMAND_FAILED, str(e), 400)
+    except CommandTimeoutError as e:
+        return _error_response("param_set", ErrorCode.TIMEOUT, str(e), 504)
+    except Exception as e:
+        logger.exception("command_response param_set ok=false")
+        return _error_response("param_set", ErrorCode.INTERNAL_ERROR, str(e), 500)
+
+# ---------------------------------------------------------------------------
+# Force arm (bypass all pre-arm checks)
+# ---------------------------------------------------------------------------
+
+@command_bp.route("/force_arm", methods=["POST"])
+def force_arm_command():
+    service = _get_service_or_abort()
+    logger.info("command_request force_arm")
+    try:
+        result = _run_sync(service.execute_force_arm())
+        logger.info("command_response force_arm ok=true")
+        return jsonify(result), 200
+    except NotConnectedError:
+        return _error_response("force_arm", ErrorCode.NOT_CONNECTED, "Vehicle is not connected")
+    except CommandFailedError as e:
+        logger.warning("command_response force_arm ok=false error=%s", e)
+        return _error_response("force_arm", ErrorCode.COMMAND_FAILED, str(e), 400)
+    except CommandTimeoutError as e:
+        return _error_response("force_arm", ErrorCode.TIMEOUT, str(e), 504)
+    except Exception as e:
+        logger.exception("command_response force_arm ok=false")
+        return _error_response("force_arm", ErrorCode.INTERNAL_ERROR, str(e), 500)
+
+# ---------------------------------------------------------------------------
+# Convenience: disable RC pre-arm check for GCS-only operation
+# ---------------------------------------------------------------------------
+
+@command_bp.route("/disable_rc_check", methods=["POST"])
+def disable_rc_check_command():
+    service = _get_service_or_abort()
+    logger.info("command_request disable_rc_check")
+    try:
+        result = _run_sync(service.execute_disable_rc_check())
+        logger.info("command_response disable_rc_check ok=true message=%s", result.get("message"))
+        return jsonify(result), 200
+    except NotConnectedError:
+        return _error_response("disable_rc_check", ErrorCode.NOT_CONNECTED, "Vehicle is not connected")
+    except CommandFailedError as e:
+        logger.warning("command_response disable_rc_check ok=false error=%s", e)
+        return _error_response("disable_rc_check", ErrorCode.COMMAND_FAILED, str(e), 400)
+    except CommandTimeoutError as e:
+        return _error_response("disable_rc_check", ErrorCode.TIMEOUT, str(e), 504)
+    except Exception as e:
+        logger.exception("command_response disable_rc_check ok=false")
+        return _error_response("disable_rc_check", ErrorCode.INTERNAL_ERROR, str(e), 500)
+
 def _error_response(command_name: str, error_code: ErrorCode, error_message: str, status_code: int = 400):
     resp = CommandResponse(
         ok=False,
@@ -262,3 +361,4 @@ def _error_response(command_name: str, error_code: ErrorCode, error_message: str
         error=error_message
     )
     return jsonify(resp.to_dict()), status_code
+
