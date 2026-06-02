@@ -45,6 +45,29 @@ def connection_command():
     
     return _error_response("connection", ErrorCode.INTERNAL_ERROR, "Address updater not initialized")
 
+@command_bp.route("/list_ports", methods=["GET"])
+def list_ports_command():
+    try:
+        import serial.tools.list_ports
+        ports = serial.tools.list_ports.comports()
+        port_list = []
+        for port in ports:
+            port_list.append({
+                "device": port.device,
+                "description": port.description,
+                "hwid": port.hwid
+            })
+        return jsonify({
+            "ok": True,
+            "ports": port_list
+        }), 200
+    except Exception as e:
+        logger.exception("Failed to list serial ports")
+        return jsonify({
+            "ok": False,
+            "error": str(e)
+        }), 500
+
 def _get_service_or_abort():
     if _command_service is None:
         abort(500, description="Command routes not initialized")

@@ -33,7 +33,9 @@ export const connectWebSocket = () => {
           roll: data.roll_deg ?? 0,
           heading: data.heading_deg ?? 0,
           vSpeed: data.v_speed_m_s ?? 0,
-          // distToHome dan wind bisa ditambahkan jika backend sudah mendukung
+          lat: data.lat ?? 0,
+          lng: data.lng ?? 0,
+          airspeed: data.airspeed_m_s ?? 0,
         });
 
         // 3. Sinkronisasi State Drone (Armed & Mode)

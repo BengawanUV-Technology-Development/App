@@ -1,10 +1,35 @@
 import React from 'react';
 import MapView from '../components/centerarea/MapView';
 import useDroneStateStore from '../store/droneStateStore';
+import useTelemetryStore from '../store/telemetryStore';
 import { armDrone, disarmDrone, setMode, rebootFCU } from '../services/api';
 
+const PitchLadder = ({ pitch }) => {
+  const lines = [-30, -20, -10, 0, 10, 20, 30];
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+      {lines.map((deg) => (
+        <div 
+          key={deg}
+          className="absolute border-t border-white/40 flex items-center justify-center"
+          style={{ 
+            width: deg === 0 ? '100px' : '60px',
+            transform: `translateY(${(pitch - deg) * 3}px)`,
+            opacity: Math.max(0, 1 - Math.abs(pitch - deg) / 20)
+          }}
+        >
+          {deg !== 0 && (
+            <span className="absolute -left-6 text-[8px] text-white/60 font-mono">{deg}</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+};
+
 export default function FlyView({ mapLogic }) {
-  const { isArmed, activeMode, setArmed, setFlightMode } = useDroneStateStore();
+  const { isArmed, activeMode, setArmed, setFlightMode, isConnected } = useDroneStateStore();
+  const telemetry = useTelemetryStore();
 
   const handleArmToggle = async () => {
     if (isArmed) {
@@ -25,7 +50,7 @@ export default function FlyView({ mapLogic }) {
     await rebootFCU();
   };
 
-  const availableModes = ['Q_HOVER', 'Q_STABILIZE', 'FBWA', 'AUTO', 'Q_LAND', 'RTL'];
+  const availableModes = ['QHOVER', 'QSTABILIZE', 'FBWA', 'AUTO', 'QLAND', 'RTL'];
 
   return (
     <div className="flex-1 flex flex-row min-h-0 w-full overflow-hidden text-slate-900">
@@ -34,30 +59,75 @@ export default function FlyView({ mapLogic }) {
       <aside className="w-[260px] bg-white border-r border-slate-300 flex flex-col p-3 gap-4 overflow-y-auto shrink-0">
         
         {/* HUD - VISUAL ARTIFICIAL HORIZON */}
-        <div className="h-32 w-full rounded-sm relative overflow-hidden border-2 border-slate-800 shadow-inner flex items-center justify-center bg-gradient-to-b from-sky-500 from-50% to-[#8b5a2b] to-50%">
-          <div className="w-2/3 h-0.5 bg-white/80 absolute" />
-          <div className="w-4 h-4 border-2 border-white/80 absolute rounded-full" />
-          <span className="absolute top-1 left-1 text-[8px] text-white/70 font-mono">SIMULATED POV</span>
+        <div className="h-40 w-full rounded-sm relative overflow-hidden border-2 border-slate-800 shadow-2xl flex items-center justify-center bg-[#5c3c1e]">
+          {/* Sky Gradient */}
+          <div 
+            className="absolute inset-0 bg-gradient-to-b from-sky-400 to-sky-600 transition-transform duration-75 ease-out"
+            style={{ 
+              transform: `rotate(${-telemetry.roll}deg) translateY(${telemetry.pitch * 3}px) scale(2)`,
+              height: '200%',
+              top: '-50%'
+            }}
+          />
+          
+          {/* Pitch Ladder (Instrument Overlay) */}
+          <div 
+            className="absolute inset-0 z-10 transition-transform duration-75 ease-out"
+            style={{ transform: `rotate(${-telemetry.roll}deg)` }}
+          >
+            <PitchLadder pitch={telemetry.pitch} />
+          </div>
+
+          {/* Fixed Center Mask / Aircraft Symbol */}
+          <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
+             {/* Center Wings */}
+             <div className="w-16 h-0.5 bg-amber-400 shadow-[0_0_5px_rgba(251,191,36,0.8)]" />
+             <div className="w-4 h-4 border-2 border-amber-400 absolute rounded-full shadow-[0_0_5px_rgba(251,191,36,0.8)]" />
+             {/* Notch top */}
+             <div className="absolute top-[40%] w-0.5 h-2 bg-amber-400" />
+          </div>
+
+          {/* HUD STATUS OVERLAYS */}
+          <div className="absolute top-1 left-1 flex flex-col gap-0.5 z-30">
+            <span className={`text-[9px] font-bold px-1 rounded-sm shadow-sm ${isArmed ? 'bg-red-600 text-white' : 'bg-slate-700 text-slate-300'}`}>
+              {isArmed ? 'ARMED' : 'DISARMED'}
+            </span>
+            <span className="text-[9px] font-bold px-1 bg-emerald-600 text-white rounded-sm shadow-sm">
+              {activeMode}
+            </span>
+          </div>
+
+          <div className="absolute bottom-1 right-1 flex flex-col items-end z-30 font-mono text-white text-[9px] drop-shadow-md">
+            <span>ROLL: {telemetry.roll.toFixed(1)}°</span>
+            <span>PITCH: {telemetry.pitch.toFixed(1)}°</span>
+          </div>
         </div>
 
         {/* ARM & REBOOT WIRING */}
-        <div className="flex flex-row gap-2 h-10 w-full">
-          <button 
-            onClick={handleArmToggle}
-            className={`flex-1 border-2 font-bold text-xs rounded-sm cursor-pointer transition-colors flex items-center justify-center ${
-              isArmed 
-                ? 'border-red-600 text-white bg-red-600 hover:bg-red-700 shadow-inner' 
-                : 'border-red-600 text-red-600 bg-red-50 hover:bg-red-100'
-            }`}
-          >
-            {isArmed ? ">> DISARM <<" : ">> ARM >>"}
-          </button>
-          <button 
-            onClick={handleReboot}
-            className="w-16 bg-amber-500 hover:bg-amber-600 text-white flex items-center justify-center font-bold text-[10px] rounded-sm cursor-pointer transition-colors"
-          >
-            REBOOT
-          </button>
+        <div className="flex flex-col gap-2 w-full">
+          <div className="flex flex-row gap-2 h-10">
+            <button 
+              onClick={handleArmToggle}
+              className={`flex-1 border-2 font-bold text-xs rounded-sm cursor-pointer transition-all active:scale-95 flex items-center justify-center ${
+                isArmed 
+                  ? 'border-red-600 text-white bg-red-600 hover:bg-red-700 shadow-inner' 
+                  : 'border-red-600 text-red-600 bg-red-50 hover:bg-red-100'
+              }`}
+            >
+              {isArmed ? ">> DISARM <<" : ">> ARM >>"}
+            </button>
+            <button 
+              onClick={handleReboot}
+              className="w-16 bg-amber-500 hover:bg-amber-600 text-white flex items-center justify-center font-bold text-[10px] rounded-sm cursor-pointer transition-all active:scale-95"
+            >
+              REBOOT
+            </button>
+          </div>
+          {!isConnected && (
+             <div className="text-[9px] text-red-600 font-bold animate-pulse text-center">
+               ⚠️ VEHICLE DISCONNECTED - CHECK PORT
+             </div>
+          )}
         </div>
 
         {/* FLIGHT MODES WIRING */}
@@ -68,9 +138,9 @@ export default function FlyView({ mapLogic }) {
               <button 
                 key={mode}
                 onClick={() => handleModeChange(mode)}
-                className={`h-9 font-mono text-[10px] rounded-sm font-bold cursor-pointer flex items-center justify-center transition-colors border ${
+                className={`h-9 font-mono text-[10px] rounded-sm font-bold cursor-pointer flex items-center justify-center transition-all border ${
                   activeMode === mode 
-                    ? 'bg-emerald-600 text-white border-emerald-700 shadow-inner' 
+                    ? 'bg-emerald-600 text-white border-emerald-700 shadow-lg' 
                     : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-200'
                 }`}
               >
@@ -97,7 +167,7 @@ export default function FlyView({ mapLogic }) {
         <div className="flex-1 relative bg-black flex items-center justify-center min-h-0 border-b-4 border-slate-900 overflow-hidden">
           <span className="font-mono text-sm text-red-500 font-bold animate-pulse">LIVE VIDEO FEED (LANDSCAPE)</span>
           <div className="absolute top-4 left-4 text-white font-mono text-[10px] drop-shadow-md bg-black/50 px-2 py-1">
-            CAM 1 | 1080p 60fps | LAT: -7.0543 LON: 110.4321
+            CAM 1 | 1080p 60fps | LAT: {telemetry.lat?.toFixed(5) ?? '---'} LON: {telemetry.lng?.toFixed(5) ?? '---'}
           </div>
         </div>
 
@@ -121,10 +191,10 @@ export default function FlyView({ mapLogic }) {
         {/* NODE 1: FLUID DYNAMICS */}
         <div className="flex flex-col gap-1 border-b border-slate-200 pb-2">
           <span className="text-[10px] font-bold text-slate-500 tracking-wider">FLUID DYNAMICS</span>
-          <div className="flex justify-between font-mono text-[11px]"><span>ALT (AGL)</span><span className="text-blue-700 font-bold">040.2 m</span></div>
-          <div className="flex justify-between font-mono text-[11px]"><span>AIRSPEED</span><span className="text-amber-700 font-bold">15.4 m/s</span></div>
-          <div className="flex justify-between font-mono text-[11px]"><span>GND SPEED</span><span>12.1 m/s</span></div>
-          <div className="flex justify-between font-mono text-[11px]"><span>WIND EST</span><span>4.2 m/s HEAD</span></div>
+          <div className="flex justify-between font-mono text-[11px]"><span>ALT (AGL)</span><span className="text-blue-700 font-bold">{telemetry.altitude.toFixed(1)} m</span></div>
+          <div className="flex justify-between font-mono text-[11px]"><span>AIRSPEED</span><span className="text-amber-700 font-bold">{telemetry.airspeed?.toFixed(1) ?? '0.0'} m/s</span></div>
+          <div className="flex justify-between font-mono text-[11px]"><span>GND SPEED</span><span>{telemetry.speed.toFixed(1)} m/s</span></div>
+          <div className="flex justify-between font-mono text-[11px]"><span>V SPEED</span><span className={telemetry.vSpeed > 0 ? 'text-emerald-600' : 'text-red-600'}>{telemetry.vSpeed.toFixed(1)} m/s</span></div>
         </div>
 
         {/* NODE 2: EKF VARIANCE INNOVATION */}

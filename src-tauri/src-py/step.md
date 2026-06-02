@@ -202,15 +202,15 @@ Tujuan: backend mengonsumsi data attitude, speed, dan heading untuk keperluan vi
 
 - [x] Tambahkan field data baru di `StateManager` (roll, pitch, yaw, heading, airspeed, groundspeed, v_speed).
 - [x] Tambahkan MAVSDK consumer untuk attitude, velocity, dan heading di `main.py`.
-- [x] Tampilkan data di dashboard Frontend (`App.jsx`).
+- [x] Tampilkan data di dashboard Frontend (`App.jsx` atau `FlyView.jsx`).
 
-### Fase 15 - Integrasi Peta Interaktif (Leafmap/Leaflet)
+### Fase 15 - Integrasi Peta Interaktif (Leafmap/Leaflet) (Partial)
 
 Tujuan: frontend tidak lagi menampilkan koordinat angka, tapi peta visual.
 
-- [ ] Tambahkan library peta (misal: react-leaflet atau komponen berbasis iframe/webview jika menggunakan Leafmap Python).
-- [ ] Render posisi UAV secara real-time sebagai icon pesawat/drone di peta.
-- [ ] Tampilkan jalur (waypoint) dari `missionDraft`.
+- [x] Tambahkan library peta (misal: react-leaflet).
+- [ ] Render posisi UAV secara real-time sebagai icon pesawat/drone di peta (3D Model Icon).
+- [x] Tampilkan jalur (waypoint) dari `missionDraft`.
 
 ### Fase 16 - Computer Vision Integration (Object Detection Pipeline)
 

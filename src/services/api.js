@@ -74,3 +74,7 @@ export const setParameter = (paramId, paramValue) => {
 export const setConnection = (address) => {
   return sendRequest('/command/connection', 'POST', { address });
 };
+
+export const listPorts = () => {
+  return sendRequest('/command/list_ports', 'GET');
+};

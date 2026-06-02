@@ -124,6 +124,45 @@ async def _consume_battery(drone):
         )
 
 
+async def _consume_attitude(drone):
+    async for attitude in drone.telemetry.attitude_euler():
+        state_manager.update(
+            roll_deg=round(attitude.roll_deg, 2),
+            pitch_deg=round(attitude.pitch_deg, 2),
+            yaw_deg=round(attitude.yaw_deg, 2),
+            last_update=time.time(),
+        )
+
+
+async def _consume_velocity(drone):
+    async for velocity in drone.telemetry.velocity_ned():
+        # groundspeed = sqrt(vn^2 + ve^2)
+        import math
+        gs = math.sqrt(velocity.north_m_s**2 + velocity.east_m_s**2)
+        state_manager.update(
+            groundspeed_m_s=round(gs, 2),
+            v_speed_m_s=round(-velocity.down_m_s, 2), # positive is up
+            last_update=time.time(),
+        )
+
+
+async def _consume_heading(drone):
+    async for heading in drone.telemetry.heading():
+        state_manager.update(
+            heading_deg=round(heading.heading_deg, 2),
+            last_update=time.time(),
+        )
+
+
+async def _consume_fixedwing_metrics(drone):
+    # Airspeed is useful for fixedwing UAVs
+    async for metrics in drone.telemetry.fixedwing_metrics():
+        state_manager.update(
+            airspeed_m_s=round(metrics.airspeed_m_s, 2),
+            last_update=time.time(),
+        )
+
+
 async def _watch_reboot_request():
     last_address = MAVSDK_ADDRESS
     while True:
@@ -219,6 +258,10 @@ async def _mavsdk_loop():
                 asyncio.create_task(_consume_armed(drone)),
                 asyncio.create_task(_consume_flight_mode(drone)),
                 asyncio.create_task(_consume_battery(drone)),
+                asyncio.create_task(_consume_attitude(drone)),
+                asyncio.create_task(_consume_velocity(drone)),
+                asyncio.create_task(_consume_heading(drone)),
+                asyncio.create_task(_consume_fixedwing_metrics(drone)),
                 asyncio.create_task(_watch_reboot_request()),
             ]
 
