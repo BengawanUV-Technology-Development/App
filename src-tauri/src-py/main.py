@@ -15,7 +15,7 @@ from app.routes.commands import command_bp, init_command_routes
 from app.utils.state import StateManager
 from app.utils.session_log import SessionLogStore
 
-MAVSDK_ADDRESS = os.getenv("MAVSDK_ADDRESS", "serial://COM10:115200")
+MAVSDK_ADDRESS = os.getenv("MAVSDK_ADDRESS", "serial://COM9:115200")
 API_PORT = int(os.getenv("API_PORT", "5001"))
 CONNECT_TIMEOUT_SECONDS = float(os.getenv("CONNECT_TIMEOUT_SECONDS", "8"))
 CONNECT_CALL_TIMEOUT_SECONDS = float(os.getenv("CONNECT_CALL_TIMEOUT_SECONDS", "15"))
@@ -56,7 +56,30 @@ logging.getLogger("mavsdk_server").addFilter(_MavsdkServerNoiseFilter())
 class RebootRequestedSignal(Exception):
     pass
 
-init_command_routes(state_manager, lambda: drone, session_log_store, lambda: mavsdk_loop)
+
+class ConnectionAddressChangedSignal(Exception):
+    pass
+
+
+def update_mavsdk_address(new_address: str):
+    global MAVSDK_ADDRESS
+    
+    # Auto-format for common serial patterns if prefix is missing
+    if "://" not in new_address:
+        if new_address.upper().startswith("COM") or new_address.startswith("/dev/"):
+            new_address = f"serial://{new_address}:115200"
+        elif ":" in new_address and new_address.split(":")[-1].isdigit():
+            # Looks like a port, assume UDP
+            new_address = f"udp://{new_address}"
+            
+    if new_address != MAVSDK_ADDRESS:
+        MAVSDK_ADDRESS = new_address
+        state_manager.update(system_address=MAVSDK_ADDRESS)
+        return True
+    return False
+
+
+init_command_routes(state_manager, lambda: drone, session_log_store, lambda: mavsdk_loop, update_mavsdk_address)
 init_mission_routes(state_manager, lambda: drone, session_log_store, lambda: mavsdk_loop)
 init_telemetry_routes(state_manager)
 init_health_routes(state_manager) 
@@ -102,10 +125,13 @@ async def _consume_battery(drone):
 
 
 async def _watch_reboot_request():
+    last_address = MAVSDK_ADDRESS
     while True:
         await asyncio.sleep(0.25)
         if state_manager.get().status == "REBOOTING":
             raise RebootRequestedSignal()
+        if MAVSDK_ADDRESS != last_address:
+            raise ConnectionAddressChangedSignal()
 
 
 def _is_serial_disconnect_error(exc: Exception) -> bool:
@@ -206,6 +232,18 @@ async def _mavsdk_loop():
 
         except Exception as exc:
             current_state = state_manager.get()
+            if isinstance(exc, ConnectionAddressChangedSignal):
+                print(f"[status] connection address changed to {MAVSDK_ADDRESS}, reconnecting immediately...")
+                if drone is not None:
+                    try:
+                        drone._stop_mavsdk_server()
+                    except Exception:
+                        pass
+                    finally:
+                        drone = None
+                current_delay = base_delay
+                continue
+
             if isinstance(exc, RebootRequestedSignal) or current_state.status == "REBOOTING":
                 friendly_error = "Vehicle rebooting"
                 state_manager.update(connected=False, status="REBOOTING", error=None, last_update=time.time())

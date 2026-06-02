@@ -8,7 +8,7 @@ const useDroneStateStore = create((set) => ({
   
   // Connection State
   isConnected: false,
-  port: 'udp://:14550',
+  port: 'serial://COM9:115200',
 
   // Actions
   setArmed: (status) => set({ isArmed: status }),

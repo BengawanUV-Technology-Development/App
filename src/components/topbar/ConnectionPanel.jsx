@@ -2,6 +2,7 @@
 import React from 'react';
 import useDroneStateStore from '../../store/droneStateStore';
 import styles from './TopBar.module.css';
+import { armDrone, disarmDrone, setConnection } from '../../services/api';
 import { connectWebSocket, disconnectWebSocket } from '../../services/websocket.js';
 
 
@@ -12,13 +13,17 @@ const ConnectionPanel = () => {
   const setConnectionStatus = useDroneStateStore((state) => state.setConnectionStatus);
   const setPort = useDroneStateStore((state) => state.setPort);
 
-  const handleConnectToggle = () => {
+  const handleConnectToggle = async () => {
   if (isConnected) {
     disconnectWebSocket();
   } else {
-    // Kita bisa mengirim port ke Flask via API terlebih dahulu jika perlu, 
-    // lalu buka WebSocket
-    connectWebSocket();
+    // Kirim port terpilih ke backend terlebih dahulu
+    const res = await setConnection(port);
+    if (res.success) {
+       connectWebSocket();
+    } else {
+       alert(`Gagal set port: ${res.error}`);
+    }
   }
 };
 

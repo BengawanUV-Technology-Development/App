@@ -17,12 +17,33 @@ from app.utils.session_log import SessionLogStore
 command_bp = Blueprint("command", __name__, url_prefix="/command")
 _command_service: CommandService | None = None
 _loop_getter = None
+_address_updater = None
 logger = logging.getLogger(__name__)
 
-def init_command_routes(state_manager, drone_getter, event_logger: SessionLogStore | None = None, loop_getter = None):
-    global _command_service, _loop_getter
+def init_command_routes(state_manager, drone_getter, event_logger: SessionLogStore | None = None, loop_getter = None, address_updater = None):
+    global _command_service, _loop_getter, _address_updater
     _command_service = CommandService(state_manager, drone_getter, event_logger)
     _loop_getter = loop_getter
+    _address_updater = address_updater
+
+@command_bp.route("/connection", methods=["POST"])
+def connection_command():
+    data = request.get_json(silent=True) or {}
+    address = data.get("address")
+    if not address:
+        return _error_response("connection", ErrorCode.INVALID_REQUEST, "Address is required")
+
+    logger.info("command_request connection address=%s", address)
+    if _address_updater:
+        changed = _address_updater(address)
+        return jsonify({
+            "ok": True,
+            "command": "connection",
+            "message": f"Connection address updated to {address}" if changed else "Address already set",
+            "changed": changed
+        }), 200
+    
+    return _error_response("connection", ErrorCode.INTERNAL_ERROR, "Address updater not initialized")
 
 def _get_service_or_abort():
     if _command_service is None:
