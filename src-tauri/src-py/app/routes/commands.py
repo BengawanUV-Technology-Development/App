@@ -41,6 +41,13 @@ def _run_sync(coro):
     future = asyncio.run_coroutine_threadsafe(coro, loop)
     return future.result()
 
+def _terminal_command_result(command_name: str, ok: bool, message: str | None = None, error: str | None = None, **data):
+    details = " ".join(f"{key}={value}" for key, value in data.items() if value is not None)
+    if ok:
+        print(f"[command] {command_name} OK {details} message={message or '-'}", flush=True)
+    else:
+        print(f"[command] {command_name} FAILED {details} error={error or '-'}", flush=True)
+
 @command_bp.route("/arm", methods=["POST"])
 def arm_command():
     service = _get_service_or_abort()
@@ -48,9 +55,11 @@ def arm_command():
     try:
         result = _run_sync(service.execute_arm())
         logger.info("command_response arm ok=true command_id=%s", result.get("command_id"))
+        _terminal_command_result("arm", True, result.get("message"), command_id=result.get("command_id"))
         return jsonify(result), 200
     except NotConnectedError:
         logger.info("command_response arm ok=false error_code=%s", ErrorCode.NOT_CONNECTED.value)
+        _terminal_command_result("arm", False, error="Vehicle is not connected", error_code=ErrorCode.NOT_CONNECTED.value)
         return _error_response("arm", ErrorCode.NOT_CONNECTED, "Vehicle is not connected")
     except CommandFailedError as e:
         logger.warning("command_response arm ok=false error_code=%s error=%s", ErrorCode.COMMAND_FAILED.value, e)
@@ -70,9 +79,11 @@ def disarm_command():
     try:
         result = _run_sync(service.execute_disarm())
         logger.info("command_response disarm ok=true command_id=%s", result.get("command_id"))
+        _terminal_command_result("disarm", True, result.get("message"), command_id=result.get("command_id"))
         return jsonify(result), 200
     except NotConnectedError:
         logger.info("command_response disarm ok=false error_code=%s", ErrorCode.NOT_CONNECTED.value)
+        _terminal_command_result("disarm", False, error="Vehicle is not connected", error_code=ErrorCode.NOT_CONNECTED.value)
         return _error_response("disarm", ErrorCode.NOT_CONNECTED, "Vehicle is not connected")
     except CommandFailedError as e:
         logger.warning("command_response disarm ok=false error_code=%s error=%s", ErrorCode.COMMAND_FAILED.value, e)
@@ -92,9 +103,11 @@ def takeoff_command():
     try:
         result = _run_sync(service.execute_takeoff(data.get("altitude_m")))
         logger.info("command_response takeoff ok=true command_id=%s", result.get("command_id"))
+        _terminal_command_result("takeoff", True, result.get("message"), command_id=result.get("command_id"), altitude_m=data.get("altitude_m"))
         return jsonify(result), 200
     except NotConnectedError:
         logger.info("command_response takeoff ok=false error_code=%s", ErrorCode.NOT_CONNECTED.value)
+        _terminal_command_result("takeoff", False, error="Vehicle is not connected", error_code=ErrorCode.NOT_CONNECTED.value, altitude_m=data.get("altitude_m"))
         return _error_response("takeoff", ErrorCode.NOT_CONNECTED, "Vehicle is not connected")
     except InvalidRequestError as e:
         logger.info("command_response takeoff ok=false error_code=%s error=%s", ErrorCode.INVALID_REQUEST.value, e)
@@ -117,9 +130,11 @@ def land_command():
     try:
         result = _run_sync(service.execute_land())
         logger.info("command_response land ok=true command_id=%s", result.get("command_id"))
+        _terminal_command_result("land", True, result.get("message"), command_id=result.get("command_id"))
         return jsonify(result), 200
     except NotConnectedError:
         logger.info("command_response land ok=false error_code=%s", ErrorCode.NOT_CONNECTED.value)
+        _terminal_command_result("land", False, error="Vehicle is not connected", error_code=ErrorCode.NOT_CONNECTED.value)
         return _error_response("land", ErrorCode.NOT_CONNECTED, "Vehicle is not connected")
     except CommandFailedError as e:
         logger.warning("command_response land ok=false error_code=%s error=%s", ErrorCode.COMMAND_FAILED.value, e)
@@ -140,9 +155,11 @@ def set_takeoff_altitude_command():
     try:
         result = _run_sync(service.execute_set_takeoff_altitude(data.get("altitude_m")))
         logger.info("command_response set_takeoff_altitude ok=true command_id=%s", result.get("command_id"))
+        _terminal_command_result("set_takeoff_altitude", True, result.get("message"), command_id=result.get("command_id"), altitude_m=data.get("altitude_m"))
         return jsonify(result), 200
     except NotConnectedError:
         logger.info("command_response set_takeoff_altitude ok=false error_code=%s", ErrorCode.NOT_CONNECTED.value)
+        _terminal_command_result("set_takeoff_altitude", False, error="Vehicle is not connected", error_code=ErrorCode.NOT_CONNECTED.value, altitude_m=data.get("altitude_m"))
         return _error_response("set_takeoff_altitude", ErrorCode.NOT_CONNECTED, "Vehicle is not connected")
     except InvalidRequestError as e:
         logger.info("command_response set_takeoff_altitude ok=false error_code=%s error=%s", ErrorCode.INVALID_REQUEST.value, e)
@@ -166,9 +183,11 @@ def set_flight_mode_command():
     try:
         result = _run_sync(service.execute_set_flight_mode(data.get("mode")))
         logger.info("command_response set_flight_mode ok=true command_id=%s", result.get("command_id"))
+        _terminal_command_result("set_flight_mode", True, result.get("message"), command_id=result.get("command_id"), requested_mode=data.get("mode"))
         return jsonify(result), 200
     except NotConnectedError:
         logger.info("command_response set_flight_mode ok=false error_code=%s", ErrorCode.NOT_CONNECTED.value)
+        _terminal_command_result("set_flight_mode", False, error="Vehicle is not connected", error_code=ErrorCode.NOT_CONNECTED.value, requested_mode=data.get("mode"))
         return _error_response("set_flight_mode", ErrorCode.NOT_CONNECTED, "Vehicle is not connected")
     except InvalidRequestError as e:
         logger.info("command_response set_flight_mode ok=false error_code=%s error=%s", ErrorCode.INVALID_REQUEST.value, e)
@@ -191,9 +210,11 @@ def reboot_command():
     try:
         result = _run_sync(service.execute_reboot())
         logger.info("command_response reboot ok=true command_id=%s", result.get("command_id"))
+        _terminal_command_result("reboot", True, result.get("message"), command_id=result.get("command_id"))
         return jsonify(result), 200
     except NotConnectedError:
         logger.info("command_response reboot ok=false error_code=%s", ErrorCode.NOT_CONNECTED.value)
+        _terminal_command_result("reboot", False, error="Vehicle is not connected", error_code=ErrorCode.NOT_CONNECTED.value)
         return _error_response("reboot", ErrorCode.NOT_CONNECTED, "Vehicle is not connected")
     except InvalidRequestError as e:
         logger.info("command_response reboot ok=false error_code=%s error=%s", ErrorCode.INVALID_REQUEST.value, e)
@@ -209,6 +230,7 @@ def reboot_command():
         return _error_response("reboot", ErrorCode.INTERNAL_ERROR, str(e), 500)
 
 def _error_response(command_name: str, error_code: ErrorCode, error_message: str, status_code: int = 400):
+    _terminal_command_result(command_name, False, error=error_message, error_code=error_code.value, status_code=status_code)
     resp = CommandResponse(
         ok=False,
         command=command_name,

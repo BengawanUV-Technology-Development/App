@@ -7,7 +7,8 @@ import random
 import math
 import socket
 import threading
-from flask import Flask, jsonify
+import json
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from mavsdk import System
 from app.routes.connection import connection_bp, init_connection_routes
@@ -16,6 +17,7 @@ from app.routes.logs import logs_bp, init_log_routes
 from app.routes.telemetry import telemetry_bp, init_telemetry_routes
 from app.routes.health import health_bp, init_health_routes
 from app.routes.commands import command_bp, init_command_routes
+from app.services.command import ARDUPILOT_MODE_REVERSE_MAPPING
 from app.utils.state import StateManager
 from app.utils.session_log import SessionLogStore
 
@@ -33,6 +35,32 @@ SERIAL_ACCESS_DENIED_RETRY_DELAY_SECONDS = float(
 
 app = Flask(__name__)
 CORS(app)
+
+
+@app.before_request
+def _log_http_request():
+    if request.path in {"/health", "/telemetry"}:
+        return
+    payload = request.get_json(silent=True) if request.method in {"POST", "PUT", "PATCH"} else None
+    print(f"[http] -> {request.method} {request.path} payload={payload or '-'}", flush=True)
+
+
+@app.after_request
+def _log_http_response(response):
+    if request.path not in {"/health", "/telemetry"}:
+        print(f"[http] <- {request.method} {request.path} status={response.status_code}", flush=True)
+    return response
+
+
+def _print_startup_banner():
+    route_list = ", ".join(sorted(rule.rule for rule in app.url_map.iter_rules()))
+    print("=" * 72, flush=True)
+    print(f"[startup] backend pid={os.getpid()} cwd={os.getcwd()}", flush=True)
+    print(f"[startup] api=http://127.0.0.1:{API_PORT} auto_connect={AUTO_CONNECT}", flush=True)
+    print(f"[startup] default MAVSDK_ADDRESS={MAVSDK_ADDRESS or '-'} server_port={MAVSDK_SERVER_PORT or 'auto'}", flush=True)
+    print("[startup] command and connection activity will be printed in this terminal", flush=True)
+    print(f"[startup] routes={route_list}", flush=True)
+    print("=" * 72, flush=True)
 
 state_manager = StateManager()
 drone: System | None = None
@@ -63,6 +91,19 @@ class _MavsdkServerNoiseFilter(logging.Filter):
 
 
 logging.getLogger("mavsdk_server").addFilter(_MavsdkServerNoiseFilter())
+
+
+class _WerkzeugPollingFilter(logging.Filter):
+    """Suppress Werkzeug access log lines for high-frequency polling endpoints."""
+
+    _QUIET_FRAGMENTS = ("/health", "/telemetry")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(frag in msg for frag in self._QUIET_FRAGMENTS)
+
+
+logging.getLogger("werkzeug").addFilter(_WerkzeugPollingFilter())
 
 
 class RebootRequestedSignal(Exception):
@@ -119,6 +160,7 @@ app.register_blueprint(logs_bp)
 app.register_blueprint(telemetry_bp)
 app.register_blueprint(health_bp)
 
+
 async def _consume_position(drone):
     async for pos in drone.telemetry.position():
         state_manager.update(
@@ -140,7 +182,42 @@ async def _consume_armed(drone):
 
 async def _consume_flight_mode(drone):
     async for mode in drone.telemetry.flight_mode():
-        state_manager.update(flight_mode=str(mode), last_update=time.time(), error=None)
+        mode_str = str(mode)
+        # MAVSDK can't decode ArduPilot-specific modes (QHOVER, FBWA, etc.)
+        # and reports them as "UNKNOWN". Skip these to preserve our own
+        # mode tracking from successful SET_MODE commands.
+        if "UNKNOWN" in mode_str.upper():
+            continue
+        state_manager.update(flight_mode=mode_str, last_update=time.time(), error=None)
+
+
+async def _consume_heartbeat_mode(drone):
+    async for message in drone.mavlink_direct.message("HEARTBEAT"):
+        try:
+            fields = json.loads(message.fields_json or "{}")
+        except json.JSONDecodeError:
+            continue
+
+        custom_mode = fields.get("custom_mode")
+        if custom_mode is None:
+            continue
+
+        try:
+            mode_id = int(custom_mode)
+        except (TypeError, ValueError):
+            continue
+
+        mode_name = ARDUPILOT_MODE_REVERSE_MAPPING.get(mode_id)
+        if not mode_name:
+            continue
+
+        current = state_manager.get()
+        if current.flight_mode != mode_name:
+            print(
+                f"[heartbeat] mode={mode_name} custom_mode={mode_id} sysid={message.system_id} compid={message.component_id}",
+                flush=True,
+            )
+        state_manager.update(flight_mode=mode_name, last_update=time.time(), error=None)
 
 
 async def _consume_battery(drone):
@@ -309,6 +386,7 @@ async def _mavsdk_loop():
                 asyncio.create_task(_consume_position(drone)),
                 asyncio.create_task(_consume_armed(drone)),
                 asyncio.create_task(_consume_flight_mode(drone)),
+                asyncio.create_task(_consume_heartbeat_mode(drone)),
                 asyncio.create_task(_consume_battery(drone)),
                 asyncio.create_task(_consume_attitude(drone)),
                 asyncio.create_task(_consume_heading(drone)),
@@ -410,5 +488,6 @@ def _start_mavsdk_background_thread():
     thread.start()
 
 if __name__ == "__main__":
+    _print_startup_banner()
     _start_mavsdk_background_thread()
     app.run(host="127.0.0.1", port=API_PORT, threaded=True)

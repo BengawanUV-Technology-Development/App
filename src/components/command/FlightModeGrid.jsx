@@ -4,24 +4,33 @@ const groups = [
   { label: "Emergency", tone: "warning", modes: ["RTL"] },
 ];
 
+function normalizeModeName(mode) {
+  return String(mode || "").toUpperCase().replaceAll("_", "").replaceAll(" ", "");
+}
+
 function FlightModeGrid({ currentMode, isConnected, onSetMode }) {
+  const activeMode = normalizeModeName(currentMode);
+
   return (
     <div className="flight-mode-grid">
       {groups.map((group) => (
         <div key={group.label} className="mode-group">
           <span>{group.label}</span>
           <div>
-            {group.modes.map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className={`mode-button mode-${group.tone} ${currentMode === mode ? "is-active" : ""}`}
-                onClick={() => onSetMode(mode)}
-                disabled={!isConnected}
-              >
-                {mode}
-              </button>
-            ))}
+            {group.modes.map((mode) => {
+              const isActive = activeMode === normalizeModeName(mode);
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`mode-button mode-${group.tone} ${isActive ? "is-active" : ""}`}
+                  onClick={() => onSetMode(mode)}
+                  disabled={!isConnected}
+                >
+                  {mode}
+                </button>
+              );
+            })}
           </div>
         </div>
       ))}

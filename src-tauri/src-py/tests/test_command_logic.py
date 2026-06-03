@@ -153,7 +153,7 @@ class CommandServiceTests(unittest.TestCase):
         self.assertEqual(result["command"], "set_flight_mode")
         # Should NOT call action.hold() anymore, but send direct message
         self.assertEqual(self.drone.action.calls, [])
-        self.assertEqual(len(self.drone.mavlink_direct.calls), 1)
+        self.assertEqual(len(self.drone.mavlink_direct.calls), 2)
         
         call_type, message = self.drone.mavlink_direct.calls[0]
         self.assertEqual(call_type, "send_message")
@@ -162,6 +162,12 @@ class CommandServiceTests(unittest.TestCase):
         import json
         fields = json.loads(message.fields_json)
         self.assertEqual(fields["custom_mode"], 18) # QHOVER
+
+        _, command_long = self.drone.mavlink_direct.calls[1]
+        self.assertEqual(command_long.message_name, "COMMAND_LONG")
+        command_fields = json.loads(command_long.fields_json)
+        self.assertEqual(command_fields["command"], 176)
+        self.assertEqual(command_fields["param2"], 18.0)
 
     def test_execute_set_flight_mode_supports_qstabilize_bypass(self):
         # Previously rejected, now supported via bypass

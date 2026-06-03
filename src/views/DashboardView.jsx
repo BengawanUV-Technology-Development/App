@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import ArmDisarmButton from "../components/command/ArmDisarmButton";
 import FlightModeGrid from "../components/command/FlightModeGrid";
 import QuickActions from "../components/command/QuickActions";
@@ -27,20 +27,44 @@ function formatTime(value) {
 function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh }) {
   const command = useCommand();
   const modeCommand = useCommand();
+  const [eventLog, setEventLog] = useState([]);
+
+  const pushEvent = (tone, text) => {
+    setEventLog((items) => [{ tone, text, ts: Date.now() / 1000 }, ...items].slice(0, 80));
+  };
 
   const runCommand = async (path, label, body = null) => {
-    await command.execute(path, label, body);
-    await onRefresh();
+    pushEvent("info", `PENDING ${label}`);
+    const result = await command.execute(path, label, body);
+    const refreshed = await onRefresh();
+    if (result.ok) {
+      pushEvent("ok", `OK ${label}: ${result.data?.message || "accepted"}`);
+    } else {
+      pushEvent("danger", `FAIL ${label}: ${result.error || "unknown error"}`);
+    }
+    if (refreshed?.error) {
+      pushEvent("warn", `Refresh after ${label}: ${refreshed.error}`);
+    }
   };
 
   const setFlightMode = async (mode) => {
-    await modeCommand.execute("/command/set_flight_mode", `flight mode ${mode}`, { mode });
-    await onRefresh();
+    const beforeMode = telemetry.flight_mode || "-";
+    pushEvent("info", `PENDING mode ${mode} (current ${beforeMode})`);
+    const result = await modeCommand.execute("/command/set_flight_mode", `flight mode ${mode}`, { mode });
+    const refreshed = await onRefresh();
+    const actualMode = refreshed?.telemetry?.flight_mode || telemetry.flight_mode || "-";
+    if (result.ok) {
+      pushEvent("ok", `OK mode ${mode}: FC reports ${actualMode}`);
+    } else {
+      pushEvent("danger", `FAIL mode ${mode}: ${result.error || "unknown error"} (FC reports ${actualMode})`);
+    }
   };
 
   const reboot = async () => {
-    await modeCommand.execute("/command/reboot", "reboot");
+    pushEvent("info", "PENDING reboot");
+    const result = await modeCommand.execute("/command/reboot", "reboot");
     await onRefresh();
+    pushEvent(result.ok ? "ok" : "danger", `${result.ok ? "OK" : "FAIL"} reboot: ${result.data?.message || result.error || "-"}`);
   };
 
   const alerts = useMemo(() => {
@@ -54,8 +78,8 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
     if (telemetry.error) items.unshift({ tone: "danger", text: telemetry.error });
     if (command.status !== "-") items.unshift({ tone: "info", text: command.status });
     if (modeCommand.status !== "-") items.unshift({ tone: "info", text: modeCommand.status });
-    return items.slice(0, 8);
-  }, [command.status, health.connected, health.error, health.status, modeCommand.status, statusText, telemetry.armed, telemetry.error]);
+    return [...eventLog, ...items].slice(0, 80);
+  }, [command.status, eventLog, health.connected, health.error, health.status, modeCommand.status, statusText, telemetry.armed, telemetry.error]);
 
   return (
     <section className="tactical-layout">
@@ -131,34 +155,12 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
           </dl>
         </section>
 
-        <section className="graph-panel">
-          <h3>EKF Status</h3>
-          <div className="bar-chart-placeholder">
-            {["Vel", "Pos", "Alt", "Comp", "Terr"].map((label, index) => (
-              <div key={label}>
-                <i style={{ height: `${34 + index * 8}px` }} />
-                <span>{label}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="graph-panel">
-          <h3>Vibration Status</h3>
-          <div className="vibe-placeholder">
-            <span>X</span>
-            <span>Y</span>
-            <span>Z</span>
-            <strong>Clipping 0 / 0 / 0</strong>
-          </div>
-        </section>
-
         <section className="alerts-panel">
           <h3>System Alerts Log</h3>
           <div className="alerts-list">
             {alerts.map((alert, index) => (
               <div key={`${alert.text}-${index}`} className={`alert-line ${alert.tone}`}>
-                <time>[{formatTime(health.last_update || telemetry.last_update)}]</time>
+                <time>[{formatTime(alert.ts || health.last_update || telemetry.last_update)}]</time>
                 <span>{alert.text}</span>
               </div>
             ))}

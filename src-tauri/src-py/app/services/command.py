@@ -1,11 +1,11 @@
 from time import time
 from enum import Enum
-from typing import Any
+from typing import Any, Callable, Protocol
 import uuid
 import asyncio
 import json
 import logging
-from typing import Callable, Protocol
+import os
 
 from mavsdk.action import ActionError
 from mavsdk.telemetry import FlightMode as MavsdkFlightMode
@@ -27,19 +27,38 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 ARDUPILOT_MODE_MAPPING: dict[str, int] = {
     "MANUAL":     0,
+    "CIRCLE":     1,
+    "STABILIZE":  2,
+    "TRAINING":   3,
+    "ACRO":       4,
     "FBWA":       5,
+    "FBWB":       6,
+    "CRUISE":     7,
+    "AUTOTUNE":   8,
     "AUTO":       10,
     "RTL":        11,
+    "LOITER":     12,
+    "GUIDED":     15,
     "QSTABILIZE": 17,
     "QHOVER":     18,
+    "QLOITER":    19,
     "QLAND":      20,
+    "QRTL":       21,
 }
+
+# Reverse mapping: custom_mode_id → human-readable name
+ARDUPILOT_MODE_REVERSE_MAPPING: dict[int, str] = {v: k for k, v in ARDUPILOT_MODE_MAPPING.items()}
 
 # MAV_MODE_FLAG_CUSTOM_MODE_ENABLED  (decimal 1, bit 0)
 _MAV_MODE_FLAG_CUSTOM = 1
-# Default target identifiers (single-vehicle setup)
-_DEFAULT_TARGET_SYSID = 1
-_DEFAULT_TARGET_COMPID = 1
+# MAV_MODE_FLAG_SAFETY_ARMED (decimal 128, bit 7)
+_MAV_MODE_FLAG_ARMED = 128
+_MAV_CMD_DO_SET_MODE = 176
+# Default target identifiers (single-vehicle setup).
+# ArduPilot requires target_system to match the FC's sysid (usually 1).
+# Using 0 causes the FC to silently ignore SET_MODE messages.
+_DEFAULT_TARGET_SYSID = int(os.getenv("MAVLINK_TARGET_SYSID", "1"))
+_DEFAULT_TARGET_COMPID = int(os.getenv("MAVLINK_TARGET_COMPID", "1"))
 
 
 class DroneActionProtocol(Protocol):
@@ -107,6 +126,39 @@ class CommandService:
             return await asyncio.wait_for(coroutine, timeout=timeout)
         except asyncio.TimeoutError:
             raise CommandTimeoutError()
+
+    async def _wait_for_flight_mode(self, requested_key: str, timeout: float = 3.0) -> str | None:
+        """Return actual mode if telemetry confirms the requested mode.
+
+        If telemetry has not produced any mode yet, skip verification so unit
+        tests and early boot states do not report false failures.
+        """
+        initial_mode = self.state_manager.get().flight_mode
+        if initial_mode is None:
+            return None
+
+        deadline = time() + timeout
+        while time() < deadline:
+            actual_mode = self.state_manager.get().flight_mode
+            if self._flight_mode_matches(actual_mode, requested_key):
+                return actual_mode
+            await asyncio.sleep(0.25)
+
+        final_mode = self.state_manager.get().flight_mode
+        if self._canonical_mode_name(final_mode) == "UNKNOWN":
+            print(
+                f"[command] set_flight_mode telemetry_unknown requested={requested_key}; MAVSDK cannot decode current ArduPilot mode",
+                flush=True,
+            )
+            return "UNKNOWN"
+        print(
+            f"[command] set_flight_mode verify_failed requested={requested_key} final={final_mode or 'UNKNOWN'}",
+            flush=True,
+        )
+        raise CommandFailedError(
+            f"Mode command sent for {requested_key}, but FC still reports {final_mode or 'UNKNOWN'} after {timeout:.1f}s. "
+            "FC may be rejecting the mode, a failsafe may be holding the current mode, or the mode may not be enabled/supported."
+        )
 
     def _record_command(self, command: str, ok: bool, message: str | None = None, error: str | None = None, error_code: str | None = None, **data: Any):
         if self.event_logger is not None:
@@ -202,33 +254,75 @@ class CommandService:
             raise CommandFailedError(error_message)
 
     async def _execute_ardupilot_mode_direct(self, mode_name: str, custom_mode_id: int) -> None:
-        """Send SET_MODE (#11) via mavlink_direct.
+        """Send ArduPilot mode command via mavlink_direct.
 
-        This bypasses MAVSDK's Action plugin validation which incorrectly
-        rejects ArduPilot VTOL transitions with UNSUPPORTED /
-        VTOL_TRANSITION_SUPPORT_UNKNOWN errors.
+        Send both SET_MODE and COMMAND_LONG/MAV_CMD_DO_SET_MODE. Some
+        ArduPilot links respond more reliably to one form than the other.
+
+        base_mode must include MAV_MODE_FLAG_SAFETY_ARMED (128) when the
+        vehicle is armed, otherwise ArduPilot silently rejects the change.
         """
-        fields = {
+        # Build base_mode: custom-mode-enabled + armed flag if applicable
+        base_mode = _MAV_MODE_FLAG_CUSTOM
+        current_state = self.state_manager.get()
+        if current_state.armed:
+            base_mode |= _MAV_MODE_FLAG_ARMED
+
+        set_mode_fields = {
             "target_system": _DEFAULT_TARGET_SYSID,
-            "base_mode": _MAV_MODE_FLAG_CUSTOM,
+            "base_mode": base_mode,
             "custom_mode": custom_mode_id
         }
 
-        message = MavlinkMessage(
+        set_mode_message = MavlinkMessage(
             message_name="SET_MODE",
-            system_id=0, # MAVSDK will override if needed, or 0 for local
+            system_id=0,
             component_id=0,
             target_system_id=_DEFAULT_TARGET_SYSID,
             target_component_id=_DEFAULT_TARGET_COMPID,
-            fields_json=json.dumps(fields)
+            fields_json=json.dumps(set_mode_fields)
+        )
+
+        command_long_fields = {
+            "target_system": _DEFAULT_TARGET_SYSID,
+            "target_component": _DEFAULT_TARGET_COMPID,
+            "command": _MAV_CMD_DO_SET_MODE,
+            "confirmation": 0,
+            "param1": float(base_mode),
+            "param2": float(custom_mode_id),
+            "param3": 0.0,
+            "param4": 0.0,
+            "param5": 0.0,
+            "param6": 0.0,
+            "param7": 0.0,
+        }
+
+        command_long_message = MavlinkMessage(
+            message_name="COMMAND_LONG",
+            system_id=0,
+            component_id=0,
+            target_system_id=_DEFAULT_TARGET_SYSID,
+            target_component_id=_DEFAULT_TARGET_COMPID,
+            fields_json=json.dumps(command_long_fields)
         )
 
         logger.info(
-            "ardupilot_direct_mode mode=%s custom_mode_id=%d",
+            "ardupilot_direct_mode mode=%s custom_mode_id=%d base_mode=%d",
             mode_name,
             custom_mode_id,
+            base_mode,
         )
-        await self.drone.mavlink_direct.send_message(message)
+        print(
+            f"[command] mavlink_direct SET_MODE mode={mode_name} custom_mode={custom_mode_id} base_mode={base_mode} target_sys={_DEFAULT_TARGET_SYSID} target_comp={_DEFAULT_TARGET_COMPID}",
+            flush=True,
+        )
+        await self.drone.mavlink_direct.send_message(set_mode_message)
+        await asyncio.sleep(0.1)
+        print(
+            f"[command] mavlink_direct COMMAND_LONG MAV_CMD_DO_SET_MODE mode={mode_name} custom_mode={custom_mode_id} base_mode={base_mode} target_sys={_DEFAULT_TARGET_SYSID} target_comp={_DEFAULT_TARGET_COMPID}",
+            flush=True,
+        )
+        await self.drone.mavlink_direct.send_message(command_long_message)
 
     async def execute_set_flight_mode(self, flight_mode: Any) -> dict:
         action_label = "set_flight_mode"
@@ -243,6 +337,16 @@ class CommandService:
             if ardupilot_key and ardupilot_key in ARDUPILOT_MODE_MAPPING:
                 custom_mode_id = ARDUPILOT_MODE_MAPPING[ardupilot_key]
                 action_label = f"direct_set_mode_{ardupilot_key}"
+                current_state = self.state_manager.get()
+                print(
+                    f"[command] set_flight_mode requested={normalized_mode.value} ardupilot_key={ardupilot_key} custom_mode={custom_mode_id} current_mode={current_state.flight_mode or 'UNKNOWN'} armed={current_state.armed} connected={current_state.connected}",
+                    flush=True,
+                )
+                if self._canonical_mode_name(current_state.flight_mode) == "RETURNTOLAUNCH" and ardupilot_key != "RTL":
+                    print(
+                        "[command] notice: FC is currently in RTL/RETURN_TO_LAUNCH; if a failsafe is active, ArduPilot can refuse other modes until the failsafe clears",
+                        flush=True,
+                    )
 
                 try:
                     await self._run_action(
@@ -264,8 +368,14 @@ class CommandService:
                     )
                     raise CommandFailedError(error_message)
 
-                message = f"Flight mode set via ArduPilot direct bypass: {ardupilot_key}"
+                actual_mode = await self._wait_for_flight_mode(ardupilot_key)
+                message = (
+                    f"Flight mode confirmed: {actual_mode}"
+                    if actual_mode
+                    else f"Flight mode command sent: {ardupilot_key} (waiting for telemetry)"
+                )
                 result = self._build_success_payload("set_flight_mode", message)
+                print(f"[command] set_flight_mode ok requested={ardupilot_key} actual={actual_mode or 'not-yet-reported'}", flush=True)
                 self._record_command(
                     "set_flight_mode", True,
                     message=result["message"],
@@ -307,15 +417,31 @@ class CommandService:
                 )
 
             await self._run_action(coroutine)
-            result = self._build_success_payload("set_flight_mode", message)
+            ardupilot_key = self._resolve_ardupilot_key(normalized_mode) or normalized_mode.value
+            actual_mode = await self._wait_for_flight_mode(ardupilot_key)
+            result = self._build_success_payload(
+                "set_flight_mode",
+                f"Flight mode confirmed: {actual_mode}" if actual_mode else message,
+            )
+            print(f"[command] set_flight_mode ok requested={normalized_mode.value} actual={actual_mode or 'not-yet-reported'}", flush=True)
             self._record_command("set_flight_mode", True, message=result["message"], requested_mode=normalized_mode.value, action_label=action_label, method="mavsdk_action")
             return result
         except (NotConnectedError, InvalidRequestError, CommandTimeoutError) as exc:
             requested_mode = flight_mode.value if isinstance(flight_mode, FlightModeCommand) else flight_mode
             self._record_command("set_flight_mode", False, error=str(exc), error_code=self._error_code_for_exception(exc), requested_mode=requested_mode)
             raise
-        except CommandFailedError:
-            raise  # Already recorded above
+        except CommandFailedError as exc:
+            requested_mode = flight_mode.value if isinstance(flight_mode, FlightModeCommand) else flight_mode
+            error_message = str(exc)
+            print(f"[command] set_flight_mode failed requested={requested_mode} error={error_message}", flush=True)
+            self._record_command(
+                "set_flight_mode",
+                False,
+                error=error_message,
+                error_code="COMMAND_FAILED",
+                requested_mode=requested_mode,
+            )
+            raise
         except ActionError as e:
             error_message = f"Failed to execute {action_label}: {str(e)}"
             if "NO_VTOL_TRANSITION_SUPPORT" in str(e):
@@ -413,6 +539,27 @@ class CommandService:
             FlightModeCommand.QLAND:       "QLAND",
         }
         return _ENUM_TO_AP_KEY.get(mode)
+
+    @staticmethod
+    def _canonical_mode_name(value: Any) -> str:
+        text = str(value or "").upper()
+        if "." in text:
+            text = text.split(".")[-1]
+        return text.replace("_", "").replace(" ", "")
+
+    def _flight_mode_matches(self, actual_mode: Any, requested_key: str) -> bool:
+        actual = self._canonical_mode_name(actual_mode)
+        requested = self._canonical_mode_name(requested_key)
+        aliases = {
+            "QHOVER": {"QHOVER", "QLOITER", "HOLD"},
+            "QSTABILIZE": {"QSTABILIZE"},
+            "QLAND": {"QLAND", "LAND"},
+            "FBWA": {"FBWA"},
+            "AUTO": {"AUTO"},
+            "RTL": {"RTL", "RETURNTO LAUNCH".replace(" ", "")},
+            "MANUAL": {"MANUAL"},
+        }
+        return actual in aliases.get(requested, {requested})
 
     def _build_success_payload(self, command: str, message: str) -> dict:
         resp = CommandResponse(

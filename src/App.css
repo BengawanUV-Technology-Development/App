@@ -1525,7 +1525,7 @@ select {
   display: grid;
   gap: 7px;
   margin: 0;
-  padding-bottom: 10px;
+  padding-bottom: 14px;
   border-bottom: 1px solid #e2e8f0;
 }
 
@@ -1595,16 +1595,35 @@ select {
 .alerts-panel {
   min-height: 0;
   flex: 1;
+  overflow: hidden;
 }
 
 .alerts-list {
-  min-height: 220px;
+  min-height: 0;
+  max-height: calc(100vh - 290px);
   border-radius: 5px;
   background: #0f172a;
   padding: 10px;
   color: #e2e8f0;
   font-family: var(--font-mono);
   font-size: 0.76rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: #475569 #0f172a;
+  scrollbar-width: thin;
+}
+
+.alerts-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.alerts-list::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+.alerts-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #475569;
 }
 
 .alert-line {

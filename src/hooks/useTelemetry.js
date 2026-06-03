@@ -57,10 +57,12 @@ export function useTelemetry() {
       setHealth(healthResult.data);
       setTelemetry(telemetryResult.data);
       setStatusText(deriveStatusText(healthResult.data));
+      return { health: healthResult.data, telemetry: telemetryResult.data };
     } catch (error) {
       setHealth((previous) => ({ ...previous, connected: false, error: String(error) }));
       setStatusText("Backend Python belum bisa diakses");
       console.error("Error fetching from Python:", error);
+      return { health: null, telemetry: null, error: String(error) };
     } finally {
       setIsRefreshing(false);
     }
