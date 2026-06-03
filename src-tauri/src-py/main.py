@@ -5,9 +5,12 @@ import os
 import time
 import random
 import math
+import socket
+import threading
 from flask import Flask, jsonify
 from flask_cors import CORS
 from mavsdk import System
+from app.routes.connection import connection_bp, init_connection_routes
 from app.routes.mission import mission_bp, init_mission_routes
 from app.routes.logs import logs_bp, init_log_routes
 from app.routes.telemetry import telemetry_bp, init_telemetry_routes
@@ -16,7 +19,9 @@ from app.routes.commands import command_bp, init_command_routes
 from app.utils.state import StateManager
 from app.utils.session_log import SessionLogStore
 
-MAVSDK_ADDRESS = os.getenv("MAVSDK_ADDRESS", "serial://COM9:115200")
+MAVSDK_ADDRESS = os.getenv("MAVSDK_ADDRESS", "")
+MAVSDK_SERVER_PORT = int(os.getenv("MAVSDK_SERVER_PORT", "0"))
+AUTO_CONNECT = os.getenv("AUTO_CONNECT", "0").strip().lower() in {"1", "true", "yes"}
 API_PORT = int(os.getenv("API_PORT", "5001"))
 CONNECT_TIMEOUT_SECONDS = float(os.getenv("CONNECT_TIMEOUT_SECONDS", "8"))
 CONNECT_CALL_TIMEOUT_SECONDS = float(os.getenv("CONNECT_CALL_TIMEOUT_SECONDS", "15"))
@@ -33,8 +38,14 @@ state_manager = StateManager()
 drone: System | None = None
 session_log_store: SessionLogStore | None = None
 mavsdk_loop: asyncio.AbstractEventLoop | None = None
+connection_lock = threading.Lock()
+connection_changed = threading.Event()
+connection_config = {
+    "system_address": MAVSDK_ADDRESS,
+    "auto_connect": AUTO_CONNECT,
+}
 
-state_manager.update(system_address=MAVSDK_ADDRESS)
+state_manager.update(system_address=MAVSDK_ADDRESS, status="OFFLINE" if AUTO_CONNECT else "DISCONNECTED")
 session_log_store = SessionLogStore(system_address=MAVSDK_ADDRESS)
 
 
@@ -57,12 +68,51 @@ logging.getLogger("mavsdk_server").addFilter(_MavsdkServerNoiseFilter())
 class RebootRequestedSignal(Exception):
     pass
 
+
+class ConnectionConfigChangedSignal(Exception):
+    pass
+
+
+class DisconnectRequestedSignal(Exception):
+    pass
+
+
+def _get_connection_config() -> dict:
+    with connection_lock:
+        return dict(connection_config)
+
+
+def _set_connection_target(system_address: str) -> dict:
+    with connection_lock:
+        connection_config["system_address"] = system_address
+        connection_config["auto_connect"] = True
+    connection_changed.set()
+    return {"message": "Connection target updated"}
+
+
+def _disconnect_vehicle() -> dict:
+    with connection_lock:
+        connection_config["auto_connect"] = False
+    connection_changed.set()
+    return {"message": "Vehicle connection stopped"}
+
+
+def _pick_mavsdk_server_port() -> int:
+    if MAVSDK_SERVER_PORT > 0:
+        return MAVSDK_SERVER_PORT
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
 init_command_routes(state_manager, lambda: drone, session_log_store, lambda: mavsdk_loop)
 init_mission_routes(state_manager, lambda: drone, session_log_store, lambda: mavsdk_loop)
 init_telemetry_routes(state_manager)
 init_health_routes(state_manager) 
 init_log_routes(session_log_store)
+init_connection_routes(state_manager, _set_connection_target, _disconnect_vehicle)
 
+app.register_blueprint(connection_bp)
 app.register_blueprint(command_bp)
 app.register_blueprint(mission_bp)
 app.register_blueprint(logs_bp)
@@ -140,6 +190,16 @@ async def _watch_reboot_request():
             raise RebootRequestedSignal()
 
 
+async def _watch_connection_change():
+    while True:
+        await asyncio.sleep(0.2)
+        if connection_changed.is_set():
+            connection_changed.clear()
+            if _get_connection_config()["auto_connect"]:
+                raise ConnectionConfigChangedSignal()
+            raise DisconnectRequestedSignal()
+
+
 def _is_serial_disconnect_error(exc: Exception) -> bool:
     message = str(exc).lower()
     return (
@@ -191,22 +251,32 @@ async def _mavsdk_loop():
                 drone = None
 
         try:
-            drone = System()
+            current_config = _get_connection_config()
+            if not current_config["auto_connect"]:
+                state_manager.update(connected=False, status="DISCONNECTED", error=None, last_update=time.time())
+                await asyncio.to_thread(connection_changed.wait)
+                connection_changed.clear()
+                continue
+
+            system_address = current_config["system_address"]
+            mavsdk_server_port = _pick_mavsdk_server_port()
+            drone = System(port=mavsdk_server_port)
+            state_manager.update(system_address=system_address, mavsdk_server_port=mavsdk_server_port)
 
             current_state = state_manager.get()
             if current_state.status != "REBOOTING":
                 state_manager.update(connected=False, status="CONNECTING", error=None, last_update=time.time())
                 if last_reported_online is not False:
-                    print(f"[status] connecting to vehicle at {MAVSDK_ADDRESS}...")
+                    print(f"[status] connecting to vehicle at {system_address} via MAVSDK gRPC {mavsdk_server_port}...")
                     last_reported_online = False
             else:
                 state_manager.update(connected=False, status="REBOOTING", error=None, last_update=time.time())
                 if last_reported_online is not False:
-                    print(f"[status] vehicle rebooting, waiting to reconnect at {MAVSDK_ADDRESS}...")
+                    print(f"[status] vehicle rebooting, waiting to reconnect at {system_address}...")
                     last_reported_online = False
 
             await asyncio.wait_for(
-                drone.connect(system_address=MAVSDK_ADDRESS),
+                drone.connect(system_address=system_address),
                 timeout=CONNECT_CALL_TIMEOUT_SECONDS,
             )
 
@@ -221,13 +291,13 @@ async def _mavsdk_loop():
                 if connection_state.is_connected:
                     connected = True
                     if last_reported_online is not True:
-                        print(f"[status] vehicle online at {MAVSDK_ADDRESS}")
+                        print(f"[status] vehicle online at {system_address}")
                         last_reported_online = True
                     break
 
             if not connected:
                 raise TimeoutError(
-                    f"No MAVLink heartbeat on {MAVSDK_ADDRESS} within {CONNECT_TIMEOUT_SECONDS:.0f}s"
+                    f"No MAVLink heartbeat on {system_address} within {CONNECT_TIMEOUT_SECONDS:.0f}s"
                 )
 
             if session_log_store is not None:
@@ -244,6 +314,7 @@ async def _mavsdk_loop():
                 asyncio.create_task(_consume_heading(drone)),
                 asyncio.create_task(_consume_velocity(drone)),
                 asyncio.create_task(_watch_reboot_request()),
+                asyncio.create_task(_watch_connection_change()),
             ]
 
             done, pending = await asyncio.wait(consumers, return_when=asyncio.FIRST_EXCEPTION)
@@ -256,6 +327,30 @@ async def _mavsdk_loop():
 
         except Exception as exc:
             current_state = state_manager.get()
+            active_config = _get_connection_config()
+            active_address = active_config["system_address"]
+            if isinstance(exc, DisconnectRequestedSignal):
+                state_manager.update(connected=False, status="DISCONNECTED", error=None, last_update=time.time())
+                if drone is not None:
+                    try:
+                        drone._stop_mavsdk_server()
+                    except Exception:
+                        pass
+                    finally:
+                        drone = None
+                current_delay = base_delay
+                continue
+            if isinstance(exc, ConnectionConfigChangedSignal):
+                state_manager.update(connected=False, status="CONNECTING", error=None, last_update=time.time())
+                if drone is not None:
+                    try:
+                        drone._stop_mavsdk_server()
+                    except Exception:
+                        pass
+                    finally:
+                        drone = None
+                current_delay = base_delay
+                continue
             if isinstance(exc, RebootRequestedSignal) or current_state.status == "REBOOTING":
                 friendly_error = "Vehicle rebooting"
                 state_manager.update(connected=False, status="REBOOTING", error=None, last_update=time.time())
@@ -263,7 +358,7 @@ async def _mavsdk_loop():
                     session_log_store.record_event(
                         "connection_state",
                         friendly_error,
-                        system_address=MAVSDK_ADDRESS,
+                        system_address=active_address,
                     )
             else:
                 friendly_error = _get_friendly_error_message(exc)
@@ -273,11 +368,11 @@ async def _mavsdk_loop():
                         "connection_error",
                         friendly_error,
                         error=friendly_error,
-                        system_address=MAVSDK_ADDRESS,
+                        system_address=active_address,
                     )
 
             if current_state.status == "REBOOTING" or isinstance(exc, RebootRequestedSignal):
-                print(f"[status] vehicle rebooting, reconnecting to {MAVSDK_ADDRESS}...")
+                print(f"[status] vehicle rebooting, reconnecting to {active_address}...")
             elif last_reported_online is not False:
                 print(f"[status] vehicle disconnected: {friendly_error}")
                 last_reported_online = False
@@ -295,7 +390,13 @@ async def _mavsdk_loop():
             jitter = random.uniform(-0.1, 0.1) * retry_delay
             sleep_time = retry_delay + jitter
             print(f"Connection error: {friendly_error}. Retrying in {sleep_time:.1f} seconds...")
-            await asyncio.sleep(sleep_time)
+            try:
+                await asyncio.wait_for(asyncio.to_thread(connection_changed.wait), timeout=sleep_time)
+                connection_changed.clear()
+                current_delay = base_delay
+                continue
+            except asyncio.TimeoutError:
+                pass
             current_delay = min(current_delay * 2, max_delay)
 
 

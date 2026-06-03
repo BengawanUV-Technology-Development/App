@@ -20,4 +20,5 @@ def health():
         "error": state.error,
         "last_update": state.last_update,
         "system_address": state.system_address,
+        "mavsdk_server_port": state.mavsdk_server_port,
     })

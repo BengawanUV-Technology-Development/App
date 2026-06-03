@@ -3,7 +3,7 @@ Configuration: environment variables, constants, timeouts.
 """
 import os
 
-MAVSDK_ADDRESS = os.getenv("MAVSDK_ADDRESS", "serial://COM9:115200")
+MAVSDK_ADDRESS = os.getenv("MAVSDK_ADDRESS", "")
 API_PORT = int(os.getenv("API_PORT", "5001"))
 CONNECT_TIMEOUT_SECONDS = float(os.getenv("CONNECT_TIMEOUT_SECONDS", "8"))
 CONNECT_CALL_TIMEOUT_SECONDS = float(os.getenv("CONNECT_CALL_TIMEOUT_SECONDS", "5"))
