@@ -189,10 +189,13 @@ DoD:
 
 - Minimal 1 sesi flight bisa direkam dan dibaca ulang.
 
-## Status Pindah Tahap (Per 22 April 2026)
+## Status Pindah Tahap (Per 3 Juni 2026)
 
 - Status saat ini: API consistency, flight mode switching, reboot endpoint, mission basic, data logging, dan HUD Expansion (Fase 14) sudah selesai.
+- Frontend disinkronkan: SimView.jsx (broken dead code) dihapus, App.jsx dilengkapi tombol Arm/Disarm/Takeoff/Land + HUD display.
+- MAVSDK consumers ditambah untuk attitude, heading, velocity (HUD data).
 - Backend berikutnya paling masuk akal lanjut ke Integrasi Peta, Computer Vision, dan Sinkronisasi Koordinat (Auto-marking).
+- Frontend berikutnya: redesign UI yang proper (component architecture, state management, visual design system).
 
 ## Tahap Lanjutan: SAR Intelligence & Computer Vision
 
@@ -202,6 +205,9 @@ Tujuan: backend mengonsumsi data attitude, speed, dan heading untuk keperluan vi
 
 - [x] Tambahkan field data baru di `StateManager` (roll, pitch, yaw, heading, airspeed, groundspeed, v_speed).
 - [x] Tambahkan MAVSDK consumer untuk attitude, velocity, dan heading di `main.py`.
+  - `_consume_attitude` → roll_deg, pitch_deg, yaw_deg via `telemetry.attitude_euler()`
+  - `_consume_heading` → heading_deg via `telemetry.heading()`
+  - `_consume_velocity` → groundspeed_m_s, v_speed_m_s via `telemetry.velocity_ned()`
 - [x] Tampilkan data di dashboard Frontend (`App.jsx`).
 
 ### Fase 15 - Integrasi Peta Interaktif (Leafmap/Leaflet)

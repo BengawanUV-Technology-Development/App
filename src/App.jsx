@@ -26,6 +26,8 @@ function App() {
   const [statusText, setStatusText] = useState("Menghubungkan ke backend Python...");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [modeStatus, setModeStatus] = useState("-");
+  const [commandStatus, setCommandStatus] = useState("-");
+  const [takeoffAlt, setTakeoffAlt] = useState("10");
   const [missionDraft, setMissionDraft] = useState(`[
   {
     "seq": 0,
@@ -38,6 +40,27 @@ function App() {
 ]`);
   const [missionStatus, setMissionStatus] = useState("-");
   const [missionProgress, setMissionProgress] = useState("-");
+
+  const executeCommand = async (path, label, body = null) => {
+    try {
+      setCommandStatus(`Sending ${label}...`);
+      const options = { method: "POST" };
+      if (body) {
+        options.headers = { "Content-Type": "application/json" };
+        options.body = JSON.stringify(body);
+      }
+      const response = await fetch(`${API_BASE}${path}`, options);
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || payload.message || `Gagal ${label}`);
+      }
+      setCommandStatus(payload.message || `${label} berhasil`);
+      await fetchTelemetry();
+    } catch (error) {
+      setCommandStatus(String(error));
+      console.error(`Error ${label}:`, error);
+    }
+  };
 
   const setFlightMode = async (mode) => {
     try {
@@ -279,16 +302,83 @@ function App() {
               <span>Last Telemetry Update</span>
               <strong>{telemetry.last_update ? new Date(telemetry.last_update * 1000).toLocaleTimeString() : "-"}</strong>
             </div>
+            <div className="hud-divider">HUD Data</div>
+            <div>
+              <span>Roll</span>
+              <strong>{formatNumber(telemetry.roll_deg, "°")}</strong>
+            </div>
+            <div>
+              <span>Pitch</span>
+              <strong>{formatNumber(telemetry.pitch_deg, "°")}</strong>
+            </div>
+            <div>
+              <span>Yaw</span>
+              <strong>{formatNumber(telemetry.yaw_deg, "°")}</strong>
+            </div>
+            <div>
+              <span>Heading</span>
+              <strong>{formatNumber(telemetry.heading_deg, "°")}</strong>
+            </div>
+            <div>
+              <span>Ground Speed</span>
+              <strong>{formatNumber(telemetry.groundspeed_m_s, " m/s")}</strong>
+            </div>
+            <div>
+              <span>Vertical Speed</span>
+              <strong>{formatNumber(telemetry.v_speed_m_s, " m/s")}</strong>
+            </div>
           </div>
         </article>
       </section>
 
+      <section className="panel command-panel">
+        <div className="panel-header">
+          <div>
+            <p className="panel-label">Vehicle Command</p>
+            <h2>Arm, Takeoff & Land</h2>
+          </div>
+        </div>
+        <div className="command-controls">
+          <div className="command-row">
+            <button onClick={() => executeCommand("/command/arm", "arm")} disabled={!health.connected || telemetry.armed}>
+              Arm
+            </button>
+            <button onClick={() => executeCommand("/command/disarm", "disarm")} disabled={!health.connected || !telemetry.armed}>
+              Disarm
+            </button>
+          </div>
+          <div className="command-row">
+            <label className="takeoff-input">
+              <span>Altitude (m)</span>
+              <input
+                type="number"
+                min="2"
+                max="50"
+                step="1"
+                value={takeoffAlt}
+                onChange={(e) => setTakeoffAlt(e.target.value)}
+              />
+            </label>
+            <button
+              onClick={() => executeCommand("/command/takeoff", "takeoff", { altitude_m: parseFloat(takeoffAlt) })}
+              disabled={!health.connected || !telemetry.armed}
+            >
+              Takeoff
+            </button>
+            <button onClick={() => executeCommand("/command/land", "land")} disabled={!health.connected}>
+              Land
+            </button>
+          </div>
+          <p className="hero-copy compact">Command: {commandStatus}</p>
+        </div>
+      </section>
+
       <section className="panel action-panel">
         <div>
-          <p className="panel-label">MVP 1</p>
-          <h2>Action controls</h2>
+          <p className="panel-label">Flight Mode</p>
+          <h2>Mode switching</h2>
           <p className="hero-copy compact">
-            Backend sekarang bisa menerima command flight mode untuk aksi yang memang didukung MAVSDK.
+            Ubah flight mode via ArduPilot direct bypass atau MAVSDK action.
           </p>
         </div>
         <div className="action-chips">
@@ -297,9 +387,9 @@ function App() {
           <button onClick={() => setFlightMode("Q_LAND")} disabled={!health.connected}>Q_LAND</button>
           <button onClick={() => setFlightMode("AUTO")} disabled={!health.connected}>AUTO</button>
           <button onClick={() => setFlightMode("MANUAL")} disabled={!health.connected}>MANUAL</button>
-          <button onClick={() => setFlightMode("Q_STABILIZE")} disabled title="Belum didukung backend">Q_STABILIZE</button>
+          <button onClick={() => setFlightMode("Q_STABILIZE")} disabled={!health.connected}>Q_STABILIZE</button>
           <button onClick={rebootVehicle} disabled={!health.connected || telemetry.armed}>
-            Reboot
+            Reboot FC
           </button>
         </div>
         <p className="hero-copy compact">Status mode: {modeStatus}</p>

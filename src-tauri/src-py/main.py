@@ -1,9 +1,10 @@
-# src-tauri/src-python/main.py
+# src-tauri/src-py/main.py
 import asyncio
 import logging
 import os
 import time
 import random
+import math
 from flask import Flask, jsonify
 from flask_cors import CORS
 from mavsdk import System
@@ -101,6 +102,37 @@ async def _consume_battery(drone):
         )
 
 
+async def _consume_attitude(drone):
+    async for attitude in drone.telemetry.attitude_euler():
+        state_manager.update(
+            roll_deg=round(attitude.roll_deg, 2),
+            pitch_deg=round(attitude.pitch_deg, 2),
+            yaw_deg=round(attitude.yaw_deg, 2),
+            last_update=time.time(),
+            error=None,
+        )
+
+
+async def _consume_heading(drone):
+    async for heading in drone.telemetry.heading():
+        state_manager.update(
+            heading_deg=round(heading.heading_deg, 2),
+            last_update=time.time(),
+            error=None,
+        )
+
+
+async def _consume_velocity(drone):
+    async for velocity in drone.telemetry.velocity_ned():
+        groundspeed = math.sqrt(velocity.north_m_s ** 2 + velocity.east_m_s ** 2)
+        state_manager.update(
+            groundspeed_m_s=round(groundspeed, 2),
+            v_speed_m_s=round(-velocity.down_m_s, 2),  # NED: down is positive, flip for climb rate
+            last_update=time.time(),
+            error=None,
+        )
+
+
 async def _watch_reboot_request():
     while True:
         await asyncio.sleep(0.25)
@@ -125,13 +157,19 @@ def _get_retry_delay_seconds(exc: Exception) -> float:
 
 
 def _get_friendly_error_message(exc: Exception) -> str:
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        msg = str(exc)
+        return msg if msg else f"No MAVLink heartbeat within {CONNECT_TIMEOUT_SECONDS:.0f}s"
+    
     message = str(exc)
     lowered = message.lower()
     if "readfile failure" in lowered or "connection reset" in lowered:
         return "MAVSDK serial connection lost"
     if "access is denied" in lowered:
         return "Serial port is in use or blocked"
-    return message
+    
+    return message if message else type(exc).__name__
+
 
 
 async def _mavsdk_loop():
@@ -143,6 +181,15 @@ async def _mavsdk_loop():
     last_reported_online: bool | None = None
 
     while True:
+        # Explicit cleanup of previous drone instance to avoid process leaks
+        if drone is not None:
+            try:
+                drone._stop_mavsdk_server()
+            except Exception:
+                pass
+            finally:
+                drone = None
+
         try:
             drone = System()
 
@@ -193,6 +240,9 @@ async def _mavsdk_loop():
                 asyncio.create_task(_consume_armed(drone)),
                 asyncio.create_task(_consume_flight_mode(drone)),
                 asyncio.create_task(_consume_battery(drone)),
+                asyncio.create_task(_consume_attitude(drone)),
+                asyncio.create_task(_consume_heading(drone)),
+                asyncio.create_task(_consume_velocity(drone)),
                 asyncio.create_task(_watch_reboot_request()),
             ]
 

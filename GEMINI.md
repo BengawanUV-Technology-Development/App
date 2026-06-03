@@ -20,10 +20,31 @@ The project is evolving into a specialized SAR tool with the following intellige
 
 ## Architecture & Communication
 
-1.  **UI <-> Backend:** The React frontend communicates with the Python Flask backend via HTTP requests on `http://localhost:5001`.
+1.  **UI <-> Backend:** The React frontend communicates with the Python Flask backend via HTTP polling on `http://localhost:5001`. No WebSocket — all data is fetched via `setInterval` + `fetch`.
 2.  **Backend <-> UAV:** The Python backend uses `MAVSDK` to communicate with the Flight Controller (FC) via MAVLink.
-3.  **Vision Engine:** A specialized thread in the Python backend handles video stream processing and emits detection events.
+3.  **Vision Engine:** (Planned) A specialized thread in the Python backend will handle video stream processing and emit detection events.
 4.  **Shell:** Tauri provides the desktop window and handles system-level integrations.
+
+### Current Backend Endpoints
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| GET | `/health` | Connection status, system address |
+| GET | `/telemetry` | Full telemetry state (position, attitude, speed, battery) |
+| POST | `/command/arm` | Arm vehicle |
+| POST | `/command/disarm` | Disarm vehicle |
+| POST | `/command/takeoff` | Takeoff to altitude |
+| POST | `/command/land` | Land vehicle |
+| POST | `/command/set_takeoff_altitude` | Set takeoff altitude |
+| POST | `/command/set_flight_mode` | Switch flight mode (ArduPilot direct bypass) |
+| POST | `/command/reboot` | Reboot flight controller |
+| POST | `/mission/upload` | Upload waypoint mission |
+| POST | `/mission/start` | Start mission |
+| POST | `/mission/pause` | Pause mission |
+| POST | `/mission/clear` | Clear mission |
+| GET | `/mission/progress` | Get mission progress |
+| GET | `/logs/summary` | Session log summary |
+| GET | `/logs/recent` | Recent log events |
 
 ## Getting Started
 
