@@ -35,7 +35,7 @@ from System.Text import Encoding
 
 HOST = "127.0.0.1"
 PORT = 5000
-BRIDGE_VERSION = "1.1.1"
+BRIDGE_VERSION = "1.1.2"
 SNAPSHOT_RATE_HZ = 10.0
 COMMAND_TIMEOUT_SECONDS = 5.0
 MAX_REQUEST_BYTES = 65536
@@ -283,25 +283,14 @@ def _execute_command(command):
     if command_name == "reboot":
         if bool(_read_cs("armed", False)):
             raise RuntimeError("Reboot is only allowed while vehicle is disarmed")
-        accepted = bool(
-            MAV.doCommand(
-                MAVLink.MAV_CMD.PREFLIGHT_REBOOT_SHUTDOWN,
-                1,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-            )
-        )
-        if not accepted:
-            raise RuntimeError("Flight controller rejected reboot request")
+        # Use Mission Planner's native helper so it can manage the temporary
+        # link loss and reconnect behavior around a normal autopilot reboot.
+        MAV.doReboot(False)
         return {
             "ok": True,
             "request_id": command["request_id"],
             "command": command_name,
-            "message": "Flight controller reboot requested",
+            "message": "Flight controller reboot requested; telemetry will disconnect temporarily",
             "timestamp": _unix_time(),
         }
 

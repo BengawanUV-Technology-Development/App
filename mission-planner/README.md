@@ -103,7 +103,8 @@ Invoke-RestMethod http://127.0.0.1:5000/api/v1/health |
   ConvertTo-Json -Depth 5
 ```
 
-Versi yang memuat perbaikan pemilihan CurrentState dan reboot adalah `1.1.1`.
+Versi yang memuat perbaikan pemilihan CurrentState dan native Mission Planner
+reboot adalah `1.1.2`.
 
 Jangan menguji command pada wahana nyata untuk feasibility spike. Gunakan SITL:
 
@@ -133,8 +134,10 @@ mode tidak didukung, mission belum siap, atau safety/failsafe. Verifier
 memastikan perubahan akhirnya dikonfirmasi melalui telemetry.
 
 Reboot hanya diterima ketika vehicle disarmed dan selalu memutus telemetry
-sementara. Gunakan tombol frontend yang memiliki confirmation dialog atau panggil
-endpoint secara manual hanya saat pengujian:
+sementara. Bridge menggunakan helper native `MAV.doReboot(False)` agar Mission
+Planner dapat menangani putus dan tersambungnya kembali link setelah normal
+autopilot reboot. Gunakan tombol frontend yang memiliki confirmation dialog atau
+panggil endpoint secara manual hanya saat pengujian:
 
 ```powershell
 Invoke-RestMethod `
