@@ -95,12 +95,13 @@ class FakeBridgeHandler(BaseHTTPRequestHandler):
                 return
             FakeBridgeState.reboot_count += 1
             self._send_json(
-                200,
+                202,
                 {
                     "ok": True,
+                    "accepted": True,
                     "request_id": payload.get("request_id"),
                     "command": "reboot",
-                    "message": "Flight controller reboot requested",
+                    "message": "Flight controller reboot started; waiting for Mission Planner to reconnect",
                     "timestamp": time.time(),
                 },
             )

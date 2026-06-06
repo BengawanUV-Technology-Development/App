@@ -103,8 +103,8 @@ Invoke-RestMethod http://127.0.0.1:5000/api/v1/health |
   ConvertTo-Json -Depth 5
 ```
 
-Versi yang memuat perbaikan pemilihan CurrentState dan native Mission Planner
-reboot adalah `1.1.2`.
+Versi yang memuat perbaikan pemilihan CurrentState dan asynchronous native
+Mission Planner reboot adalah `1.1.3`.
 
 Jangan menguji command pada wahana nyata untuk feasibility spike. Gunakan SITL:
 
@@ -146,6 +146,10 @@ Invoke-RestMethod `
   -ContentType application/json `
   -Body '{"request_id":"manual-sitl-reboot"}'
 ```
+
+Endpoint reboot mengembalikan HTTP `202 Accepted` segera setelah Mission Planner
+mulai memproses reboot. Status ini tidak berarti vehicle sudah tersambung kembali;
+pantau telemetry atau endpoint health sampai `vehicle_connected` kembali `true`.
 
 Temuan pengujian SITL:
 

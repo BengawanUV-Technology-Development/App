@@ -35,7 +35,7 @@ from System.Text import Encoding
 
 HOST = "127.0.0.1"
 PORT = 5000
-BRIDGE_VERSION = "1.1.2"
+BRIDGE_VERSION = "1.1.3"
 SNAPSHOT_RATE_HZ = 10.0
 COMMAND_TIMEOUT_SECONDS = 5.0
 MAX_REQUEST_BYTES = 65536
@@ -305,6 +305,7 @@ def _process_pending_commands():
             return
 
         try:
+            command["started"].set()
             command["result"] = _execute_command(command)
         except Exception as exc:
             command["result"] = {
@@ -324,10 +325,29 @@ def _queue_command(name, payload):
         "name": name,
         "payload": payload,
         "request_id": request_id,
+        "started": threading.Event(),
         "completed": threading.Event(),
         "result": None,
     }
     _command_queue.put(command)
+
+    if name == "reboot":
+        if not command["started"].wait(COMMAND_TIMEOUT_SECONDS):
+            return {
+                "ok": False,
+                "request_id": request_id,
+                "command": name,
+                "error": "Mission Planner command did not start",
+                "timestamp": _unix_time(),
+            }, 504
+        return {
+            "ok": True,
+            "accepted": True,
+            "request_id": request_id,
+            "command": name,
+            "message": "Flight controller reboot started; waiting for Mission Planner to reconnect",
+            "timestamp": _unix_time(),
+        }, 202
 
     if not command["completed"].wait(COMMAND_TIMEOUT_SECONDS):
         return {
