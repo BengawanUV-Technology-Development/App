@@ -114,11 +114,17 @@ def main():
     parser.add_argument("--port", default=5000, type=int)
     args = parser.parse_args()
 
-    server = ThreadingHTTPServer((args.host, args.port), FakeBridgeHandler)
+    try:
+        server = ThreadingHTTPServer((args.host, args.port), FakeBridgeHandler)
+    except PermissionError as exc:
+        raise SystemExit(
+            f"Cannot bind http://{args.host}:{args.port}: {exc}\n"
+            "The real Mission Planner bridge may already be using this port. "
+            "Run the fake bridge with --port 5002."
+        )
     print(f"Fake Mission Planner bridge listening on http://{args.host}:{args.port}")
     server.serve_forever()
 
 
 if __name__ == "__main__":
     main()
-

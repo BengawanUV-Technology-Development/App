@@ -59,6 +59,26 @@ def _read_cs(name, default=None):
         return default
 
 
+def _read_number(name, default=None):
+    value = _read_cs(name, default)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _read_integer(name, default=None):
+    value = _read_cs(name, default)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
 def _vehicle_connected():
     try:
         return bool(MAV.BaseStream.IsOpen)
@@ -78,30 +98,30 @@ def _build_snapshot():
             "flight_mode": str(_read_cs("mode", "UNKNOWN")),
         },
         "position": {
-            "lat": _read_cs("lat"),
-            "lng": _read_cs("lng"),
-            "relative_alt_m": _read_cs("alt"),
+            "lat": _read_number("lat"),
+            "lng": _read_number("lng"),
+            "relative_alt_m": _read_number("alt"),
             "absolute_alt_m": None,
-            "gps_status": _read_cs("gpsstatus"),
-            "gps_hdop": _read_cs("gpshdop"),
-            "satellites": _read_cs("satcount"),
+            "gps_status": _read_integer("gpsstatus"),
+            "gps_hdop": _read_number("gpshdop"),
+            "satellites": _read_integer("satcount"),
         },
         "attitude": {
-            "roll_deg": _read_cs("roll"),
-            "pitch_deg": _read_cs("pitch"),
-            "yaw_deg": _read_cs("yaw"),
-            "heading_deg": _read_cs("yaw"),
-            "ground_course_deg": _read_cs("groundcourse"),
+            "roll_deg": _read_number("roll"),
+            "pitch_deg": _read_number("pitch"),
+            "yaw_deg": _read_number("yaw"),
+            "heading_deg": _read_number("yaw"),
+            "ground_course_deg": _read_number("groundcourse"),
         },
         "velocity": {
-            "airspeed_m_s": _read_cs("airspeed"),
-            "groundspeed_m_s": _read_cs("groundspeed"),
-            "vertical_speed_m_s": _read_cs("verticalspeed"),
+            "airspeed_m_s": _read_number("airspeed"),
+            "groundspeed_m_s": _read_number("groundspeed"),
+            "vertical_speed_m_s": _read_number("verticalspeed"),
         },
         "battery": {
-            "remaining_percent": _read_cs("battery_remaining"),
-            "voltage_v": _read_cs("battery_voltage"),
-            "current_a": _read_cs("current"),
+            "remaining_percent": _read_number("battery_remaining"),
+            "voltage_v": _read_number("battery_voltage"),
+            "current_a": _read_number("current"),
         },
     }
 
@@ -335,4 +355,3 @@ while True:
     _update_snapshot()
     _process_pending_commands()
     Script.Sleep(int(1000.0 / SNAPSHOT_RATE_HZ))
-

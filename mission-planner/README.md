@@ -23,6 +23,14 @@ Pada terminal lain:
 python mission-planner/verify_bridge.py
 ```
 
+Port `5000` hanya dapat digunakan satu proses. Jika bridge Mission Planner nyata
+sedang berjalan, jalankan fake bridge pada port lain:
+
+```powershell
+python mission-planner/fake_bridge.py --port 5002
+python mission-planner/verify_bridge.py --base-url http://127.0.0.1:5002
+```
+
 Untuk ikut menguji endpoint command pada fake bridge:
 
 ```powershell
@@ -36,12 +44,17 @@ python mission-planner/verify_bridge.py --test-mode Q_HOVER
    mengikuti unit tampilan Mission Planner.
 3. Buka `Flight Data > Scripts`.
 4. Muat dan jalankan `mission_planner_bridge.py`.
+   Jika sebelumnya bridge sudah berjalan, hentikan script lama terlebih dahulu
+   agar perubahan kode terbaru ikut dimuat.
 5. Periksa:
 
    ```text
    http://127.0.0.1:5000/api/v1/health
    http://127.0.0.1:5000/api/v1/telemetry
    ```
+
+   Membuka `http://127.0.0.1:5000/` akan menghasilkan `Route not found`. Itu
+   normal karena bridge hanya menyediakan route `/api/v1/...`.
 
 6. Jalankan verifier:
 

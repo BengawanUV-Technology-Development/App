@@ -14,8 +14,14 @@ def request_json(url, method="GET", payload=None):
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     request = Request(url, data=body, method=method)
     request.add_header("Content-Type", "application/json")
-    with urlopen(request, timeout=3) as response:
-        return response.status, json.load(response)
+    try:
+        with urlopen(request, timeout=3) as response:
+            return response.status, json.load(response)
+    except HTTPError as exc:
+        response_body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            "{} {} returned HTTP {}: {}".format(method, url, exc.code, response_body)
+        )
 
 
 def verify(base_url, test_mode=None):
@@ -57,7 +63,7 @@ def main():
 
     try:
         verify(args.base_url.rstrip("/"), test_mode=args.test_mode)
-    except (AssertionError, HTTPError, URLError, KeyError, ValueError) as exc:
+    except (AssertionError, HTTPError, URLError, KeyError, RuntimeError, ValueError) as exc:
         print("Bridge verification failed: " + str(exc), file=sys.stderr)
         raise SystemExit(1)
 
