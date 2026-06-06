@@ -1,203 +1,79 @@
-# Mission Planner
+# Bengawan UAV SAR Showcase Console
 
-**Bengawan UAV – Technology Development Team**
+Ground station showcase untuk demonstrasi integrasi flight controller, telemetry link, peta posisi UAV, dan video payload Jetson Orin Super untuk misi pencarian korban banjir bandang.
 
----
+App ini tidak ditujukan untuk menggantikan ArduPilot Mission Planner. Konfigurasi parameter lanjutan seperti `Q_ENABLE`, `Q_FRAME_CLASS`, airspeed, servo function, calibration, dan tuning tetap dilakukan di Mission Planner. Fokus aplikasi ini adalah tampilan operasional yang rapi untuk demo, monitoring, dan command dasar yang sudah tervalidasi.
 
-## Overview
+## Fokus Produk
 
-Mission Planner adalah aplikasi ground control station (GCS) yang dikembangkan oleh Technology Development Team Bengawan UAV untuk mendukung perencanaan, eksekusi, dan analisis misi UAV secara terintegrasi.
+- Connect telemetry MAVLink melalui port COM dan baudrate yang dipilih operator.
+- Monitoring kondisi flight controller: connected, armed, flight mode, battery, GPS, altitude, speed, attitude, heading.
+- Command dasar: arm, disarm, reboot aman saat disarmed, dan flight mode showcase untuk mode ArduPilot Plane/QuadPlane.
+- Video showcase dari Jetson Orin Super untuk pipeline object detection korban bencana.
+- Peta showcase berisi titik GPS UAV dan ikon pesawat yang mengikuti heading/gyro telemetry.
+- Event log UI dan terminal backend untuk membantu operator melihat command berhasil/gagal.
 
-Aplikasi ini memiliki fokus khusus pada **Misi Search and Rescue (SAR)**, di mana UAV dibekali dengan kecerdasan buatan untuk membantu tim penyelamat menemukan korban bencana secara lebih cepat dan akurat melalui teknologi Computer Vision.
+## Status Flight Mode
 
----
+Mode switching sudah diverifikasi dari MAVLink `HEARTBEAT.custom_mode`, bukan hanya dari response HTTP. Backend membaca custom mode ArduPilot dan menampilkan mode seperti:
 
-## Fitur Utama & SAR Intelligence
+- `MANUAL`
+- `FBWA`
+- `AUTO`
+- `RTL`
+- `QSTABILIZE`
+- `QHOVER`
+- `QLAND`
 
-### 1. Computer Vision Victim Detection
-* **Real-Time Object Detection**: Menggunakan pipeline AI (YOLO/PyTorch) untuk mendeteksi tanda-tanda keberadaan korban (pakaian, bagian tubuh, dll) langsung dari stream video UAV.
-* **Visual Bounding Box**: Menampilkan kotak deteksi secara real-time pada interface operator untuk memudahkan identifikasi.
+Catatan: MAVSDK Python tidak mengenali beberapa mode ArduPilot QuadPlane sehingga telemetry MAVSDK bisa melaporkan `UNKNOWN`. Backend membaca heartbeat MAVLink langsung untuk mendapatkan mode ArduPilot yang benar.
 
-### 2. Auto-Marking & Geotagging
-* **Precision Geotagging**: Menghitung koordinat GPS objek di darat secara otomatis dengan menggabungkan data posisi UAV, altitude, attitude (gyro), dan sudut kamera.
-* **Instant Map Markers**: Setiap temuan akan langsung ditandai di peta digital sebagai Point of Interest (POI) permanen untuk disurvei oleh tim darat.
+## Scope Yang Tidak Dikerjakan Di App Ini
 
-### 3. Koneksi & Sistem Dasar
-* **Connect Telemetri**: Koneksi langsung ke UAV melalui modul telemetri via MAVLink.
-* **Flight Control**: Kontrol status ARM/DISARM dan sistem dasar flight controller.
+- Parameter setup dan tuning: tetap di Mission Planner.
+- Kalibrasi compass, accelerometer, airspeed, radio, motor test: tetap di Mission Planner.
+- Upload mission penuh dan konfigurasi autopilot lanjutan bukan prioritas showcase.
 
-### 4. Flight Modes & Navigasi
-* **Multi-Mode Support**: MANUAL, FBWA, AUTO (Waypoint), Q_STABILIZE, Q_HOVER, dan Q_LAND.
-* **GPS & Maps Integration**: Tampilan peta berbasis koordinat real-time dengan tracking posisi UAV yang presisi.
+## Arsitektur Ringkas
 
-### 5. Monitoring & Visualisasi (HUD)
-* **Advanced HUD**: Informasi attitude (roll, pitch, yaw), airspeed, altitude, dan heading dalam satu tampilan intuitif.
-* **Real-Time Telemetry**: Status kesehatan sistem UAV yang terpantau setiap detik.
+- Frontend: React/Vite dashboard showcase.
+- Backend: Flask + MAVSDK Python.
+- Protocol: MAVLink telemetry dan command.
+- Payload vision: placeholder UI untuk Jetson Orin Super camera/object detection, siap diarahkan ke stream nyata.
 
----
+## Menjalankan Backend
 
-### 5. Data Logging & Analisis
-
-* **Data Log Recording**
-
-  * Penyimpanan seluruh data penerbangan
-* **Post-Flight Analysis**
-
-  * Evaluasi performa UAV setelah misi
-* **3D Model Simulation (Post-Flight)**
-
-  * Visualisasi ulang flight dalam bentuk simulasi 3D
-
----
-
-## Fitur Opsional (Advanced Configuration)
-
-### 1. Pre-Flight & Kalibrasi
-
-* Pre-flight Airspeed Calibration
-* Compass Calibration
-* Level Calibration
-* Accelerometer Calibration
-
----
-
-### 2. Hardware Testing
-
-* Motor Test
-* Sensor validation
-
----
-
-### 3. Parameter Configuration
-
-Konfigurasi parameter lanjutan untuk tuning sistem:
-
-#### VTOL & Frame Configuration
-
-* `Q_ENABLE`
-* `Q_FRAME_CLASS`
-* `Q_FRAME_TYPE`
-* `Q_TILT_ENABLE`
-* `Q_TILT_MASK`
-
-#### Airspeed Configuration
-
-* `ARSPD_USE`
-* `ARSPD_TYPE`
-* `ARSPD_PIN`
-* `ARSPD_AUTOCAL`
-* `ARSPD_FBW_MIN`
-
-#### Servo & Control
-
-* `SERVO[X]_FUNCTION`
-
-#### Flight Behavior & Transition
-
-* `Q_VFWD_GAIN`
-* `Q_RTL_MODE`
-* `Q_TRANS_FAIL`
-* `Q_TRANS_DURATION` / `Q_TRANSITION_MS`
-
----
-
-## Arsitektur Sistem
-
-* **Frontend (UI/UX)**
-
-  * Interface interaktif untuk operator
-  * Visualisasi peta dan HUD
-
-* **Backend**
-
-  * Pengolahan data misi
-  * Manajemen komunikasi UAV
-
-* **Communication Layer**
-
-  * Protokol MAVLink untuk komunikasi telemetri
-
-* **Data Storage**
-
-  * Penyimpanan mission plan dan log penerbangan
-
----
-
-## Instalasi
-
-### Prasyarat
-
-* OS: Windows / Linux
-* Python / environment sesuai stack
-* UAV / simulator kompatibel
-
-### Langkah Instalasi
-
-```bash
-git clone https://github.com/BengawanUV-Technology-Development/App
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Jalankan aplikasi
-python main.py
+```powershell
+cd src-tauri\src-py
+.\.venv\Scripts\python.exe main.py
 ```
 
----
+Backend berjalan di:
 
-## Cara Penggunaan
-
-1. Jalankan aplikasi Mission Planner
-2. Hubungkan telemetri UAV
-3. Lakukan ARM jika sistem siap
-4. Pilih flight mode sesuai kebutuhan
-5. Buat dan upload waypoint mission
-6. Monitor UAV melalui HUD dan map
-7. Setelah flight, analisis data log
-
----
-
-## Struktur Proyek
-
-```
-mission-planner/
-│── src/                # Source code utama
-│── configs/            # File konfigurasi parameter
-│── assets/             # UI, icon, dan map assets
-│── logs/               # Data log penerbangan
-│── simulation/         # 3D replay & simulation
-│── tests/              # Unit & integration tests
-│── docs/               # Dokumentasi
-│── main.py             # Entry point aplikasi
+```text
+http://127.0.0.1:5001
 ```
 
----
+Pastikan hanya ada satu proses `main.py` aktif agar log terminal sesuai dengan UI yang sedang dipakai.
 
-## Roadmap Pengembangan
+## Menjalankan Frontend
 
-* Integrasi AI untuk optimasi rute
-* Peningkatan akurasi simulasi 3D
-* UI/UX lebih intuitif
-* Dukungan multi-UAV
+```powershell
+npm run dev -- --host 127.0.0.1
+```
 
----
+## Demo Flow
 
-## Kontribusi
+1. Buka app.
+2. Pilih COM port dan baudrate telemetry.
+3. Klik connect.
+4. Pastikan backend log menampilkan vehicle online.
+5. Uji arm/disarm atau flight mode sesuai kebutuhan showcase.
+6. Pantau map, attitude, heading, GPS, dan panel video SAR.
 
-* Gunakan branch terpisah untuk setiap fitur
-* Ikuti coding standard tim
-* Pastikan semua testing lolos sebelum PR
+## Tahap Berikutnya
 
----
-
-## Tim
-
-**Bengawan UAV – Technology Development Team**
-
----
-
-## Kontak
-
-Silakan hubungi tim melalui kanal komunikasi internal Bengawan UAV untuk kolaborasi atau pertanyaan teknis.
-
----
+- Integrasi stream video Jetson Orin Super.
+- Overlay bounding box object detection dari model AI.
+- Integrasi peta nyata dan marker GPS.
+- 3D aircraft marker yang lebih matang mengikuti roll, pitch, yaw, dan heading.
+- POI korban: hasil deteksi dikaitkan dengan estimasi koordinat GPS.

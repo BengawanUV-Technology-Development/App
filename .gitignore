@@ -23,6 +23,9 @@ dist-ssr
 *.local
 GEMINI.md
 docs
+!docs/
+docs/*
+!docs/2026-06-06-mission-planner-vision-refactor-plan.md
 
 # Editor directories and files
 .vscode/*
