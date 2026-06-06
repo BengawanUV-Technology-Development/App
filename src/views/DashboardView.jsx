@@ -7,7 +7,6 @@ import AttitudeIndicator from "../components/hud/AttitudeIndicator";
 import HeadingIndicator from "../components/hud/HeadingIndicator";
 import { useCommand } from "../hooks/useCommand";
 
-const AircraftModel3D = lazy(() => import("../components/map/AircraftModel3D"));
 const OperationalMap = lazy(() => import("../components/map/OperationalMap"));
 
 function formatNumber(value, digits = 1, fallback = "-") {
@@ -144,20 +143,12 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
             <OperationalMap
               lat={telemetry.lat}
               lng={telemetry.lng}
+              alt={telemetry.alt}
               headingDeg={telemetry.heading_deg ?? telemetry.yaw_deg}
+              rollDeg={telemetry.roll_deg}
+              pitchDeg={telemetry.pitch_deg}
             />
           </Suspense>
-          <div className="aircraft-marker" aria-label="Aircraft attitude marker">
-            <Suspense fallback={<div className="aircraft-model-loading" />}>
-              <AircraftModel3D
-                headingDeg={telemetry.heading_deg ?? telemetry.yaw_deg}
-                rollDeg={telemetry.roll_deg}
-                pitchDeg={telemetry.pitch_deg}
-                modelColor="#e2e8f0"
-                accentColor="#ef4444"
-              />
-            </Suspense>
-          </div>
           <div className="map-coordinate-strip">
             <strong>{hasGps ? `${formatCoordinate(telemetry.lat, 6)}, ${formatCoordinate(telemetry.lng, 6)}` : "GPS LOCK PENDING"}</strong>
             <span>HDG {formatNumber(telemetry.heading_deg ?? telemetry.yaw_deg, 0)} | ALT {formatNumber(telemetry.alt)} m</span>

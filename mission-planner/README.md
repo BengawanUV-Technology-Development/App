@@ -174,8 +174,9 @@ Temuan pengujian SITL:
 
 ## Map Online
 
-Map frontend menggunakan Leaflet dengan CARTO Dark Matter sebagai basemap
-online. URL tile dapat diganti melalui environment variable
+Map frontend menggunakan MapLibre perspective dengan CARTO Dark Matter sebagai
+basemap online. Model GLB ditempatkan pada koordinat GPS dan mengikuti heading,
+pitch, serta roll telemetry. URL tile dapat diganti melalui environment variable
 `VITE_MAP_TILE_URL`.
 
 Cache dan paket map offline ditunda sampai alur map online, track, waypoint,
