@@ -56,7 +56,7 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
   const setFlightMode = async (mode) => {
     const beforeMode = telemetry.flight_mode || "-";
     pushEvent("info", `PENDING mode ${mode} (current ${beforeMode})`);
-    const result = await modeCommand.execute("/command/set_flight_mode", `flight mode ${mode}`, { mode });
+    const result = await modeCommand.execute("/api/v1/commands/set-flight-mode", `flight mode ${mode}`, { mode });
     const refreshed = await onRefresh();
     const actualMode = refreshed?.telemetry?.flight_mode || telemetry.flight_mode || "-";
     if (result.ok) {
@@ -76,9 +76,9 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
   const alerts = useMemo(() => {
     const items = [
       { tone: "info", text: `Backend: ${health.status || "OFFLINE"}` },
-      { tone: health.connected ? "ok" : "warn", text: health.connected ? "MAVLink active" : statusText },
+      { tone: health.connected ? "ok" : "warn", text: health.connected ? "Mission Planner telemetry active" : statusText },
       { tone: telemetry.armed ? "danger" : "info", text: telemetry.armed ? "System armed" : "System disarmed" },
-      { tone: telemetry.lat === null || telemetry.lng === null ? "warn" : "ok", text: telemetry.lat === null || telemetry.lng === null ? "Waiting for GPS position" : "GPS position streaming" },
+      { tone: health.gps_valid ? "ok" : "warn", text: health.gps_valid ? "GPS position valid" : "Waiting for valid GPS position" },
     ];
 
     if (health.error) items.unshift({ tone: "danger", text: health.error });
@@ -102,10 +102,10 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
           <ArmDisarmButton
             isArmed={Boolean(telemetry.armed)}
             isConnected={Boolean(health.connected)}
-            onArm={() => runCommand("/command/arm", "arm")}
-            onDisarm={() => runCommand("/command/disarm", "disarm")}
+            onArm={() => runCommand("/api/v1/commands/arm", "arm")}
+            onDisarm={() => runCommand("/api/v1/commands/disarm", "disarm")}
           />
-          <QuickActions isConnected={Boolean(health.connected)} isArmed={Boolean(telemetry.armed)} onReboot={reboot} />
+          <QuickActions isConnected={false} isArmed={Boolean(telemetry.armed)} onReboot={reboot} />
         </div>
 
         <div className="side-section">
@@ -116,7 +116,7 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
         <div className="side-section">
           <div className="side-title">Takeoff / Land</div>
           <TakeoffPanel
-            isConnected={Boolean(health.connected)}
+            isConnected={false}
             isArmed={Boolean(telemetry.armed)}
             onSetTakeoffAltitude={(altitude) => runCommand("/command/set_takeoff_altitude", "set takeoff altitude", { altitude_m: altitude })}
             onTakeoff={(altitude) => runCommand("/command/takeoff", "takeoff", { altitude_m: altitude })}

@@ -10,7 +10,9 @@ import threading
 import json
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from flask_sock import Sock
 from mavsdk import System
+from app.routes.api_v1 import api_v1_bp, init_api_v1_routes
 from app.routes.connection import connection_bp, init_connection_routes
 from app.routes.mission import mission_bp, init_mission_routes
 from app.routes.logs import logs_bp, init_log_routes
@@ -18,6 +20,7 @@ from app.routes.telemetry import telemetry_bp, init_telemetry_routes
 from app.routes.health import health_bp, init_health_routes
 from app.routes.commands import command_bp, init_command_routes
 from app.services.command import ARDUPILOT_MODE_REVERSE_MAPPING
+from app.services.mission_planner_adapter import MissionPlannerAdapter
 from app.utils.state import StateManager
 from app.utils.session_log import SessionLogStore
 
@@ -35,6 +38,7 @@ SERIAL_ACCESS_DENIED_RETRY_DELAY_SECONDS = float(
 
 app = Flask(__name__)
 CORS(app)
+sock = Sock(app)
 
 
 @app.before_request
@@ -75,6 +79,7 @@ connection_config = {
 
 state_manager.update(system_address=MAVSDK_ADDRESS, status="OFFLINE" if AUTO_CONNECT else "DISCONNECTED")
 session_log_store = SessionLogStore(system_address=MAVSDK_ADDRESS)
+mission_planner_adapter = MissionPlannerAdapter()
 
 
 class _MavsdkServerNoiseFilter(logging.Filter):
@@ -152,6 +157,7 @@ init_telemetry_routes(state_manager)
 init_health_routes(state_manager) 
 init_log_routes(session_log_store)
 init_connection_routes(state_manager, _set_connection_target, _disconnect_vehicle)
+init_api_v1_routes(mission_planner_adapter)
 
 app.register_blueprint(connection_bp)
 app.register_blueprint(command_bp)
@@ -159,6 +165,25 @@ app.register_blueprint(mission_bp)
 app.register_blueprint(logs_bp)
 app.register_blueprint(telemetry_bp)
 app.register_blueprint(health_bp)
+app.register_blueprint(api_v1_bp)
+
+
+@sock.route("/api/v1/events")
+def api_v1_events(ws):
+    last_version = None
+    try:
+        while True:
+            snapshot = mission_planner_adapter.snapshot()
+            if snapshot["version"] != last_version:
+                ws.send(json.dumps({
+                    "type": "telemetry.updated",
+                    "timestamp": time.time(),
+                    "data": snapshot,
+                }))
+                last_version = snapshot["version"]
+            time.sleep(0.1)
+    except Exception:
+        return
 
 
 async def _consume_position(drone):
@@ -489,5 +514,6 @@ def _start_mavsdk_background_thread():
 
 if __name__ == "__main__":
     _print_startup_banner()
+    mission_planner_adapter.start()
     _start_mavsdk_background_thread()
     app.run(host="127.0.0.1", port=API_PORT, threaded=True)

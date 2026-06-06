@@ -316,27 +316,40 @@ Hasil pengujian awal:
 
 ### Fase 2 - Buat Mission Planner Adapter di BUV Backend
 
-- [ ] Tambahkan konfigurasi `MISSION_PLANNER_API_URL`.
-- [ ] Buat client HTTP dengan timeout pendek dan error mapping.
-- [ ] Normalisasi response bridge ke model internal BUV.
-- [ ] Buat `/api/v1/health` dan `/api/v1/telemetry`.
-- [ ] Tandai telemetry `stale` jika timestamp terlalu lama.
-- [ ] Tambahkan test menggunakan fake Mission Planner API.
+- [x] Tambahkan konfigurasi `MISSION_PLANNER_API_URL`.
+- [x] Buat client HTTP dengan timeout pendek dan error mapping.
+- [x] Normalisasi response bridge ke model internal BUV.
+- [x] Buat `/api/v1/health` dan `/api/v1/telemetry`.
+- [x] Tandai telemetry `stale` jika timestamp terlalu lama.
+- [x] Tambahkan test menggunakan fake Mission Planner API.
 
 Selesai jika backend tetap hidup dan memberi error yang jelas ketika Mission
 Planner bridge mati.
 
 ### Fase 3 - Migrasikan Frontend ke Kontrak Baru
 
-- [ ] Ubah API base dan semua route ke `/api/v1`.
+- [ ] Ubah seluruh route frontend ke `/api/v1`.
 - [ ] Ganti Connection Panel menjadi Dependency Status Panel.
-- [ ] Hubungkan HUD ke telemetry dari adapter.
-- [ ] Tampilkan state `offline`, `stale`, dan `active`.
+- [x] Hubungkan HUD ke telemetry dari adapter.
+- [x] Tampilkan state `offline`, `stale`, dan `active`.
 - [ ] Pertahankan command confirmation.
 - [ ] Hapus ketergantungan UI terhadap COM port dan baudrate.
 
 Selesai jika dashboard dapat menampilkan telemetry Mission Planner tanpa MAVSDK
 di BUV Backend.
+
+Status implementasi awal:
+
+- Backend melakukan polling Mission Planner bridge pada interval 200 ms.
+- Frontend mengambil snapshot awal dari HTTP dan menerima pembaruan melalui
+  `WS /api/v1/events`.
+- Frontend kembali ke polling dua detik saat WebSocket terputus.
+- Command arm, disarm, dan perubahan flight mode sudah menggunakan proxy
+  Mission Planner baru.
+- Endpoint dan implementasi MAVSDK lama masih dipertahankan sementara untuk
+  command yang belum dimigrasikan.
+- Tombol takeoff, land, dan reboot lama dinonaktifkan sampai memiliki endpoint
+  Mission Planner baru.
 
 ### Fase 4 - Hapus Jalur MAVSDK Lama
 

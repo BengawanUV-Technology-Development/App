@@ -178,6 +178,26 @@ def _execute_command(command):
             "timestamp": _unix_time(),
         }
 
+    if command_name == "arm":
+        MAV.doARM(True)
+        return {
+            "ok": True,
+            "request_id": command["request_id"],
+            "command": command_name,
+            "message": "Arm request sent",
+            "timestamp": _unix_time(),
+        }
+
+    if command_name == "disarm":
+        MAV.doARM(False)
+        return {
+            "ok": True,
+            "request_id": command["request_id"],
+            "command": command_name,
+            "message": "Disarm request sent",
+            "timestamp": _unix_time(),
+        }
+
     raise ValueError("Unsupported command: " + command_name)
 
 
@@ -235,6 +255,12 @@ def _route_request(method, path, payload):
 
     if method == "POST" and path == "/api/v1/commands/set-flight-mode":
         return _queue_command("set-flight-mode", payload)
+
+    if method == "POST" and path == "/api/v1/commands/arm":
+        return _queue_command("arm", payload)
+
+    if method == "POST" and path == "/api/v1/commands/disarm":
+        return _queue_command("disarm", payload)
 
     return {
         "ok": False,

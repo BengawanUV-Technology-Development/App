@@ -78,6 +78,8 @@ komputer lain.
 ```text
 GET  /api/v1/health
 GET  /api/v1/telemetry
+POST /api/v1/commands/arm
+POST /api/v1/commands/disarm
 POST /api/v1/commands/set-flight-mode
 ```
 

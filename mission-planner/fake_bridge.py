@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 class FakeBridgeState:
     started_at = time.time()
     flight_mode = "QHOVER"
+    armed = False
 
     @classmethod
     def telemetry(cls):
@@ -20,7 +21,7 @@ class FakeBridgeState:
             "source": "fake-mission-planner",
             "vehicle": {
                 "connected": True,
-                "armed": False,
+                "armed": cls.armed,
                 "flight_mode": cls.flight_mode,
             },
             "position": {
@@ -84,6 +85,21 @@ class FakeBridgeHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"ok": False, "error": "Route not found"})
 
     def do_POST(self):
+        if self.path in {"/api/v1/commands/arm", "/api/v1/commands/disarm"}:
+            payload = self._read_json()
+            FakeBridgeState.armed = self.path.endswith("/arm")
+            command = "arm" if FakeBridgeState.armed else "disarm"
+            self._send_json(
+                200,
+                {
+                    "ok": True,
+                    "request_id": payload.get("request_id"),
+                    "command": command,
+                    "message": f"{command.capitalize()} request sent",
+                    "timestamp": time.time(),
+                },
+            )
+            return
         if self.path == "/api/v1/commands/set-flight-mode":
             payload = self._read_json()
             mode = str(payload.get("mode", "")).upper().replace("_", "")
