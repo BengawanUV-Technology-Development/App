@@ -15,6 +15,11 @@ try:
 except ImportError:
     import queue
 
+try:
+    import builtins as bridge_runtime
+except ImportError:
+    import __builtin__ as bridge_runtime
+
 import clr
 
 clr.AddReference("System")
@@ -44,7 +49,6 @@ ALLOWED_FLIGHT_MODES = (
 _snapshot_lock = threading.Lock()
 _snapshot = {}
 _command_queue = queue.Queue()
-_server_running = True
 
 
 def _unix_time():
@@ -327,22 +331,47 @@ def _handle_client(client):
         client.Close()
 
 
-def _server_loop():
-    listener = TcpListener(IPAddress.Loopback, PORT)
-    listener.Start()
+def _stop_previous_server():
+    previous_listener = getattr(bridge_runtime, "_buv_bridge_listener", None)
+    if previous_listener is None:
+        return
+
+    try:
+        previous_listener.Stop()
+        print("Stopped previous BUV Mission Planner bridge listener")
+    except Exception as exc:
+        print("Could not stop previous bridge listener: {0}".format(exc))
+    finally:
+        bridge_runtime._buv_bridge_listener = None
+
+
+def _server_loop(listener):
     print("BUV Mission Planner bridge listening on http://{0}:{1}".format(HOST, PORT))
 
-    while _server_running:
-        client = listener.AcceptTcpClient()
+    while True:
+        try:
+            client = listener.AcceptTcpClient()
+        except Exception:
+            break
+
         worker = threading.Thread(target=_handle_client, args=(client,))
         worker.daemon = True
         worker.start()
 
-    listener.Stop()
+    try:
+        listener.Stop()
+    except Exception:
+        pass
 
 
 def _start_server():
-    server = threading.Thread(target=_server_loop)
+    _stop_previous_server()
+
+    listener = TcpListener(IPAddress.Loopback, PORT)
+    listener.Start()
+    bridge_runtime._buv_bridge_listener = listener
+
+    server = threading.Thread(target=_server_loop, args=(listener,))
     server.daemon = True
     server.start()
 

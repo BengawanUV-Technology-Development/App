@@ -44,8 +44,12 @@ python mission-planner/verify_bridge.py --test-mode Q_HOVER
    mengikuti unit tampilan Mission Planner.
 3. Buka `Flight Data > Scripts`.
 4. Muat dan jalankan `mission_planner_bridge.py`.
-   Jika sebelumnya bridge sudah berjalan, hentikan script lama terlebih dahulu
-   agar perubahan kode terbaru ikut dimuat.
+   Bridge akan menutup listener dari versi script sebelumnya sebelum membuka
+   port `5000` kembali.
+
+   Untuk upgrade pertama dari bridge versi sebelum fitur reload-safe, tutup dan
+   buka kembali Mission Planner satu kali. Listener versi lama tidak menyimpan
+   referensi yang dapat ditutup oleh script baru.
 5. Periksa:
 
    ```text
@@ -89,5 +93,7 @@ Invoke-RestMethod `
 - Telemetry diambil dari objek `cs` Mission Planner.
 - Script belum menyediakan arm/disarm atau mission command.
 - Script belum diuji di dalam Mission Planner dari workspace ini.
+- Menghentikan script tidak selalu langsung menghentikan daemon HTTP listener.
+  Menjalankan ulang bridge versi terbaru akan mengganti listener lama.
 - Jika server di dalam scripting Mission Planner tidak stabil, gunakan proses
   bridge terpisah tanpa mengubah kontrak API.
