@@ -1,1 +1,1 @@
-"""Utility modules: state management, logging, error handling."""
+"""Utility modules for logging and shared helpers."""

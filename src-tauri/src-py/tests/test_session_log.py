@@ -4,19 +4,22 @@ import unittest
 from pathlib import Path
 
 from app.utils.session_log import SessionLogStore
-from app.utils.state import StateManager
 
 
 class SessionLogStoreTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = Path(tempfile.mkdtemp(prefix="gs-session-log-"))
-        self.store = SessionLogStore(log_dir=self.temp_dir, system_address="serial://COM9:115200")
+        self.store = SessionLogStore(log_dir=self.temp_dir, source_address="http://127.0.0.1:5000")
 
     def test_record_command_and_telemetry_persist_to_jsonl(self):
         self.store.record_command("arm", True, message="Vehicle armed successfully")
-        manager = StateManager()
-        manager.update(connected=True, lat=-6.2, lng=106.8, alt=12.0)
-        self.store.record_telemetry(manager.get())
+        self.store.record_telemetry({
+            "connected": True,
+            "lat": -6.2,
+            "lng": 106.8,
+            "alt": 12.0,
+            "source": "mission-planner",
+        })
 
         self.assertTrue(self.store.path.exists())
 
@@ -31,7 +34,7 @@ class SessionLogStoreTests(unittest.TestCase):
         summary = self.store.summary()
         self.assertEqual(summary["command_count"], 1)
         self.assertEqual(summary["telemetry_count"], 1)
-        self.assertEqual(summary["system_address"], "serial://COM9:115200")
+        self.assertEqual(summary["source_address"], "http://127.0.0.1:5000")
 
     def test_recent_events_respects_limit(self):
         self.store.record_event("note", message="first")

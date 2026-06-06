@@ -886,6 +886,12 @@ select:focus {
   }
 }
 
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 980px) {
   .main-content {
     padding-right: var(--space-4);
@@ -1448,6 +1454,143 @@ select {
   letter-spacing: 0.08em;
 }
 
+.vision-panel {
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 24% 32%, rgba(56, 189, 248, 0.16), transparent 22%),
+    linear-gradient(135deg, #050505, #101418 48%, #050505);
+}
+
+.vision-frame {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.026) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(20, 83, 45, 0.32), rgba(8, 47, 73, 0.42));
+  background-size: 26px 26px, 26px 26px, auto;
+}
+
+.vision-frame::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(rgba(255, 255, 255, 0.07), transparent 12%, transparent 88%, rgba(255, 255, 255, 0.05));
+  content: "";
+  pointer-events: none;
+}
+
+.flood-zone {
+  position: absolute;
+  border-radius: 42% 58% 44% 56%;
+  background: rgba(37, 99, 235, 0.46);
+  filter: blur(1px);
+}
+
+.flood-zone-a {
+  right: -9%;
+  bottom: 2%;
+  width: 58%;
+  height: 48%;
+  transform: rotate(-11deg);
+}
+
+.flood-zone-b {
+  top: 18%;
+  left: -7%;
+  width: 45%;
+  height: 34%;
+  background: rgba(14, 165, 233, 0.3);
+  transform: rotate(17deg);
+}
+
+.detection-box {
+  position: absolute;
+  display: grid;
+  align-content: start;
+  min-width: 118px;
+  min-height: 72px;
+  border: 2px solid #22c55e;
+  padding: 4px 6px;
+  color: #dcfce7;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-shadow: 0 1px 0 #000;
+}
+
+.detection-box span {
+  background: rgba(0, 0, 0, 0.72);
+  padding: 2px 4px;
+}
+
+.detection-box strong {
+  justify-self: end;
+  margin-top: 2px;
+  background: rgba(34, 197, 94, 0.92);
+  padding: 1px 4px;
+  color: #052e16;
+}
+
+.detection-primary {
+  top: 42%;
+  left: 44%;
+}
+
+.detection-secondary {
+  right: 17%;
+  bottom: 21%;
+  border-color: #f59e0b;
+  color: #fffbeb;
+}
+
+.detection-secondary strong {
+  background: #f59e0b;
+  color: #451a03;
+}
+
+.vision-reticle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 56px;
+  height: 56px;
+  border: 1px solid rgba(248, 250, 252, 0.78);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.vision-reticle::before,
+.vision-reticle::after {
+  position: absolute;
+  background: rgba(248, 250, 252, 0.78);
+  content: "";
+}
+
+.vision-reticle::before {
+  top: 50%;
+  left: -22px;
+  width: 100px;
+  height: 1px;
+}
+
+.vision-reticle::after {
+  top: -22px;
+  left: 50%;
+  width: 1px;
+  height: 100px;
+}
+
+.vision-caption {
+  position: absolute;
+  right: 22px;
+  bottom: 18px;
+  color: #fca5a5;
+  font-family: var(--font-mono);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
 .map-panel-tactical {
   position: relative;
   display: grid;
@@ -1462,6 +1605,254 @@ select {
   color: #94a3b8;
   font-weight: 900;
   letter-spacing: 0.04em;
+}
+
+.sar-map-panel {
+  background:
+    linear-gradient(90deg, rgba(37, 99, 235, 0.08) 1px, transparent 1px),
+    linear-gradient(rgba(37, 99, 235, 0.08) 1px, transparent 1px),
+    radial-gradient(circle at 22% 34%, rgba(14, 165, 233, 0.28), transparent 18%),
+    radial-gradient(circle at 72% 62%, rgba(21, 128, 61, 0.28), transparent 20%),
+    #dfe8f1;
+  background-size: 52px 52px, 52px 52px, auto, auto, auto;
+}
+
+.map-grid-overlay {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(30deg, transparent 0 48%, rgba(30, 64, 175, 0.16) 49% 51%, transparent 52%),
+    linear-gradient(140deg, transparent 0 48%, rgba(30, 64, 175, 0.1) 49% 51%, transparent 52%);
+  background-size: 240px 180px;
+  opacity: 0.42;
+}
+
+.map-route {
+  position: absolute;
+  inset: 21% 18% 24% 20%;
+  border: 2px dashed rgba(37, 99, 235, 0.42);
+  border-right-color: transparent;
+  border-radius: 48%;
+  transform: rotate(-8deg);
+}
+
+.map-route i {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #2563eb;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.map-route i:nth-child(1) {
+  top: 10%;
+  left: 15%;
+}
+
+.map-route i:nth-child(2) {
+  top: 52%;
+  right: 13%;
+}
+
+.map-route i:nth-child(3) {
+  bottom: 7%;
+  left: 45%;
+}
+
+.map-poi {
+  position: absolute;
+  right: 23%;
+  bottom: 28%;
+  width: 34px;
+  height: 34px;
+  border: 2px solid #dc2626;
+  border-radius: 50%;
+  background: rgba(220, 38, 38, 0.1);
+}
+
+.map-poi span {
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  background: #dc2626;
+  box-shadow: 0 0 0 8px rgba(220, 38, 38, 0.16);
+}
+
+.aircraft-marker {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 144px;
+  height: 144px;
+  transform: translate(-50%, -50%);
+}
+
+.aircraft-model-3d {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.aircraft-model-3d canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.aircraft-model-loading {
+  position: absolute;
+  inset: 44px;
+  border: 2px solid rgba(37, 99, 235, 0.55);
+  border-top-color: #ef4444;
+  border-radius: 50%;
+  animation: spin 900ms linear infinite;
+}
+
+.aircraft-model-fallback {
+  position: absolute;
+  inset: 32px;
+  display: block;
+  opacity: 0.82;
+  transform-style: preserve-3d;
+  transition: opacity 180ms ease;
+}
+
+.aircraft-model-3d.is-model-loaded .aircraft-model-fallback {
+  opacity: 0;
+}
+
+.aircraft-model-3d.is-model-loading .aircraft-model-fallback,
+.aircraft-model-3d.is-model-error .aircraft-model-fallback {
+  display: block;
+  opacity: 0.92;
+}
+
+.aircraft-model-3d.is-model-loaded canvas {
+  filter: drop-shadow(0 14px 18px rgba(15, 23, 42, 0.35));
+}
+
+.fallback-body {
+  position: absolute;
+  inset: 0 31px;
+  border-radius: 999px;
+  background: linear-gradient(#f8fafc, #2563eb 56%, #1e3a8a);
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.28);
+}
+
+.fallback-body::before {
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-right: 9px solid transparent;
+  border-bottom: 22px solid #ef4444;
+  border-left: 9px solid transparent;
+  transform: translateX(-50%);
+  content: "";
+}
+
+.fallback-wing {
+  position: absolute;
+  top: 28px;
+  width: 42px;
+  height: 12px;
+  background: linear-gradient(90deg, #dbeafe, #1d4ed8);
+}
+
+.fallback-wing-left {
+  right: 42px;
+}
+
+.fallback-wing-right {
+  left: 42px;
+}
+
+.aircraft-shadow {
+  position: absolute;
+  inset: 54px 20px 14px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.24);
+  filter: blur(8px);
+}
+
+.aircraft-body {
+  position: absolute;
+  inset: 12px 34px 9px;
+  border-radius: 999px;
+  background: linear-gradient(#f8fafc, #2563eb 56%, #1e3a8a);
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.28);
+  transform: translateZ(18px);
+}
+
+.aircraft-body .nose {
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-right: 9px solid transparent;
+  border-bottom: 22px solid #ef4444;
+  border-left: 9px solid transparent;
+  transform: translateX(-50%);
+}
+
+.wing {
+  position: absolute;
+  top: 23px;
+  width: 42px;
+  height: 12px;
+  background: linear-gradient(90deg, #dbeafe, #1d4ed8);
+}
+
+.wing-left {
+  right: 12px;
+  border-radius: 12px 2px 2px 12px;
+  transform: rotate(-11deg);
+  transform-origin: right center;
+}
+
+.wing-right {
+  left: 12px;
+  border-radius: 2px 12px 12px 2px;
+  transform: rotate(11deg);
+  transform-origin: left center;
+}
+
+.tail {
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  width: 42px;
+  height: 10px;
+  background: #1e40af;
+  transform: translateX(-50%);
+}
+
+.map-coordinate-strip {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  left: 14px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  border-radius: 5px;
+  background: rgba(248, 250, 252, 0.88);
+  padding: 8px 10px;
+  color: #1e293b;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
+
+.map-coordinate-strip strong,
+.map-coordinate-strip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .map-crosshair,

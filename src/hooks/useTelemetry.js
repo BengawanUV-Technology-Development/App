@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
-import { apiGet } from "../services/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { apiGet, WS_BASE } from "../services/api";
 
 const initialHealth = {
   connected: false,
   status: "OFFLINE",
   error: null,
   last_update: null,
-  system_address: "-",
-  mavsdk_server_port: null,
+  stale: true,
+  gps_valid: false,
+  bridge: null,
+  websocket: "DISCONNECTED",
 };
 
 const initialTelemetry = {
@@ -30,10 +32,11 @@ const initialTelemetry = {
 };
 
 function deriveStatusText(health) {
-  if (health.status === "REBOOTING") return "FC is rebooting...";
-  if (health.connected) return "FC terhubung";
-  if (health.error) return `Retrying: ${health.error}`;
-  return "Backend aktif, menunggu heartbeat FC";
+  if (health.websocket === "RECONNECTING") return "WebSocket reconnecting...";
+  if (!health.bridge?.online) return "Mission Planner bridge offline";
+  if (health.stale) return "Mission Planner telemetry stale";
+  if (health.connected) return "Mission Planner telemetry active";
+  return "Mission Planner connected, waiting for vehicle";
 }
 
 export function useTelemetry() {
@@ -41,23 +44,51 @@ export function useTelemetry() {
   const [telemetry, setTelemetry] = useState(initialTelemetry);
   const [statusText, setStatusText] = useState("Menghubungkan ke backend Python...");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const socketRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
+
+  const updateWebSocketStatus = useCallback((websocket) => {
+    setHealth((previous) => {
+      const nextHealth = { ...previous, websocket };
+      setStatusText(deriveStatusText(nextHealth));
+      return nextHealth;
+    });
+  }, []);
+
+  const applySnapshot = useCallback((snapshot, websocket = null) => {
+    if (!snapshot?.telemetry) return;
+    setTelemetry(snapshot.telemetry);
+    setHealth((previous) => {
+      const nextHealth = {
+        connected: Boolean(snapshot.telemetry.connected) && !snapshot.stale,
+        status: snapshot.telemetry.status,
+        error: snapshot.telemetry.error,
+        last_update: snapshot.telemetry.last_update,
+        stale: snapshot.stale,
+        gps_valid: snapshot.gps_valid,
+        bridge: snapshot.bridge,
+        source: snapshot.telemetry.source,
+        websocket: websocket || previous.websocket,
+      };
+      setStatusText(deriveStatusText(nextHealth));
+      return nextHealth;
+    });
+  }, []);
 
   const refresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
       const [healthResult, telemetryResult] = await Promise.all([
-        apiGet("/health"),
-        apiGet("/telemetry"),
+        apiGet("/api/v1/health"),
+        apiGet("/api/v1/telemetry"),
       ]);
 
       if (!healthResult.ok || !telemetryResult.ok) {
         throw new Error(healthResult.error || telemetryResult.error || "Backend response was not ok");
       }
 
-      setHealth(healthResult.data);
-      setTelemetry(telemetryResult.data);
-      setStatusText(deriveStatusText(healthResult.data));
-      return { health: healthResult.data, telemetry: telemetryResult.data };
+      applySnapshot(telemetryResult.data);
+      return { health: healthResult.data, telemetry: telemetryResult.data.telemetry };
     } catch (error) {
       setHealth((previous) => ({ ...previous, connected: false, error: String(error) }));
       setStatusText("Backend Python belum bisa diakses");
@@ -66,13 +97,47 @@ export function useTelemetry() {
     } finally {
       setIsRefreshing(false);
     }
-  }, []);
+  }, [applySnapshot]);
 
   useEffect(() => {
+    let stopped = false;
+
+    const connect = () => {
+      if (stopped) return;
+      updateWebSocketStatus("CONNECTING");
+      const socket = new WebSocket(`${WS_BASE}/api/v1/events`);
+      socketRef.current = socket;
+
+      socket.onopen = () => {
+        updateWebSocketStatus("CONNECTED");
+      };
+      socket.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        if (message.type === "telemetry.updated") {
+          applySnapshot(message.data, "CONNECTED");
+        }
+      };
+      socket.onclose = () => {
+        if (stopped) return;
+        updateWebSocketStatus("RECONNECTING");
+        reconnectTimerRef.current = setTimeout(connect, 1500);
+      };
+      socket.onerror = () => socket.close();
+    };
+
     refresh();
-    const interval = setInterval(refresh, 1000);
-    return () => clearInterval(interval);
-  }, [refresh]);
+    connect();
+    const fallbackInterval = setInterval(() => {
+      if (socketRef.current?.readyState !== WebSocket.OPEN) refresh();
+    }, 2000);
+
+    return () => {
+      stopped = true;
+      clearInterval(fallbackInterval);
+      clearTimeout(reconnectTimerRef.current);
+      socketRef.current?.close();
+    };
+  }, [applySnapshot, refresh, updateWebSocketStatus]);
 
   return { health, telemetry, statusText, isRefreshing, refresh };
 }

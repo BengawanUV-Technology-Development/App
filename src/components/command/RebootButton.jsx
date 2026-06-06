@@ -1,23 +1,23 @@
 import { useState } from "react";
 import ConfirmDialog from "../common/ConfirmDialog";
 
-function QuickActions({ isConnected, isArmed, onReboot }) {
+function RebootButton({ isConnected, isArmed, onReboot }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   return (
     <>
       <button
         type="button"
-        className="button-danger"
-        onClick={() => setConfirmOpen(true)}
+        className="button-ghost"
         disabled={!isConnected || isArmed}
+        onClick={() => setConfirmOpen(true)}
       >
-        Reboot FC
+        REBOOT FC
       </button>
       <ConfirmDialog
         open={confirmOpen}
         title="Reboot flight controller?"
-        message="This asks the flight controller to reboot and temporarily drops telemetry."
+        message="Telemetry will disconnect temporarily. Reboot is only allowed while the vehicle is disarmed."
         confirmLabel="Reboot"
         onCancel={() => setConfirmOpen(false)}
         onConfirm={() => {
@@ -29,4 +29,4 @@ function QuickActions({ isConnected, isArmed, onReboot }) {
   );
 }
 
-export default QuickActions;
+export default RebootButton;

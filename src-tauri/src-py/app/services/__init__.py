@@ -1,1 +1,1 @@
-"""Service layer: business logic untuk commands."""
+"""Service layer for external adapters and application logic."""
