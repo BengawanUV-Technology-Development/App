@@ -41,6 +41,7 @@ GET  /api/v1/telemetry
 WS   /api/v1/events
 POST /api/v1/commands/arm
 POST /api/v1/commands/disarm
+POST /api/v1/commands/reboot
 POST /api/v1/commands/set-flight-mode
 GET  /logs/summary
 GET  /logs/recent
@@ -49,7 +50,8 @@ GET  /logs/recent
 ## Scope Saat Ini
 
 - Telemetry HUD dari Mission Planner.
-- Arm, disarm, dan perubahan flight mode melalui Mission Planner.
+- Arm, disarm, reboot saat disarmed, dan perubahan flight mode melalui Mission
+  Planner.
 - HTTP snapshot dengan WebSocket real-time dan fallback polling.
 - Deteksi telemetry stale dan validitas GPS.
 - Dashboard SAR, model wahana 3D, serta fondasi map dan computer vision.

@@ -2,7 +2,7 @@ import time
 import unittest
 
 import app.routes.api_v1 as api_v1_module
-from app.services.mission_planner_adapter import MissionPlannerAdapter
+from app.services.mission_planner_adapter import MissionPlannerAdapter, MissionPlannerBridgeError
 from main import app
 
 
@@ -80,6 +80,8 @@ class MissionPlannerAdapterTests(unittest.TestCase):
 
 
 class FakeApiAdapter:
+    reject_reboot = False
+
     def health(self):
         return {"ok": True, "status": "ACTIVE", "connected": True, "stale": False}
 
@@ -87,6 +89,8 @@ class FakeApiAdapter:
         return {"ok": True, "stale": False, "gps_valid": True, "telemetry": {"flight_mode": "QHOVER"}}
 
     def send_command(self, command, payload):
+        if command == "reboot" and self.reject_reboot:
+            raise MissionPlannerBridgeError(400, {"ok": False, "error": "Reboot is only allowed while vehicle is disarmed"})
         return {"ok": True, "command": command, "mode": payload.get("mode")}, 200
 
 
@@ -120,6 +124,20 @@ class ApiV1Tests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["command"], "arm")
+
+    def test_reboot_proxies_to_bridge(self):
+        response = self.client.post("/api/v1/commands/reboot")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["command"], "reboot")
+
+    def test_bridge_command_rejection_keeps_status_and_message(self):
+        api_v1_module._adapter.reject_reboot = True
+        response = self.client.post("/api/v1/commands/reboot")
+        api_v1_module._adapter.reject_reboot = False
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"], "Reboot is only allowed while vehicle is disarmed")
 
 
 if __name__ == "__main__":

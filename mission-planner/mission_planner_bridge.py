@@ -198,6 +198,31 @@ def _execute_command(command):
             "timestamp": _unix_time(),
         }
 
+    if command_name == "reboot":
+        if bool(_read_cs("armed", False)):
+            raise RuntimeError("Reboot is only allowed while vehicle is disarmed")
+        accepted = bool(
+            MAV.doCommand(
+                MAVLink.MAV_CMD.PREFLIGHT_REBOOT_SHUTDOWN,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            )
+        )
+        if not accepted:
+            raise RuntimeError("Flight controller rejected reboot request")
+        return {
+            "ok": True,
+            "request_id": command["request_id"],
+            "command": command_name,
+            "message": "Flight controller reboot requested",
+            "timestamp": _unix_time(),
+        }
+
     raise ValueError("Unsupported command: " + command_name)
 
 
@@ -261,6 +286,9 @@ def _route_request(method, path, payload):
 
     if method == "POST" and path == "/api/v1/commands/disarm":
         return _queue_command("disarm", payload)
+
+    if method == "POST" and path == "/api/v1/commands/reboot":
+        return _queue_command("reboot", payload)
 
     return {
         "ok": False,

@@ -80,6 +80,7 @@ GET  /api/v1/health
 GET  /api/v1/telemetry
 POST /api/v1/commands/arm
 POST /api/v1/commands/disarm
+POST /api/v1/commands/reboot
 POST /api/v1/commands/set-flight-mode
 ```
 
@@ -109,6 +110,18 @@ Response command hanya berarti Mission Planner berhasil mengirim permintaan.
 Flight controller masih dapat menolak atau langsung mengembalikan mode karena
 mode tidak didukung, mission belum siap, atau safety/failsafe. Verifier
 memastikan perubahan akhirnya dikonfirmasi melalui telemetry.
+
+Reboot hanya diterima ketika vehicle disarmed dan selalu memutus telemetry
+sementara. Gunakan tombol frontend yang memiliki confirmation dialog atau panggil
+endpoint secara manual hanya saat pengujian:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:5000/api/v1/commands/reboot `
+  -ContentType application/json `
+  -Body '{"request_id":"manual-sitl-reboot"}'
+```
 
 Temuan pengujian SITL:
 

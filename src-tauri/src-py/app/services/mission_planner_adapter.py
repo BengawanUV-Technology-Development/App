@@ -7,6 +7,13 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
+class MissionPlannerBridgeError(RuntimeError):
+    def __init__(self, status_code: int, payload: dict):
+        self.status_code = status_code
+        self.payload = payload
+        super().__init__(payload.get("error") or f"Mission Planner bridge HTTP {status_code}")
+
+
 class MissionPlannerAdapter:
     def __init__(
         self,
@@ -66,7 +73,11 @@ class MissionPlannerAdapter:
                 return response.status, json.load(response)
         except HTTPError as exc:
             response_body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Mission Planner bridge HTTP {exc.code}: {response_body}") from exc
+            try:
+                payload = json.loads(response_body)
+            except json.JSONDecodeError:
+                payload = {"ok": False, "error": response_body or f"Mission Planner bridge HTTP {exc.code}"}
+            raise MissionPlannerBridgeError(exc.code, payload) from exc
         except URLError as exc:
             raise RuntimeError(f"Mission Planner bridge unavailable: {exc.reason}") from exc
 

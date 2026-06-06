@@ -344,7 +344,7 @@ Status implementasi awal:
 - Frontend mengambil snapshot awal dari HTTP dan menerima pembaruan melalui
   `WS /api/v1/events`.
 - Frontend kembali ke polling dua detik saat WebSocket terputus.
-- Command arm, disarm, dan perubahan flight mode sudah menggunakan proxy
+- Command arm, disarm, reboot, dan perubahan flight mode sudah menggunakan proxy
   Mission Planner baru.
 - Endpoint dan implementasi MAVSDK lama masih dipertahankan sementara untuk
   command yang belum dimigrasikan.

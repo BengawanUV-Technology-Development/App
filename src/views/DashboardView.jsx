@@ -1,6 +1,7 @@
 import { lazy, Suspense, useMemo, useState } from "react";
 import ArmDisarmButton from "../components/command/ArmDisarmButton";
 import FlightModeGrid from "../components/command/FlightModeGrid";
+import RebootButton from "../components/command/RebootButton";
 import Badge from "../components/common/Badge";
 import AttitudeIndicator from "../components/hud/AttitudeIndicator";
 import HeadingIndicator from "../components/hud/HeadingIndicator";
@@ -95,6 +96,11 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
             isConnected={Boolean(health.connected)}
             onArm={() => runCommand("/api/v1/commands/arm", "arm")}
             onDisarm={() => runCommand("/api/v1/commands/disarm", "disarm")}
+          />
+          <RebootButton
+            isConnected={Boolean(health.connected)}
+            isArmed={Boolean(telemetry.armed)}
+            onReboot={() => runCommand("/api/v1/commands/reboot", "reboot FC")}
           />
         </div>
 

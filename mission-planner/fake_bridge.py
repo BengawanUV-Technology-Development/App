@@ -11,6 +11,7 @@ class FakeBridgeState:
     started_at = time.time()
     flight_mode = "QHOVER"
     armed = False
+    reboot_count = 0
 
     @classmethod
     def telemetry(cls):
@@ -85,6 +86,23 @@ class FakeBridgeHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"ok": False, "error": "Route not found"})
 
     def do_POST(self):
+        if self.path == "/api/v1/commands/reboot":
+            payload = self._read_json()
+            if FakeBridgeState.armed:
+                self._send_json(400, {"ok": False, "error": "Reboot is only allowed while vehicle is disarmed"})
+                return
+            FakeBridgeState.reboot_count += 1
+            self._send_json(
+                200,
+                {
+                    "ok": True,
+                    "request_id": payload.get("request_id"),
+                    "command": "reboot",
+                    "message": "Flight controller reboot requested",
+                    "timestamp": time.time(),
+                },
+            )
+            return
         if self.path in {"/api/v1/commands/arm", "/api/v1/commands/disarm"}:
             payload = self._read_json()
             FakeBridgeState.armed = self.path.endswith("/arm")

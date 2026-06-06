@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 
-from app.services.mission_planner_adapter import MissionPlannerAdapter
+from app.services.mission_planner_adapter import MissionPlannerAdapter, MissionPlannerBridgeError
 
 
 api_v1_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
@@ -40,6 +40,8 @@ def set_flight_mode():
             {"request_id": payload.get("request_id"), "mode": mode},
         )
         return jsonify(response), status
+    except MissionPlannerBridgeError as exc:
+        return jsonify(exc.payload), exc.status_code
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 502
 
@@ -52,6 +54,8 @@ def _proxy_simple_command(command):
             {"request_id": payload.get("request_id")},
         )
         return jsonify(response), status
+    except MissionPlannerBridgeError as exc:
+        return jsonify(exc.payload), exc.status_code
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 502
 
@@ -64,3 +68,8 @@ def arm():
 @api_v1_bp.route("/commands/disarm", methods=["POST"])
 def disarm():
     return _proxy_simple_command("disarm")
+
+
+@api_v1_bp.route("/commands/reboot", methods=["POST"])
+def reboot():
+    return _proxy_simple_command("reboot")
