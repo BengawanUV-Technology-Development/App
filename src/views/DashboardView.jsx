@@ -1,8 +1,6 @@
 import { lazy, Suspense, useMemo, useState } from "react";
 import ArmDisarmButton from "../components/command/ArmDisarmButton";
 import FlightModeGrid from "../components/command/FlightModeGrid";
-import QuickActions from "../components/command/QuickActions";
-import TakeoffPanel from "../components/command/TakeoffPanel";
 import Badge from "../components/common/Badge";
 import AttitudeIndicator from "../components/hud/AttitudeIndicator";
 import HeadingIndicator from "../components/hud/HeadingIndicator";
@@ -66,13 +64,6 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
     }
   };
 
-  const reboot = async () => {
-    pushEvent("info", "PENDING reboot");
-    const result = await modeCommand.execute("/command/reboot", "reboot");
-    await onRefresh();
-    pushEvent(result.ok ? "ok" : "danger", `${result.ok ? "OK" : "FAIL"} reboot: ${result.data?.message || result.error || "-"}`);
-  };
-
   const alerts = useMemo(() => {
     const items = [
       { tone: "info", text: `Backend: ${health.status || "OFFLINE"}` },
@@ -105,23 +96,11 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
             onArm={() => runCommand("/api/v1/commands/arm", "arm")}
             onDisarm={() => runCommand("/api/v1/commands/disarm", "disarm")}
           />
-          <QuickActions isConnected={false} isArmed={Boolean(telemetry.armed)} onReboot={reboot} />
         </div>
 
         <div className="side-section">
           <div className="side-title">Flight Modes</div>
           <FlightModeGrid currentMode={telemetry.flight_mode} isConnected={Boolean(health.connected)} onSetMode={setFlightMode} />
-        </div>
-
-        <div className="side-section">
-          <div className="side-title">Takeoff / Land</div>
-          <TakeoffPanel
-            isConnected={false}
-            isArmed={Boolean(telemetry.armed)}
-            onSetTakeoffAltitude={(altitude) => runCommand("/command/set_takeoff_altitude", "set takeoff altitude", { altitude_m: altitude })}
-            onTakeoff={(altitude) => runCommand("/command/takeoff", "takeoff", { altitude_m: altitude })}
-            onLand={() => runCommand("/command/land", "land")}
-          />
         </div>
 
         <div className="mission-progress-panel">

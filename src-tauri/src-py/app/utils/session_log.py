@@ -15,7 +15,7 @@ class SessionLogSummary:
     session_id: str
     start_time: float
     end_time: float | None = None
-    system_address: str = "-"
+    source_address: str = "-"
     command_count: int = 0
     telemetry_count: int = 0
     event_count: int = 0
@@ -28,7 +28,7 @@ class SessionLogSummary:
 
 
 class SessionLogStore:
-    def __init__(self, log_dir: str | Path | None = None, session_id: str | None = None, system_address: str = "-"):
+    def __init__(self, log_dir: str | Path | None = None, session_id: str | None = None, source_address: str = "-"):
         base_dir = Path(
             log_dir
             or os.getenv("SESSION_LOG_DIR")
@@ -43,10 +43,10 @@ class SessionLogStore:
         self._summary = SessionLogSummary(
             session_id=self.session_id,
             start_time=time(),
-            system_address=system_address,
+            source_address=source_address,
             log_path=str(self.path),
         )
-        self.record_event("session_start", message="Session started", system_address=system_address)
+        self.record_event("session_start", message="Session started", source_address=source_address)
 
     def _default_log_dir(self) -> Path:
         if os.name == "nt":
@@ -113,7 +113,7 @@ class SessionLogStore:
             "last_update": payload.get("last_update"),
             "error": payload.get("error"),
             "source": payload.get("source"),
-            "system_address": payload.get("system_address"),
+            "source_address": payload.get("source_address"),
         }
         return self.record_event("telemetry", data=snapshot)
 

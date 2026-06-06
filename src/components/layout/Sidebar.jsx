@@ -1,7 +1,5 @@
 const navItems = [
   { id: "dashboard", label: "Flight Data" },
-  { id: "config", label: "Config/Tuning" },
-  { id: "mission", label: "Flight Plan" },
   { id: "logs", label: "Messages" },
 ];
 

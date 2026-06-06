@@ -328,12 +328,12 @@ Planner bridge mati.
 
 ### Fase 3 - Migrasikan Frontend ke Kontrak Baru
 
-- [ ] Ubah seluruh route frontend ke `/api/v1`.
-- [ ] Ganti Connection Panel menjadi Dependency Status Panel.
+- [x] Ubah seluruh route command dan telemetry frontend aktif ke `/api/v1`.
+- [x] Ganti Connection Panel menjadi Dependency Status Panel.
 - [x] Hubungkan HUD ke telemetry dari adapter.
 - [x] Tampilkan state `offline`, `stale`, dan `active`.
-- [ ] Pertahankan command confirmation.
-- [ ] Hapus ketergantungan UI terhadap COM port dan baudrate.
+- [x] Pertahankan command confirmation.
+- [x] Hapus ketergantungan UI terhadap COM port dan baudrate.
 
 Selesai jika dashboard dapat menampilkan telemetry Mission Planner tanpa MAVSDK
 di BUV Backend.
@@ -348,17 +348,20 @@ Status implementasi awal:
   Mission Planner baru.
 - Endpoint dan implementasi MAVSDK lama masih dipertahankan sementara untuk
   command yang belum dimigrasikan.
-- Tombol takeoff, land, dan reboot lama dinonaktifkan sampai memiliki endpoint
+- Tombol takeoff, land, dan reboot lama dihapus sampai memiliki endpoint
   Mission Planner baru.
+- Setelah validasi frontend, UI takeoff/land/reboot, config/tuning, mission
+  upload langsung, serta pemilih COM/baud dihapus agar aplikasi hanya
+  menampilkan fitur yang benar-benar aktif.
 
 ### Fase 4 - Hapus Jalur MAVSDK Lama
 
-- [ ] Hapus MAVSDK loop dan direct MAVLink implementation.
-- [ ] Hapus route/service connection lama.
-- [ ] Hapus service command/mission langsung.
-- [ ] Hapus dependency Python yang tidak lagi digunakan.
-- [ ] Hapus atau tulis ulang test lama.
-- [ ] Pastikan tidak ada import atau route lama tersisa.
+- [x] Hapus MAVSDK loop dan direct MAVLink implementation.
+- [x] Hapus route/service connection lama.
+- [x] Hapus service command/mission langsung.
+- [x] Hapus dependency Python yang tidak lagi digunakan.
+- [x] Hapus atau tulis ulang test lama.
+- [x] Pastikan tidak ada import atau route lama tersisa.
 
 Selesai jika aplikasi berjalan tanpa `mavsdk`, `grpcio`, dan `pyserial`.
 

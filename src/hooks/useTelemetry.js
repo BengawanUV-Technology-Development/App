@@ -6,8 +6,6 @@ const initialHealth = {
   status: "OFFLINE",
   error: null,
   last_update: null,
-  system_address: "-",
-  mavsdk_server_port: null,
   stale: true,
   gps_valid: false,
   bridge: null,

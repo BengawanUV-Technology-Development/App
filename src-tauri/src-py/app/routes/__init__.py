@@ -1,1 +1,1 @@
-"""HTTP routes: health, telemetry, commands."""
+"""HTTP routes for the BUV backend."""
