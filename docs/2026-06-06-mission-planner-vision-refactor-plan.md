@@ -367,8 +367,8 @@ Selesai jika aplikasi berjalan tanpa `mavsdk`, `grpcio`, dan `pyserial`.
 
 ### Fase 5 - Map Operasional
 
-- [x] Pilih Leaflet sebagai library map dan folder tile lokal sebagai sumber
-  offline.
+- [x] Pilih Leaflet sebagai library map, tile online sebagai sumber utama, dan
+  folder cache lokal sebagai fallback saat internet putus.
 - [x] Render posisi serta heading UAV.
 - [x] Simpan dan render track UAV di frontend dengan batas awal 1.000 titik.
 - [ ] Tampilkan waypoint/mission dari Mission Planner sebagai read-only.

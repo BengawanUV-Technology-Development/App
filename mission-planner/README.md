@@ -172,7 +172,7 @@ Temuan pengujian SITL:
 - Jika server di dalam scripting Mission Planner tidak stabil, gunakan proses
   bridge terpisah tanpa mengubah kontrak API.
 
-## Map Tile Lokal
+## Map Online dengan Cache Folder Lokal
 
 Map frontend menggunakan Leaflet dan meminta tile dari BUV Backend:
 
@@ -180,20 +180,27 @@ Map frontend menggunakan Leaflet dan meminta tile dari BUV Backend:
 GET /api/v1/map/tiles/{z}/{x}/{y}.png
 ```
 
-Secara default backend membaca folder:
+Secara default backend mengambil tile online dari OpenStreetMap dan menyimpan
+tile yang sudah dilihat ke folder:
 
 ```text
 src-tauri/src-py/runtime/map-tiles/{z}/{x}/{y}.png
 ```
 
-Lokasi dapat diganti melalui environment variable `MAP_TILE_DIR`. Folder tile
-dapat diekspor dari QGIS atau sumber lain yang secara eksplisit mengizinkan
-penggunaan offline. Jangan melakukan bulk download untuk offline dari
-`tile.openstreetmap.org`.
+Tile cache yang masih fresh langsung dibaca dari folder. Ketika tile belum ada
+atau sudah melewati masa cache, backend mencoba mengambil versi online terbaru.
+Jika internet putus, tile lama yang tersedia tetap digunakan.
 
-Untuk pengembangan online sementara, URL tile frontend juga dapat diganti
-melalui `VITE_MAP_TILE_URL`. Mode operasional offline sebaiknya tetap memakai
-endpoint folder lokal backend.
+Konfigurasi tersedia melalui environment variable:
+
+- `MAP_TILE_DIR`: lokasi folder cache.
+- `MAP_TILE_SOURCE_URL`: template sumber online, default
+  `https://tile.openstreetmap.org/{z}/{x}/{y}.png`.
+- `MAP_TILE_CACHE_MAX_AGE_SECONDS`: masa fresh cache, default tujuh hari.
+
+Cache hanya terisi untuk area yang pernah dibuka. Jangan melakukan bulk
+download atau prefetch massal dari `tile.openstreetmap.org`. Untuk paket area
+offline lengkap, gunakan hasil export QGIS atau sumber yang mengizinkan offline.
 
 Status konfigurasi folder dapat diperiksa melalui:
 

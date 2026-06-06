@@ -34,7 +34,7 @@ function OperationalMap({ lat, lng, headingDeg = 0 }) {
       center: DEFAULT_CENTER,
       zoom: 16,
       zoomControl: true,
-      attributionControl: false,
+      attributionControl: true,
     });
 
     L.tileLayer(TILE_URL, {
@@ -42,6 +42,7 @@ function OperationalMap({ lat, lng, headingDeg = 0 }) {
       maxZoom: 20,
       keepBuffer: 4,
       updateWhenIdle: false,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     }).addTo(map);
 
     trackLayerRef.current = L.polyline([], {
