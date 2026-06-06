@@ -290,11 +290,11 @@ baseline.
 ### Fase 1 - Feasibility Spike Mission Planner Bridge
 
 - [x] Buat script Mission Planner minimum.
-- [ ] Buktikan script dapat membaca connected, armed, flight mode, GPS, dan
+- [x] Buktikan script dapat membaca connected, armed, flight mode, GPS, dan
   attitude.
-- [ ] Buktikan endpoint HTTP lokal dapat berjalan tanpa membuat UI Mission
+- [x] Buktikan endpoint HTTP lokal dapat berjalan tanpa membuat UI Mission
   Planner macet.
-- [ ] Buktikan satu command aman, misalnya perubahan mode saat pengujian di SITL.
+- [x] Buktikan satu command aman, misalnya perubahan mode saat pengujian di SITL.
 - [ ] Ukur kestabilan selama minimal 30 menit.
 - [ ] Dokumentasikan cara start/stop script dan batasan environment scripting.
 

@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -22,6 +23,27 @@ def request_json(url, method="GET", payload=None):
         raise RuntimeError(
             "{} {} returned HTTP {}: {}".format(method, url, exc.code, response_body)
         )
+
+
+def normalize_mode(mode):
+    return str(mode or "").strip().upper().replace("_", "")
+
+
+def wait_for_mode(base_url, expected_mode, timeout_seconds):
+    deadline = time.time() + timeout_seconds
+    last_mode = None
+
+    while time.time() < deadline:
+        _, telemetry = request_json(base_url + "/api/v1/telemetry")
+        last_mode = telemetry.get("vehicle", {}).get("flight_mode")
+        if normalize_mode(last_mode) == normalize_mode(expected_mode):
+            return telemetry
+        time.sleep(0.25)
+
+    raise RuntimeError(
+        "Mode command was accepted, but telemetry stayed at {!r} instead of {!r} "
+        "for {:.1f}s".format(last_mode, expected_mode, timeout_seconds)
+    )
 
 
 def verify(base_url, test_mode=None):
@@ -47,6 +69,7 @@ def verify(base_url, test_mode=None):
         assert command_status == 200
         assert command["ok"] is True
         assert command["command"] == "set-flight-mode"
+        telemetry = wait_for_mode(base_url, test_mode, timeout_seconds=5.0)
 
     print("Bridge contract OK")
     print(json.dumps({"health": health, "telemetry": telemetry, "command": command}, indent=2))
@@ -57,7 +80,7 @@ def main():
     parser.add_argument("--base-url", default="http://127.0.0.1:5000")
     parser.add_argument(
         "--test-mode",
-        help="Explicitly send a flight-mode command. Use only with fake bridge or SITL.",
+        help="Send and confirm a flight-mode command. Use only with fake bridge or SITL.",
     )
     args = parser.parse_args()
 

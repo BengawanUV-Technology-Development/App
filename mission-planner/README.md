@@ -37,6 +37,10 @@ Untuk ikut menguji endpoint command pada fake bridge:
 python mission-planner/verify_bridge.py --test-mode Q_HOVER
 ```
 
+Saat `--test-mode` digunakan, verifier tidak hanya memeriksa response command.
+Verifier juga menunggu telemetry mengonfirmasi mode tujuan selama maksimal lima
+detik.
+
 ## Menjalankan di Mission Planner
 
 1. Hubungkan Mission Planner ke SITL atau flight controller.
@@ -85,6 +89,12 @@ Invoke-RestMethod `
   -Uri http://127.0.0.1:5000/api/v1/commands/set-flight-mode `
   -ContentType application/json `
   -Body '{"request_id":"manual-sitl-test","mode":"Q_HOVER"}'
+```
+
+Untuk command SITL yang sekaligus memverifikasi perubahan mode dari telemetry:
+
+```powershell
+python mission-planner/verify_bridge.py --test-mode Q_HOVER
 ```
 
 ## Batasan Spike
