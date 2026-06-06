@@ -279,17 +279,17 @@ setelah adapter Mission Planner lolos acceptance test.
 
 ### Fase 0 - Amankan Baseline dan Buat Branch
 
-- [ ] Commit seluruh perubahan aktif pada `irfan/main-refactored`.
-- [ ] Pastikan frontend build dan test backend baseline lulus.
-- [ ] Buat branch `irfan/mission-planner-vision-refactor`.
-- [ ] Simpan dokumen ini sebagai acuan scope.
+- [x] Commit seluruh perubahan aktif pada `irfan/main-refactored`.
+- [x] Pastikan frontend build dan test backend baseline lulus.
+- [x] Buat branch `irfan/mission-planner-vision-refactor`.
+- [x] Simpan dokumen ini sebagai acuan scope.
 
 Selesai jika branch baru dapat dijalankan dengan kondisi yang sama seperti
 baseline.
 
 ### Fase 1 - Feasibility Spike Mission Planner Bridge
 
-- [ ] Buat script Mission Planner minimum.
+- [x] Buat script Mission Planner minimum.
 - [ ] Buktikan script dapat membaca connected, armed, flight mode, GPS, dan
   attitude.
 - [ ] Buktikan endpoint HTTP lokal dapat berjalan tanpa membuat UI Mission
