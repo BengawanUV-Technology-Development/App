@@ -367,9 +367,10 @@ Selesai jika aplikasi berjalan tanpa `mavsdk`, `grpcio`, dan `pyserial`.
 
 ### Fase 5 - Map Operasional
 
-- [ ] Pilih library map dan tile source.
-- [ ] Render posisi serta heading UAV.
-- [ ] Simpan dan render track UAV.
+- [x] Pilih Leaflet sebagai library map dan folder tile lokal sebagai sumber
+  offline.
+- [x] Render posisi serta heading UAV.
+- [x] Simpan dan render track UAV di frontend dengan batas awal 1.000 titik.
 - [ ] Tampilkan waypoint/mission dari Mission Planner sebagai read-only.
 - [ ] Tambahkan marker detection candidate dan confirmed POI.
 - [ ] Tentukan batas panjang track dan strategi penyimpanan.
@@ -460,6 +461,13 @@ kode.
 3. Mission editor lengkap.
 4. Direct MAVLink/MAVSDK fallback di aplikasi BUV.
 5. Multi-vehicle support.
+
+### Catatan Backlog Reboot
+
+- Reboot FC melalui Mission Planner dapat membuat port COM hilang sementara.
+- Auto reconnect perlu dievaluasi kembali setelah map, video, dan vision stabil.
+- Untuk sekarang operator menyambungkan ulang Mission Planner bila port serial
+  telah muncul kembali.
 
 ## 8. Risiko Utama dan Mitigasi
 

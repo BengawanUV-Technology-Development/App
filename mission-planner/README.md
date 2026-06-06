@@ -171,3 +171,42 @@ Temuan pengujian SITL:
   Menjalankan ulang bridge versi terbaru akan mengganti listener lama.
 - Jika server di dalam scripting Mission Planner tidak stabil, gunakan proses
   bridge terpisah tanpa mengubah kontrak API.
+
+## Map Tile Lokal
+
+Map frontend menggunakan Leaflet dan meminta tile dari BUV Backend:
+
+```text
+GET /api/v1/map/tiles/{z}/{x}/{y}.png
+```
+
+Secara default backend membaca folder:
+
+```text
+src-tauri/src-py/runtime/map-tiles/{z}/{x}/{y}.png
+```
+
+Lokasi dapat diganti melalui environment variable `MAP_TILE_DIR`. Folder tile
+dapat diekspor dari QGIS atau sumber lain yang secara eksplisit mengizinkan
+penggunaan offline. Jangan melakukan bulk download untuk offline dari
+`tile.openstreetmap.org`.
+
+Untuk pengembangan online sementara, URL tile frontend juga dapat diganti
+melalui `VITE_MAP_TILE_URL`. Mode operasional offline sebaiknya tetap memakai
+endpoint folder lokal backend.
+
+Status konfigurasi folder dapat diperiksa melalui:
+
+```text
+GET /api/v1/map/config
+```
+
+## Warna Model GLB
+
+`AircraftModel3D.jsx` dapat memberi warna material saat runtime melalui props
+`modelColor` dan `accentColor`. Mesh atau material dengan nama seperti `nose`,
+`tail`, `prop`, `motor`, `stripe`, atau `accent` memakai warna aksen.
+
+Untuk pewarnaan per bagian, beri nama mesh/material yang jelas sebelum export
+GLB. Jika hasil export hanya memiliki satu mesh/material, Three.js hanya dapat
+mewarnai seluruh bagian tersebut dengan satu warna.

@@ -3,12 +3,19 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 const MODEL_HEADING_OFFSET_DEG = 0;
+const ACCENT_NAME_PATTERN = /(accent|nose|tip|tail|prop|motor|stripe|logo)/i;
 
 function toRadians(value) {
   return THREE.MathUtils.degToRad(Number(value || 0));
 }
 
-function AircraftModel3D({ headingDeg = 0, rollDeg = 0, pitchDeg = 0 }) {
+function AircraftModel3D({
+  headingDeg = 0,
+  rollDeg = 0,
+  pitchDeg = 0,
+  modelColor = "#e2e8f0",
+  accentColor = "#ef4444",
+}) {
   const mountRef = useRef(null);
   const attitudeRef = useRef({ headingDeg, rollDeg, pitchDeg });
 
@@ -70,6 +77,16 @@ function AircraftModel3D({ headingDeg = 0, rollDeg = 0, pitchDeg = 0 }) {
           if (node.isMesh) {
             node.castShadow = false;
             node.receiveShadow = false;
+            const sourceMaterials = Array.isArray(node.material) ? node.material : [node.material];
+            const materials = sourceMaterials.map((sourceMaterial) => {
+              const material = sourceMaterial.clone();
+              const identity = `${node.name} ${material.name}`;
+              material.color?.set(ACCENT_NAME_PATTERN.test(identity) ? accentColor : modelColor);
+              material.roughness = Math.max(Number(material.roughness ?? 0.6), 0.35);
+              material.needsUpdate = true;
+              return material;
+            });
+            node.material = Array.isArray(node.material) ? materials : materials[0];
           }
         });
 
@@ -126,7 +143,7 @@ function AircraftModel3D({ headingDeg = 0, rollDeg = 0, pitchDeg = 0 }) {
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, []);
+  }, [accentColor, modelColor]);
 
   return (
     <div className="aircraft-model-3d" ref={mountRef}>

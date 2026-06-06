@@ -8,6 +8,7 @@ import HeadingIndicator from "../components/hud/HeadingIndicator";
 import { useCommand } from "../hooks/useCommand";
 
 const AircraftModel3D = lazy(() => import("../components/map/AircraftModel3D"));
+const OperationalMap = lazy(() => import("../components/map/OperationalMap"));
 
 function formatNumber(value, digits = 1, fallback = "-") {
   return value === null || value === undefined ? fallback : Number(value).toFixed(digits);
@@ -139,21 +140,21 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
         </section>
 
         <section className="map-panel-tactical sar-map-panel">
-          <div className="map-grid-overlay" />
-          <div className="map-route">
-            <i />
-            <i />
-            <i />
-          </div>
-          <div className="map-poi victim-poi">
-            <span />
-          </div>
+          <Suspense fallback={<div className="map-grid-overlay" />}>
+            <OperationalMap
+              lat={telemetry.lat}
+              lng={telemetry.lng}
+              headingDeg={telemetry.heading_deg ?? telemetry.yaw_deg}
+            />
+          </Suspense>
           <div className="aircraft-marker" aria-label="Aircraft attitude marker">
             <Suspense fallback={<div className="aircraft-model-loading" />}>
               <AircraftModel3D
                 headingDeg={telemetry.heading_deg ?? telemetry.yaw_deg}
                 rollDeg={telemetry.roll_deg}
                 pitchDeg={telemetry.pitch_deg}
+                modelColor="#e2e8f0"
+                accentColor="#ef4444"
               />
             </Suspense>
           </div>
