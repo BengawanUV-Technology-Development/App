@@ -1,10 +1,5 @@
-import os
-import tempfile
 import time
 import unittest
-from pathlib import Path
-from unittest.mock import patch
-from urllib.error import URLError
 
 import app.routes.api_v1 as api_v1_module
 from app.services.mission_planner_adapter import MissionPlannerAdapter, MissionPlannerBridgeError
@@ -158,41 +153,6 @@ class ApiV1Tests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"], "Reboot is only allowed while vehicle is disarmed")
-
-    def test_local_map_tile_route_serves_folder_tile(self):
-        tile_root = Path(tempfile.mkdtemp(prefix="buv-map-tiles-"))
-        tile_path = tile_root / "16" / "52945" / "34135.png"
-        tile_path.parent.mkdir(parents=True)
-        tile_path.write_bytes(b"\x89PNG\r\n\x1a\n")
-
-        with patch.dict(os.environ, {"MAP_TILE_DIR": str(tile_root)}):
-            config = self.client.get("/api/v1/map/config")
-            tile = self.client.get("/api/v1/map/tiles/16/52945/34135.png")
-
-        self.assertEqual(config.status_code, 200)
-        self.assertEqual(config.get_json()["tile_mode"], "online-with-folder-cache")
-        self.assertEqual(tile.status_code, 200)
-        self.assertEqual(tile.mimetype, "image/png")
-
-    def test_missing_local_map_tile_returns_503_when_online_source_fails(self):
-        with patch.dict(os.environ, {"MAP_TILE_DIR": tempfile.mkdtemp(prefix="buv-empty-map-tiles-")}):
-            with patch("app.routes.map_tiles.urlopen", side_effect=URLError("offline")):
-                response = self.client.get("/api/v1/map/tiles/16/1/1.png")
-
-        self.assertEqual(response.status_code, 503)
-
-    def test_stale_local_map_tile_is_used_when_refresh_fails(self):
-        tile_root = Path(tempfile.mkdtemp(prefix="buv-stale-map-tiles-"))
-        tile_path = tile_root / "16" / "1" / "1.png"
-        tile_path.parent.mkdir(parents=True)
-        tile_path.write_bytes(b"\x89PNG\r\n\x1a\n")
-
-        with patch.dict(os.environ, {"MAP_TILE_DIR": str(tile_root), "MAP_TILE_CACHE_MAX_AGE_SECONDS": "0"}):
-            with patch("app.routes.map_tiles.urlopen", side_effect=URLError("offline")):
-                response = self.client.get("/api/v1/map/tiles/16/1/1.png")
-
-        self.assertEqual(response.status_code, 200)
-
 
 if __name__ == "__main__":
     unittest.main()

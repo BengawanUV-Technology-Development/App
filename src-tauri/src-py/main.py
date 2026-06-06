@@ -9,7 +9,6 @@ from flask_sock import Sock
 
 from app.routes.api_v1 import api_v1_bp, init_api_v1_routes
 from app.routes.logs import init_log_routes, logs_bp
-from app.routes.map_tiles import map_tiles_bp
 from app.services.mission_planner_adapter import MissionPlannerAdapter
 from app.utils.session_log import SessionLogStore
 
@@ -27,7 +26,6 @@ init_api_v1_routes(mission_planner_adapter)
 init_log_routes(session_log_store)
 app.register_blueprint(api_v1_bp)
 app.register_blueprint(logs_bp)
-app.register_blueprint(map_tiles_bp)
 
 
 class _WerkzeugPollingFilter(logging.Filter):

@@ -1,10 +1,9 @@
 import { useEffect, useRef } from "react";
 import L from "leaflet";
-import { API_BASE } from "../../services/api";
 
 const DEFAULT_CENTER = [-7.5532394, 110.8656314];
 const MAX_TRACK_POINTS = 1000;
-const TILE_URL = import.meta.env.VITE_MAP_TILE_URL || `${API_BASE}/api/v1/map/tiles/{z}/{x}/{y}.png`;
+const TILE_URL = import.meta.env.VITE_MAP_TILE_URL || "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
 
 function hasValidPosition(lat, lng) {
   return Number.isFinite(Number(lat)) && Number.isFinite(Number(lng)) && !(Number(lat) === 0 && Number(lng) === 0);
@@ -40,13 +39,14 @@ function OperationalMap({ lat, lng, headingDeg = 0 }) {
     L.tileLayer(TILE_URL, {
       minZoom: 2,
       maxZoom: 20,
+      subdomains: "abcd",
       keepBuffer: 4,
       updateWhenIdle: false,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
     }).addTo(map);
 
     trackLayerRef.current = L.polyline([], {
-      color: "#2563eb",
+      color: "#38bdf8",
       opacity: 0.9,
       weight: 3,
     }).addTo(map);

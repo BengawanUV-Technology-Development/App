@@ -367,13 +367,13 @@ Selesai jika aplikasi berjalan tanpa `mavsdk`, `grpcio`, dan `pyserial`.
 
 ### Fase 5 - Map Operasional
 
-- [x] Pilih Leaflet sebagai library map, tile online sebagai sumber utama, dan
-  folder cache lokal sebagai fallback saat internet putus.
+- [x] Pilih Leaflet dan CARTO Dark Matter sebagai basemap online awal.
 - [x] Render posisi serta heading UAV.
 - [x] Simpan dan render track UAV di frontend dengan batas awal 1.000 titik.
 - [ ] Tampilkan waypoint/mission dari Mission Planner sebagai read-only.
 - [ ] Tambahkan marker detection candidate dan confirmed POI.
 - [ ] Tentukan batas panjang track dan strategi penyimpanan.
+- [ ] Tambahkan cache/offline map setelah alur map online stabil.
 
 Selesai jika operator dapat melihat posisi, arah, jalur, mission, dan POI secara
 jelas pada map.
