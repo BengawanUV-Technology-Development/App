@@ -296,7 +296,7 @@ baseline.
   Planner macet.
 - [x] Buktikan satu command aman, misalnya perubahan mode saat pengujian di SITL.
 - [ ] Ukur kestabilan selama minimal 30 menit.
-- [ ] Dokumentasikan cara start/stop script dan batasan environment scripting.
+- [x] Dokumentasikan cara start/stop script dan batasan environment scripting.
 
 Fallback jika HTTP server di dalam script Mission Planner tidak stabil:
 gunakan proses bridge Python terpisah yang menerima data dari Mission Planner.
@@ -304,6 +304,15 @@ Arsitektur BUV Backend dan frontend tetap sama.
 
 Selesai jika `GET /api/v1/telemetry` stabil dan command uji memiliki response
 yang dapat diverifikasi.
+
+Hasil pengujian awal:
+
+- Health dan telemetry Mission Planner asli lolos contract verifier.
+- Perubahan mode `Q_HOVER` berhasil dikonfirmasi melalui telemetry SITL setelah
+  parameter QuadPlane `Q_ENABLE=1`.
+- Saat `Q_ENABLE=0`, Mission Planner menerima permintaan tetapi flight
+  controller mempertahankan mode `Manual`; verifier berhasil mendeteksi kondisi
+  tersebut.
 
 ### Fase 2 - Buat Mission Planner Adapter di BUV Backend
 

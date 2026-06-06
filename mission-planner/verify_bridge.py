@@ -32,17 +32,26 @@ def normalize_mode(mode):
 def wait_for_mode(base_url, expected_mode, timeout_seconds):
     deadline = time.time() + timeout_seconds
     last_mode = None
+    observed_modes = []
 
     while time.time() < deadline:
         _, telemetry = request_json(base_url + "/api/v1/telemetry")
         last_mode = telemetry.get("vehicle", {}).get("flight_mode")
+        if last_mode not in observed_modes:
+            observed_modes.append(last_mode)
         if normalize_mode(last_mode) == normalize_mode(expected_mode):
             return telemetry
         time.sleep(0.25)
 
     raise RuntimeError(
-        "Mode command was accepted, but telemetry stayed at {!r} instead of {!r} "
-        "for {:.1f}s".format(last_mode, expected_mode, timeout_seconds)
+        "Mission Planner accepted the request, but the flight controller did not "
+        "confirm mode {!r} within {:.1f}s. Observed modes: {}. The requested mode "
+        "may be unsupported by this vehicle, rejected by a safety check, or "
+        "immediately reverted by the flight controller.".format(
+            expected_mode,
+            timeout_seconds,
+            ", ".join(repr(mode) for mode in observed_modes),
+        )
     )
 
 

@@ -34,7 +34,7 @@ python mission-planner/verify_bridge.py --base-url http://127.0.0.1:5002
 Untuk ikut menguji endpoint command pada fake bridge:
 
 ```powershell
-python mission-planner/verify_bridge.py --test-mode Q_HOVER
+python mission-planner/verify_bridge.py --test-mode FBWA
 ```
 
 Saat `--test-mode` digunakan, verifier tidak hanya memeriksa response command.
@@ -88,21 +88,42 @@ Invoke-RestMethod `
   -Method Post `
   -Uri http://127.0.0.1:5000/api/v1/commands/set-flight-mode `
   -ContentType application/json `
-  -Body '{"request_id":"manual-sitl-test","mode":"Q_HOVER"}'
+  -Body '{"request_id":"manual-sitl-test","mode":"FBWA"}'
 ```
 
 Untuk command SITL yang sekaligus memverifikasi perubahan mode dari telemetry:
 
 ```powershell
-python mission-planner/verify_bridge.py --test-mode Q_HOVER
+python mission-planner/verify_bridge.py --test-mode FBWA
 ```
+
+Gunakan mode yang memang tersedia untuk vehicle SITL:
+
+- Plane biasa: `MANUAL`, `FBWA`, `AUTO`, atau `RTL`.
+- QuadPlane dengan konfigurasi `Q_ENABLE`: `Q_HOVER`, `Q_STABILIZE`, atau
+  `Q_LAND`.
+
+Response command hanya berarti Mission Planner berhasil mengirim permintaan.
+Flight controller masih dapat menolak atau langsung mengembalikan mode karena
+mode tidak didukung, mission belum siap, atau safety/failsafe. Verifier
+memastikan perubahan akhirnya dikonfirmasi melalui telemetry.
+
+Temuan pengujian SITL:
+
+- Dengan `Q_ENABLE=0`, permintaan `Q_HOVER` diterima Mission Planner tetapi
+  telemetry tetap melaporkan `Manual`.
+- Setelah `Q_ENABLE=1`, permintaan yang sama berhasil dan telemetry
+  mengonfirmasi `QHOVER`.
+- Konfigurasi parameter tetap dilakukan melalui Mission Planner, bukan melalui
+  bridge BUV.
 
 ## Batasan Spike
 
 - Script menargetkan IronPython 2.7 yang tertanam dalam Mission Planner.
 - Telemetry diambil dari objek `cs` Mission Planner.
 - Script belum menyediakan arm/disarm atau mission command.
-- Script belum diuji di dalam Mission Planner dari workspace ini.
+- Script sudah diuji dengan Mission Planner dan SITL untuk health, telemetry,
+  dan pengiriman permintaan perubahan mode.
 - Menghentikan script tidak selalu langsung menghentikan daemon HTTP listener.
   Menjalankan ulang bridge versi terbaru akan mengganti listener lama.
 - Jika server di dalam scripting Mission Planner tidak stabil, gunakan proses
