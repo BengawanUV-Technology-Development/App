@@ -78,11 +78,32 @@ komputer lain.
 ```text
 GET  /api/v1/health
 GET  /api/v1/telemetry
+GET  /api/v1/diagnostics
 POST /api/v1/commands/arm
 POST /api/v1/commands/disarm
 POST /api/v1/commands/reboot
 POST /api/v1/commands/set-flight-mode
 ```
+
+Jika telemetry UI tidak mengikuti state kendaraan, periksa sumber CurrentState
+yang dipilih bridge:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:5000/api/v1/diagnostics |
+  ConvertTo-Json -Depth 5
+```
+
+Bridge membandingkan kandidat `cs`, `MAV.cs`, dan `MAV.MAV.cs`, lalu memilih
+state dengan mode/GPS/baterai paling valid.
+
+Setelah memperbarui script, pastikan versi terbaru benar-benar aktif:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:5000/api/v1/health |
+  ConvertTo-Json -Depth 5
+```
+
+Versi yang memuat perbaikan pemilihan CurrentState dan reboot adalah `1.1.1`.
 
 Jangan menguji command pada wahana nyata untuk feasibility spike. Gunakan SITL:
 

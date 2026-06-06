@@ -23,6 +23,9 @@ except ImportError:
 import clr
 
 clr.AddReference("System")
+clr.AddReference("MAVLink")
+
+import MAVLink
 
 from System import Array, Byte, DateTime, Guid
 from System.Net import IPAddress
@@ -32,6 +35,7 @@ from System.Text import Encoding
 
 HOST = "127.0.0.1"
 PORT = 5000
+BRIDGE_VERSION = "1.1.1"
 SNAPSHOT_RATE_HZ = 10.0
 COMMAND_TIMEOUT_SECONDS = 5.0
 MAX_REQUEST_BYTES = 65536
@@ -49,6 +53,7 @@ ALLOWED_FLIGHT_MODES = (
 _snapshot_lock = threading.Lock()
 _snapshot = {}
 _command_queue = queue.Queue()
+_state_source = "cs"
 
 
 def _unix_time():
@@ -56,15 +61,67 @@ def _unix_time():
     return DateTime.UtcNow.Subtract(epoch).TotalSeconds
 
 
-def _read_cs(name, default=None):
+def _read_state(state, name, default=None):
     try:
-        return getattr(cs, name)
+        return getattr(state, name)
     except Exception:
         return default
 
 
-def _read_number(name, default=None):
-    value = _read_cs(name, default)
+def _state_candidates():
+    candidates = []
+
+    try:
+        candidates.append(("cs", cs))
+    except Exception:
+        pass
+
+    try:
+        candidates.append(("MAV.cs", MAV.cs))
+    except Exception:
+        pass
+
+    try:
+        candidates.append(("MAV.MAV.cs", MAV.MAV.cs))
+    except Exception:
+        pass
+
+    return candidates
+
+
+def _state_score(state):
+    score = 0
+    mode = str(_read_state(state, "mode", "UNKNOWN")).strip().upper()
+    if mode not in ("", "UNKNOWN", "NONE"):
+        score += 10
+    if bool(_read_state(state, "armed", False)):
+        score += 8
+    if int(_read_state(state, "satcount", 0) or 0) > 0:
+        score += 5
+    if int(_read_state(state, "gpsstatus", 0) or 0) >= 3:
+        score += 5
+    if float(_read_state(state, "battery_voltage", 0) or 0) > 0:
+        score += 3
+    if float(_read_state(state, "lat", 0) or 0) != 0 or float(_read_state(state, "lng", 0) or 0) != 0:
+        score += 3
+    return score
+
+
+def _active_state():
+    global _state_source
+    candidates = _state_candidates()
+    if not candidates:
+        raise RuntimeError("Mission Planner CurrentState is unavailable")
+    _state_source, state = max(candidates, key=lambda item: _state_score(item[1]))
+    return state
+
+
+def _read_cs(name, default=None):
+    return _read_state(_active_state(), name, default)
+
+
+def _read_number(state, name, default=None):
+    value = _read_state(state, name, default)
     if value is None:
         return None
     try:
@@ -73,8 +130,8 @@ def _read_number(name, default=None):
         return default
 
 
-def _read_integer(name, default=None):
-    value = _read_cs(name, default)
+def _read_integer(state, name, default=None):
+    value = _read_state(state, name, default)
     if value is None:
         return None
     try:
@@ -91,6 +148,7 @@ def _vehicle_connected():
 
 
 def _build_snapshot():
+    state = _active_state()
     connected = _vehicle_connected()
     return {
         "ok": True,
@@ -98,34 +156,34 @@ def _build_snapshot():
         "source": "mission-planner",
         "vehicle": {
             "connected": connected,
-            "armed": bool(_read_cs("armed", False)),
-            "flight_mode": str(_read_cs("mode", "UNKNOWN")),
+            "armed": bool(_read_state(state, "armed", False)),
+            "flight_mode": str(_read_state(state, "mode", "UNKNOWN")),
         },
         "position": {
-            "lat": _read_number("lat"),
-            "lng": _read_number("lng"),
-            "relative_alt_m": _read_number("alt"),
+            "lat": _read_number(state, "lat"),
+            "lng": _read_number(state, "lng"),
+            "relative_alt_m": _read_number(state, "alt"),
             "absolute_alt_m": None,
-            "gps_status": _read_integer("gpsstatus"),
-            "gps_hdop": _read_number("gpshdop"),
-            "satellites": _read_integer("satcount"),
+            "gps_status": _read_integer(state, "gpsstatus"),
+            "gps_hdop": _read_number(state, "gpshdop"),
+            "satellites": _read_integer(state, "satcount"),
         },
         "attitude": {
-            "roll_deg": _read_number("roll"),
-            "pitch_deg": _read_number("pitch"),
-            "yaw_deg": _read_number("yaw"),
-            "heading_deg": _read_number("yaw"),
-            "ground_course_deg": _read_number("groundcourse"),
+            "roll_deg": _read_number(state, "roll"),
+            "pitch_deg": _read_number(state, "pitch"),
+            "yaw_deg": _read_number(state, "yaw"),
+            "heading_deg": _read_number(state, "yaw"),
+            "ground_course_deg": _read_number(state, "groundcourse"),
         },
         "velocity": {
-            "airspeed_m_s": _read_number("airspeed"),
-            "groundspeed_m_s": _read_number("groundspeed"),
-            "vertical_speed_m_s": _read_number("verticalspeed"),
+            "airspeed_m_s": _read_number(state, "airspeed"),
+            "groundspeed_m_s": _read_number(state, "groundspeed"),
+            "vertical_speed_m_s": _read_number(state, "verticalspeed"),
         },
         "battery": {
-            "remaining_percent": _read_number("battery_remaining"),
-            "voltage_v": _read_number("battery_voltage"),
-            "current_a": _read_number("current"),
+            "remaining_percent": _read_number(state, "battery_remaining"),
+            "voltage_v": _read_number(state, "battery_voltage"),
+            "current_a": _read_number(state, "current"),
         },
     }
 
@@ -149,8 +207,32 @@ def _health_payload():
         "ok": True,
         "timestamp": _unix_time(),
         "service": "mission-planner-bridge",
+        "version": BRIDGE_VERSION,
+        "capabilities": ["telemetry", "arm", "disarm", "set-flight-mode", "reboot", "diagnostics"],
         "vehicle_connected": bool(vehicle.get("connected", False)),
         "snapshot_timestamp": snapshot.get("timestamp"),
+        "state_source": _state_source,
+    }
+
+
+def _diagnostics_payload():
+    candidates = []
+    for name, state in _state_candidates():
+        candidates.append({
+            "name": name,
+            "score": _state_score(state),
+            "armed": bool(_read_state(state, "armed", False)),
+            "mode": str(_read_state(state, "mode", "UNKNOWN")),
+            "lat": _read_number(state, "lat"),
+            "lng": _read_number(state, "lng"),
+            "satellites": _read_integer(state, "satcount"),
+            "battery_voltage_v": _read_number(state, "battery_voltage"),
+        })
+    return {
+        "ok": True,
+        "timestamp": _unix_time(),
+        "selected_state_source": _state_source,
+        "candidates": candidates,
     }
 
 
@@ -277,6 +359,9 @@ def _route_request(method, path, payload):
 
     if method == "GET" and path == "/api/v1/telemetry":
         return _get_snapshot(), 200
+
+    if method == "GET" and path == "/api/v1/diagnostics":
+        return _diagnostics_payload(), 200
 
     if method == "POST" and path == "/api/v1/commands/set-flight-mode":
         return _queue_command("set-flight-mode", payload)

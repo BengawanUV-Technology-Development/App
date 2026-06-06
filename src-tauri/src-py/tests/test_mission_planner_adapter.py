@@ -58,6 +58,21 @@ class MissionPlannerAdapterTests(unittest.TestCase):
 
         self.assertFalse(snapshot["gps_valid"])
 
+    def test_connected_stream_with_unknown_zero_state_is_not_command_ready(self):
+        raw = {
+            **VALID_TELEMETRY,
+            "vehicle": {"connected": True, "armed": False, "flight_mode": "Unknown"},
+            "position": {**VALID_TELEMETRY["position"], "lat": 0.0, "lng": 0.0, "gps_status": 0, "satellites": 0},
+            "battery": {**VALID_TELEMETRY["battery"], "voltage_v": 0.0, "remaining_percent": 0.0},
+        }
+        adapter = FakeMissionPlannerAdapter(response=raw)
+
+        snapshot = adapter.poll_once()
+
+        self.assertFalse(snapshot["telemetry"]["connected"])
+        self.assertFalse(snapshot["telemetry"]["state_valid"])
+        self.assertEqual(snapshot["telemetry"]["status"], "VEHICLE_STATE_UNAVAILABLE")
+
     def test_bridge_failure_reports_offline_without_crashing(self):
         adapter = FakeMissionPlannerAdapter(error="connection refused")
 

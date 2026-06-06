@@ -75,6 +75,8 @@ class FakeBridgeHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "timestamp": time.time(),
                     "service": "mission-planner-bridge",
+                    "version": "fake-1.1.0",
+                    "capabilities": ["telemetry", "arm", "disarm", "set-flight-mode", "reboot"],
                     "vehicle_connected": True,
                     "snapshot_timestamp": time.time(),
                 },

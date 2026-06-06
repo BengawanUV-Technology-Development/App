@@ -40,6 +40,7 @@ class MissionPlannerAdapter:
         return {
             "connected": False,
             "status": "BRIDGE_OFFLINE",
+            "state_valid": False,
             "lat": None,
             "lng": None,
             "alt": None,
@@ -88,17 +89,26 @@ class MissionPlannerAdapter:
         attitude = raw.get("attitude") or {}
         velocity = raw.get("velocity") or {}
         battery = raw.get("battery") or {}
-        connected = bool(vehicle.get("connected"))
+        bridge_vehicle_connected = bool(vehicle.get("connected"))
+        flight_mode = vehicle.get("flight_mode")
+        mode_valid = str(flight_mode or "").strip().upper() not in {"", "UNKNOWN", "NONE"}
+        state_valid = (
+            mode_valid
+            or int(position.get("gps_status") or 0) >= 3
+            or float(battery.get("voltage_v") or 0) > 0
+        )
+        connected = bridge_vehicle_connected and state_valid
 
         return {
             "connected": connected,
-            "status": "ACTIVE" if connected else "VEHICLE_DISCONNECTED",
+            "status": "ACTIVE" if connected else "VEHICLE_STATE_UNAVAILABLE" if bridge_vehicle_connected else "VEHICLE_DISCONNECTED",
+            "state_valid": state_valid,
             "lat": position.get("lat"),
             "lng": position.get("lng"),
             "alt": position.get("relative_alt_m"),
             "alt_amsl": position.get("absolute_alt_m"),
             "armed": vehicle.get("armed"),
-            "flight_mode": vehicle.get("flight_mode"),
+            "flight_mode": flight_mode,
             "battery_percent": battery.get("remaining_percent"),
             "battery_voltage_v": battery.get("voltage_v"),
             "battery_current_a": battery.get("current_a"),
