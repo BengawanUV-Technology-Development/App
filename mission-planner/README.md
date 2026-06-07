@@ -179,6 +179,10 @@ basemap online. Model GLB ditempatkan pada koordinat GPS dan mengikuti heading,
 pitch, serta roll telemetry. URL tile dapat diganti melalui environment variable
 `VITE_MAP_TILE_URL`.
 
+Kamera map bebas digeser, diputar, dan dimiringkan operator. Tombol `FOLLOW`
+hanya menjaga posisi pesawat tetap di tengah tanpa mengunci bearing atau pitch.
+Tombol `FLAT` dan `3D` mengubah kemiringan map dengan cepat.
+
 Cache dan paket map offline ditunda sampai alur map online, track, waypoint,
 dan POI stabil.
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -136,7 +136,22 @@ function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchD
   const mountRef = useRef(null);
   const mapRef = useRef(null);
   const trackRef = useRef([]);
+  const followRef = useRef(false);
   const stateRef = useRef({ lat, lng, alt, headingDeg, rollDeg, pitchDeg });
+  const [isFollowing, setIsFollowing] = useState(false);
+
+  const setFollowing = (nextValue) => {
+    followRef.current = nextValue;
+    setIsFollowing(nextValue);
+    const state = stateRef.current;
+    if (nextValue && hasValidPosition(state.lat, state.lng)) {
+      mapRef.current?.easeTo({
+        center: [Number(state.lng), Number(state.lat)],
+        duration: 500,
+        essential: true,
+      });
+    }
+  };
 
   useEffect(() => {
     stateRef.current = { lat, lng, alt, headingDeg, rollDeg, pitchDeg };
@@ -159,6 +174,7 @@ function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchD
     });
 
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-left");
+    map.on("dragstart", () => setFollowing(false));
     map.on("load", () => {
       map.addSource("aircraft-track", {
         type: "geojson",
@@ -187,8 +203,6 @@ function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchD
         });
         map.jumpTo({
           center: coordinate,
-          bearing: Number(state.headingDeg || 0),
-          pitch: 60,
         });
       }
     });
@@ -218,16 +232,31 @@ function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchD
       });
     }
 
-    map.easeTo({
-      center: coordinate,
-      bearing: Number(headingDeg || 0),
-      pitch: 60,
-      duration: 450,
-      essential: true,
-    });
-  }, [headingDeg, lat, lng]);
+    if (followRef.current) {
+      map.easeTo({
+        center: coordinate,
+        duration: 450,
+        essential: true,
+      });
+    }
+  }, [lat, lng]);
 
-  return <div className="operational-map" ref={mountRef} />;
+  return (
+    <div className="operational-map-shell">
+      <div className="operational-map" ref={mountRef} />
+      <div className="map-camera-controls">
+        <button className={isFollowing ? "active" : ""} type="button" onClick={() => setFollowing(!isFollowing)}>
+          {isFollowing ? "FOLLOW ON" : "FOLLOW"}
+        </button>
+        <button type="button" onClick={() => mapRef.current?.easeTo({ pitch: 0, duration: 450 })}>
+          FLAT
+        </button>
+        <button type="button" onClick={() => mapRef.current?.easeTo({ pitch: 60, duration: 450 })}>
+          3D
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export default OperationalMap;

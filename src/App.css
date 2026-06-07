@@ -1617,11 +1617,41 @@ select {
   background-size: 52px 52px, 52px 52px, auto, auto, auto;
 }
 
+.operational-map-shell,
 .operational-map {
   position: absolute;
   inset: 0;
   z-index: 1;
   background: #090f1a;
+}
+
+.map-camera-controls {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+}
+
+.map-camera-controls button {
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.9);
+  padding: 7px 10px;
+  color: #cbd5e1;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+}
+
+.map-camera-controls button:hover,
+.map-camera-controls button.active {
+  border-color: rgba(56, 189, 248, 0.75);
+  background: rgba(14, 116, 144, 0.84);
+  color: #f8fafc;
 }
 
 .operational-map .maplibregl-ctrl-group {
