@@ -68,6 +68,11 @@ def verify(base_url, test_mode=None):
     for section in REQUIRED_TELEMETRY_SECTIONS:
         assert isinstance(telemetry[section], dict), "Missing telemetry section: " + section
 
+    mission_status, mission = request_json(base_url + "/api/v1/mission")
+    assert mission_status == 200
+    assert mission["ok"] is True
+    assert isinstance(mission["waypoints"], list)
+
     command = None
     if test_mode:
         command_status, command = request_json(
@@ -81,7 +86,7 @@ def verify(base_url, test_mode=None):
         telemetry = wait_for_mode(base_url, test_mode, timeout_seconds=5.0)
 
     print("Bridge contract OK")
-    print(json.dumps({"health": health, "telemetry": telemetry, "command": command}, indent=2))
+    print(json.dumps({"health": health, "telemetry": telemetry, "mission": mission, "command": command}, indent=2))
 
 
 def main():

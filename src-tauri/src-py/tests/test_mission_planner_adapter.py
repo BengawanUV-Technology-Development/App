@@ -25,6 +25,18 @@ VALID_TELEMETRY = {
     "battery": {"remaining_percent": 99.0, "voltage_v": 12.6, "current_a": 0.0},
 }
 
+VALID_MISSION = {
+    "ok": True,
+    "timestamp": time.time(),
+    "source": "mission-planner",
+    "count": 3,
+    "waypoints": [
+        {"index": 0, "seq": 0, "command": 16, "command_name": "WAYPOINT", "frame": 3, "lat": -7.553, "lng": 110.865, "alt_m": 0},
+        {"index": 1, "seq": 1, "command": 22, "command_name": "TAKEOFF", "frame": 3, "lat": -7.552, "lng": 110.866, "alt_m": 30},
+        {"index": 2, "seq": 2, "command": 20, "command_name": "RTL", "frame": 3, "lat": None, "lng": None, "alt_m": None},
+    ],
+}
+
 
 class FakeMissionPlannerAdapter(MissionPlannerAdapter):
     def __init__(self, response=None, error=None):
@@ -93,6 +105,16 @@ class MissionPlannerAdapterTests(unittest.TestCase):
         self.assertTrue(snapshot["stale"])
         self.assertEqual(snapshot["telemetry"]["status"], "STALE")
 
+    def test_mission_normalizes_positioned_and_non_positioned_waypoints(self):
+        adapter = FakeMissionPlannerAdapter(response=VALID_MISSION)
+
+        mission = adapter.mission()
+
+        self.assertEqual(mission["count"], 3)
+        self.assertEqual(mission["positioned_count"], 2)
+        self.assertTrue(mission["waypoints"][0]["has_position"])
+        self.assertFalse(mission["waypoints"][2]["has_position"])
+
 
 class FakeApiAdapter:
     reject_reboot = False
@@ -102,6 +124,9 @@ class FakeApiAdapter:
 
     def snapshot(self):
         return {"ok": True, "stale": False, "gps_valid": True, "telemetry": {"flight_mode": "QHOVER"}}
+
+    def mission(self):
+        return MissionPlannerAdapter._normalize_mission(VALID_MISSION)
 
     def send_command(self, command, payload):
         if command == "reboot" and self.reject_reboot:
@@ -126,6 +151,14 @@ class ApiV1Tests(unittest.TestCase):
         self.assertTrue(health.get_json()["connected"])
         self.assertEqual(telemetry.status_code, 200)
         self.assertTrue(telemetry.get_json()["gps_valid"])
+
+    def test_mission_route_proxies_to_bridge(self):
+        response = self.client.get("/api/v1/mission")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["positioned_count"], 2)
+        self.assertEqual(payload["waypoints"][1]["command_name"], "TAKEOFF")
 
     def test_set_flight_mode_proxies_to_bridge(self):
         response = self.client.post("/api/v1/commands/set-flight-mode", json={"mode": "Q_HOVER"})

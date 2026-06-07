@@ -28,6 +28,16 @@ def telemetry():
     return jsonify(_get_adapter().snapshot())
 
 
+@api_v1_bp.route("/mission", methods=["GET"])
+def mission():
+    try:
+        return jsonify(_get_adapter().mission())
+    except MissionPlannerBridgeError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc), "waypoints": [], "count": 0}), 502
+
+
 @api_v1_bp.route("/commands/set-flight-mode", methods=["POST"])
 def set_flight_mode():
     payload = request.get_json(silent=True) or {}

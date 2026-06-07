@@ -35,7 +35,7 @@ from System.Text import Encoding
 
 HOST = "127.0.0.1"
 PORT = 5000
-BRIDGE_VERSION = "1.1.3"
+BRIDGE_VERSION = "1.2.0"
 SNAPSHOT_RATE_HZ = 10.0
 COMMAND_TIMEOUT_SECONDS = 5.0
 MAX_REQUEST_BYTES = 65536
@@ -49,6 +49,18 @@ ALLOWED_FLIGHT_MODES = (
     "QHOVER",
     "QLAND",
 )
+MAV_CMD_NAMES = {
+    16: "WAYPOINT",
+    17: "LOITER_UNLIM",
+    18: "LOITER_TURNS",
+    19: "LOITER_TIME",
+    20: "RTL",
+    21: "LAND",
+    22: "TAKEOFF",
+    84: "VTOL_TAKEOFF",
+    85: "VTOL_LAND",
+    177: "DO_JUMP",
+}
 
 _snapshot_lock = threading.Lock()
 _snapshot = {}
@@ -208,7 +220,7 @@ def _health_payload():
         "timestamp": _unix_time(),
         "service": "mission-planner-bridge",
         "version": BRIDGE_VERSION,
-        "capabilities": ["telemetry", "arm", "disarm", "set-flight-mode", "reboot", "diagnostics"],
+        "capabilities": ["telemetry", "mission", "arm", "disarm", "set-flight-mode", "reboot", "diagnostics"],
         "vehicle_connected": bool(vehicle.get("connected", False)),
         "snapshot_timestamp": snapshot.get("timestamp"),
         "state_source": _state_source,
@@ -233,6 +245,63 @@ def _diagnostics_payload():
         "timestamp": _unix_time(),
         "selected_state_source": _state_source,
         "candidates": candidates,
+    }
+
+
+def _enum_name(value):
+    if value in MAV_CMD_NAMES:
+        return MAV_CMD_NAMES[value]
+    try:
+        return str(value).split(".")[-1]
+    except Exception:
+        return str(value)
+
+
+def _mission_payload():
+    waypoints = []
+    try:
+        count = int(MAV.getWPCount())
+    except Exception as exc:
+        return {
+            "ok": False,
+            "timestamp": _unix_time(),
+            "error": "Mission Planner waypoint list unavailable: " + str(exc),
+            "count": 0,
+            "waypoints": [],
+        }
+
+    for index in range(max(0, count)):
+        try:
+            waypoint = MAV.getWP(index)
+            command_id = _read_integer(waypoint, "id")
+            frame_id = _read_integer(waypoint, "frame")
+            waypoints.append({
+                "index": index,
+                "seq": index,
+                "command": command_id,
+                "command_name": _enum_name(command_id),
+                "frame": frame_id,
+                "lat": _read_number(waypoint, "lat"),
+                "lng": _read_number(waypoint, "lng"),
+                "alt_m": _read_number(waypoint, "alt"),
+                "param1": _read_number(waypoint, "p1"),
+                "param2": _read_number(waypoint, "p2"),
+                "param3": _read_number(waypoint, "p3"),
+                "param4": _read_number(waypoint, "p4"),
+            })
+        except Exception as exc:
+            waypoints.append({
+                "index": index,
+                "seq": index,
+                "error": str(exc),
+            })
+
+    return {
+        "ok": True,
+        "timestamp": _unix_time(),
+        "source": "mission-planner",
+        "count": len(waypoints),
+        "waypoints": waypoints,
     }
 
 
@@ -372,6 +441,10 @@ def _route_request(method, path, payload):
     if method == "GET" and path == "/api/v1/diagnostics":
         return _diagnostics_payload(), 200
 
+    if method == "GET" and path == "/api/v1/mission":
+        mission = _mission_payload()
+        return mission, 200 if mission.get("ok") else 503
+
     if method == "POST" and path == "/api/v1/commands/set-flight-mode":
         return _queue_command("set-flight-mode", payload)
 
@@ -439,9 +512,11 @@ def _parse_request(raw_request):
 def _write_response(stream, payload, status_code):
     reason = {
         200: "OK",
+        202: "Accepted",
         400: "Bad Request",
         404: "Not Found",
         500: "Internal Server Error",
+        503: "Service Unavailable",
         504: "Gateway Timeout",
     }.get(status_code, "Error")
     body = json.dumps(payload, separators=(",", ":"))

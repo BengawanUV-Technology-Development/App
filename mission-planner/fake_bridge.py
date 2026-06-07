@@ -12,6 +12,13 @@ class FakeBridgeState:
     flight_mode = "QHOVER"
     armed = False
     reboot_count = 0
+    mission = [
+        {"index": 0, "seq": 0, "command": 16, "command_name": "WAYPOINT", "frame": 3, "lat": -7.7715, "lng": 110.3775, "alt_m": 0.0},
+        {"index": 1, "seq": 1, "command": 22, "command_name": "TAKEOFF", "frame": 3, "lat": -7.7712, "lng": 110.3778, "alt_m": 35.0},
+        {"index": 2, "seq": 2, "command": 16, "command_name": "WAYPOINT", "frame": 3, "lat": -7.7709, "lng": 110.3782, "alt_m": 45.0},
+        {"index": 3, "seq": 3, "command": 16, "command_name": "WAYPOINT", "frame": 3, "lat": -7.7717, "lng": 110.3786, "alt_m": 45.0},
+        {"index": 4, "seq": 4, "command": 20, "command_name": "RTL", "frame": 3, "lat": None, "lng": None, "alt_m": None},
+    ]
 
     @classmethod
     def telemetry(cls):
@@ -75,8 +82,8 @@ class FakeBridgeHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "timestamp": time.time(),
                     "service": "mission-planner-bridge",
-                    "version": "fake-1.1.0",
-                    "capabilities": ["telemetry", "arm", "disarm", "set-flight-mode", "reboot"],
+                    "version": "fake-1.2.0",
+                    "capabilities": ["telemetry", "mission", "arm", "disarm", "set-flight-mode", "reboot"],
                     "vehicle_connected": True,
                     "snapshot_timestamp": time.time(),
                 },
@@ -84,6 +91,18 @@ class FakeBridgeHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/v1/telemetry":
             self._send_json(200, FakeBridgeState.telemetry())
+            return
+        if self.path == "/api/v1/mission":
+            self._send_json(
+                200,
+                {
+                    "ok": True,
+                    "timestamp": time.time(),
+                    "source": "fake-mission-planner",
+                    "count": len(FakeBridgeState.mission),
+                    "waypoints": FakeBridgeState.mission,
+                },
+            )
             return
         self._send_json(404, {"ok": False, "error": "Route not found"})
 

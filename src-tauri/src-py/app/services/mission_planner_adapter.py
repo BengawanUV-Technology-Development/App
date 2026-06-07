@@ -127,6 +127,47 @@ class MissionPlannerAdapter:
             "source": raw.get("source", "mission-planner"),
         }
 
+    @staticmethod
+    def _normalize_mission(raw: dict):
+        waypoints = []
+        for item in raw.get("waypoints") or []:
+            lat = item.get("lat")
+            lng = item.get("lng")
+            try:
+                lat = float(lat) if lat is not None else None
+                lng = float(lng) if lng is not None else None
+            except (TypeError, ValueError):
+                lat = None
+                lng = None
+
+            try:
+                alt_m = float(item.get("alt_m")) if item.get("alt_m") is not None else None
+            except (TypeError, ValueError):
+                alt_m = None
+
+            waypoints.append({
+                "index": item.get("index"),
+                "seq": item.get("seq", item.get("index")),
+                "command": item.get("command"),
+                "command_name": item.get("command_name"),
+                "frame": item.get("frame"),
+                "lat": lat,
+                "lng": lng,
+                "alt_m": alt_m,
+                "has_position": lat is not None and lng is not None and not (lat == 0.0 and lng == 0.0),
+                "error": item.get("error"),
+            })
+
+        positioned = [item for item in waypoints if item["has_position"]]
+        return {
+            "ok": True,
+            "timestamp": raw.get("timestamp", time.time()),
+            "source": raw.get("source", "mission-planner"),
+            "count": len(waypoints),
+            "positioned_count": len(positioned),
+            "waypoints": waypoints,
+        }
+
     def poll_once(self):
         now = time.time()
         try:
@@ -224,3 +265,9 @@ class MissionPlannerAdapter:
     def send_command(self, command: str, payload: dict):
         status, response = self._request_json(f"/api/v1/commands/{command}", method="POST", payload=payload)
         return response, status
+
+    def mission(self):
+        status, raw = self._request_json("/api/v1/mission")
+        if status != 200 or not raw.get("ok"):
+            raise RuntimeError(raw.get("error") or "Mission Planner bridge returned an invalid mission response")
+        return self._normalize_mission(raw)

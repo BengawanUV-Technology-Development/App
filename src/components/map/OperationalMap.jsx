@@ -12,6 +12,7 @@ const ACCENT_NAME_PATTERN = /(accent|nose|tip|tail|prop|motor|stripe|logo)/i;
 
 const MAP_STYLE = {
   version: 8,
+  glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
   sources: {
     "dark-basemap": {
       type: "raster",
@@ -29,6 +30,39 @@ function hasValidPosition(lat, lng) {
 
 function toRadians(value) {
   return THREE.MathUtils.degToRad(Number(value || 0));
+}
+
+function positionedWaypoints(mission) {
+  return (mission?.waypoints || []).filter((waypoint) => waypoint.has_position && Number.isFinite(waypoint.lat) && Number.isFinite(waypoint.lng));
+}
+
+function missionRouteData(mission) {
+  return {
+    type: "Feature",
+    properties: {},
+    geometry: {
+      type: "LineString",
+      coordinates: positionedWaypoints(mission).map((waypoint) => [waypoint.lng, waypoint.lat]),
+    },
+  };
+}
+
+function missionPointData(mission) {
+  return {
+    type: "FeatureCollection",
+    features: positionedWaypoints(mission).map((waypoint) => ({
+      type: "Feature",
+      properties: {
+        label: String(waypoint.seq ?? waypoint.index ?? "?"),
+        command: waypoint.command_name || "WP",
+        alt: waypoint.alt_m === null || waypoint.alt_m === undefined ? "-" : `${Number(waypoint.alt_m).toFixed(0)} m`,
+      },
+      geometry: {
+        type: "Point",
+        coordinates: [waypoint.lng, waypoint.lat],
+      },
+    })),
+  };
 }
 
 function createAircraftLayer(stateRef) {
@@ -132,10 +166,11 @@ function createAircraftLayer(stateRef) {
   };
 }
 
-function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchDeg = 0 }) {
+function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchDeg = 0, mission = null }) {
   const mountRef = useRef(null);
   const mapRef = useRef(null);
   const trackRef = useRef([]);
+  const missionRef = useRef(mission);
   const followRef = useRef(false);
   const stateRef = useRef({ lat, lng, alt, headingDeg, rollDeg, pitchDeg });
   const [isFollowing, setIsFollowing] = useState(false);
@@ -159,6 +194,14 @@ function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchD
   }, [alt, headingDeg, lat, lng, pitchDeg, rollDeg]);
 
   useEffect(() => {
+    missionRef.current = mission;
+    const map = mapRef.current;
+    if (!map?.getSource("mission-route")) return;
+    map.getSource("mission-route").setData(missionRouteData(mission));
+    map.getSource("mission-points").setData(missionPointData(mission));
+  }, [mission]);
+
+  useEffect(() => {
     if (!mountRef.current || mapRef.current) return undefined;
 
     const map = new maplibregl.Map({
@@ -176,6 +219,72 @@ function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchD
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-left");
     map.on("dragstart", () => setFollowing(false));
     map.on("load", () => {
+      map.addSource("mission-route", {
+        type: "geojson",
+        data: missionRouteData(missionRef.current),
+      });
+      map.addLayer({
+        id: "mission-route",
+        type: "line",
+        source: "mission-route",
+        paint: {
+          "line-color": "#f59e0b",
+          "line-width": 3,
+          "line-opacity": 0.86,
+          "line-dasharray": [2, 1.2],
+        },
+      });
+      map.addSource("mission-points", {
+        type: "geojson",
+        data: missionPointData(missionRef.current),
+      });
+      map.addLayer({
+        id: "mission-point-halo",
+        type: "circle",
+        source: "mission-points",
+        paint: {
+          "circle-radius": 11,
+          "circle-color": "rgba(245, 158, 11, 0.18)",
+          "circle-stroke-color": "#f59e0b",
+          "circle-stroke-width": 2,
+        },
+      });
+      map.addLayer({
+        id: "mission-point-label",
+        type: "symbol",
+        source: "mission-points",
+        layout: {
+          "text-field": ["get", "label"],
+          "text-size": 12,
+          "text-font": ["Open Sans Bold"],
+          "text-offset": [0, 0],
+          "text-anchor": "center",
+          "text-allow-overlap": true,
+        },
+        paint: {
+          "text-color": "#f8fafc",
+          "text-halo-color": "#0f172a",
+          "text-halo-width": 1.5,
+        },
+      });
+      map.addLayer({
+        id: "mission-point-detail",
+        type: "symbol",
+        source: "mission-points",
+        layout: {
+          "text-field": ["concat", ["get", "command"], " ", ["get", "alt"]],
+          "text-size": 10,
+          "text-font": ["Open Sans Regular"],
+          "text-offset": [0, 1.6],
+          "text-anchor": "top",
+          "text-allow-overlap": false,
+        },
+        paint: {
+          "text-color": "#fbbf24",
+          "text-halo-color": "#0f172a",
+          "text-halo-width": 1,
+        },
+      });
       map.addSource("aircraft-track", {
         type: "geojson",
         data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [] } },

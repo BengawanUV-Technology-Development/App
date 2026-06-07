@@ -6,6 +6,7 @@ import Badge from "../components/common/Badge";
 import AttitudeIndicator from "../components/hud/AttitudeIndicator";
 import HeadingIndicator from "../components/hud/HeadingIndicator";
 import { useCommand } from "../hooks/useCommand";
+import { useMission } from "../hooks/useMission";
 
 const OperationalMap = lazy(() => import("../components/map/OperationalMap"));
 
@@ -32,6 +33,7 @@ function formatTime(value) {
 function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh }) {
   const command = useCommand();
   const modeCommand = useCommand();
+  const { mission, refreshMission } = useMission();
   const [eventLog, setEventLog] = useState([]);
 
   const pushEvent = (tone, text) => {
@@ -50,6 +52,7 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
     if (refreshed?.error) {
       pushEvent("warn", `Refresh after ${label}: ${refreshed.error}`);
     }
+    refreshMission();
   };
 
   const setFlightMode = async (mode) => {
@@ -147,11 +150,12 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
               headingDeg={telemetry.heading_deg ?? telemetry.yaw_deg}
               rollDeg={telemetry.roll_deg}
               pitchDeg={telemetry.pitch_deg}
+              mission={mission}
             />
           </Suspense>
           <div className="map-coordinate-strip">
             <strong>{hasGps ? `${formatCoordinate(telemetry.lat, 6)}, ${formatCoordinate(telemetry.lng, 6)}` : "GPS LOCK PENDING"}</strong>
-            <span>HDG {formatNumber(telemetry.heading_deg ?? telemetry.yaw_deg, 0)} | ALT {formatNumber(telemetry.alt)} m</span>
+            <span>HDG {formatNumber(telemetry.heading_deg ?? telemetry.yaw_deg, 0)} | ALT {formatNumber(telemetry.alt)} m | WP {mission.positioned_count || 0}/{mission.count || 0}</span>
           </div>
         </section>
       </main>

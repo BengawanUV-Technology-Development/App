@@ -79,6 +79,7 @@ komputer lain.
 GET  /api/v1/health
 GET  /api/v1/telemetry
 GET  /api/v1/diagnostics
+GET  /api/v1/mission
 POST /api/v1/commands/arm
 POST /api/v1/commands/disarm
 POST /api/v1/commands/reboot
@@ -103,8 +104,7 @@ Invoke-RestMethod http://127.0.0.1:5000/api/v1/health |
   ConvertTo-Json -Depth 5
 ```
 
-Versi yang memuat perbaikan pemilihan CurrentState dan asynchronous native
-Mission Planner reboot adalah `1.1.3`.
+Versi yang memuat mission/waypoint read-only adalah `1.2.0`.
 
 Jangan menguji command pada wahana nyata untuk feasibility spike. Gunakan SITL:
 
@@ -182,6 +182,10 @@ pitch, serta roll telemetry. URL tile dapat diganti melalui environment variable
 Kamera map bebas digeser, diputar, dan dimiringkan operator. Tombol `FOLLOW`
 hanya menjaga posisi pesawat tetap di tengah tanpa mengunci bearing atau pitch.
 Tombol `FLAT` dan `3D` mengubah kemiringan map dengan cepat.
+
+Waypoint mission dibaca read-only dari `GET /api/v1/mission`, diproxy backend,
+dan digambar sebagai jalur oranye serta marker bernomor di map. Waypoint tanpa
+koordinat valid tetap tampil di data mission, tetapi tidak digambar di map.
 
 Cache dan paket map offline ditunda sampai alur map online, track, waypoint,
 dan POI stabil.
