@@ -12,6 +12,7 @@ class FakeBridgeState:
     flight_mode = "QHOVER"
     armed = False
     reboot_count = 0
+    current_waypoint_seq = None
     mission = [
         {"index": 0, "seq": 0, "command": 16, "command_name": "WAYPOINT", "frame": 3, "lat": -7.7715, "lng": 110.3775, "alt_m": 0.0},
         {"index": 1, "seq": 1, "command": 22, "command_name": "TAKEOFF", "frame": 3, "lat": -7.7712, "lng": 110.3778, "alt_m": 35.0},
@@ -19,6 +20,21 @@ class FakeBridgeState:
         {"index": 3, "seq": 3, "command": 16, "command_name": "WAYPOINT", "frame": 3, "lat": -7.7717, "lng": 110.3786, "alt_m": 45.0},
         {"index": 4, "seq": 4, "command": 20, "command_name": "RTL", "frame": 3, "lat": None, "lng": None, "alt_m": None},
     ]
+    messages = [
+        "AHRS: EKF3 active",
+        "EKF3 IMU0 is using GPS",
+        "EKF3 IMU0 origin set",
+        "Field Elevation Set: 99m",
+        "GPS 1: detected u-blox",
+        "ArduPlane V4.8.0-dev",
+        "Airspeed 1 Calibrated",
+    ]
+
+    @classmethod
+    def current_seq(cls):
+        if cls.current_waypoint_seq is not None:
+            return cls.current_waypoint_seq
+        return int((time.time() - cls.started_at) / 12.0) % len(cls.mission)
 
     @classmethod
     def telemetry(cls):
@@ -82,8 +98,8 @@ class FakeBridgeHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "timestamp": time.time(),
                     "service": "mission-planner-bridge",
-                    "version": "fake-1.2.0",
-                    "capabilities": ["telemetry", "mission", "arm", "disarm", "set-flight-mode", "reboot"],
+                    "version": "fake-1.5.0",
+                    "capabilities": ["telemetry", "mission", "messages", "arm", "disarm", "set-flight-mode", "set-current-waypoint", "reboot"],
                     "vehicle_connected": True,
                     "snapshot_timestamp": time.time(),
                 },
@@ -100,7 +116,29 @@ class FakeBridgeHandler(BaseHTTPRequestHandler):
                     "timestamp": time.time(),
                     "source": "fake-mission-planner",
                     "count": len(FakeBridgeState.mission),
+                    "current_seq": FakeBridgeState.current_seq(),
                     "waypoints": FakeBridgeState.mission,
+                },
+            )
+            return
+        if self.path == "/api/v1/messages":
+            now = time.time()
+            self._send_json(
+                200,
+                {
+                    "ok": True,
+                    "timestamp": now,
+                    "source": "fake-mission-planner",
+                    "count": len(FakeBridgeState.messages),
+                    "messages": [
+                        {
+                            "timestamp": now - index * 4,
+                            "message": message,
+                            "source": "fake.messages",
+                        }
+                        for index, message in enumerate(FakeBridgeState.messages)
+                    ],
+                    "sources_checked": ["fake.messages"],
                 },
             )
             return
@@ -154,6 +192,29 @@ class FakeBridgeHandler(BaseHTTPRequestHandler):
                     "request_id": payload.get("request_id"),
                     "command": "set-flight-mode",
                     "message": f"Flight mode change requested: {mode}",
+                    "timestamp": time.time(),
+                },
+            )
+            return
+        if self.path == "/api/v1/commands/set-current-waypoint":
+            payload = self._read_json()
+            try:
+                seq = int(payload.get("seq"))
+            except (TypeError, ValueError):
+                self._send_json(400, {"ok": False, "error": "seq is required and must be an integer"})
+                return
+            if seq < 0 or seq >= len(FakeBridgeState.mission):
+                self._send_json(400, {"ok": False, "error": f"Waypoint index {seq} is outside mission range 0..{len(FakeBridgeState.mission) - 1}"})
+                return
+            FakeBridgeState.current_waypoint_seq = seq
+            self._send_json(
+                200,
+                {
+                    "ok": True,
+                    "request_id": payload.get("request_id"),
+                    "command": "set-current-waypoint",
+                    "seq": seq,
+                    "message": f"Current mission waypoint requested: WP {seq}",
                     "timestamp": time.time(),
                 },
             )

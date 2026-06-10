@@ -38,6 +38,16 @@ def mission():
         return jsonify({"ok": False, "error": str(exc), "waypoints": [], "count": 0}), 502
 
 
+@api_v1_bp.route("/messages", methods=["GET"])
+def messages():
+    try:
+        return jsonify(_get_adapter().messages())
+    except MissionPlannerBridgeError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc), "messages": [], "count": 0}), 502
+
+
 @api_v1_bp.route("/commands/set-flight-mode", methods=["POST"])
 def set_flight_mode():
     payload = request.get_json(silent=True) or {}
@@ -48,6 +58,27 @@ def set_flight_mode():
         response, status = _get_adapter().send_command(
             "set-flight-mode",
             {"request_id": payload.get("request_id"), "mode": mode},
+        )
+        return jsonify(response), status
+    except MissionPlannerBridgeError as exc:
+        return jsonify(exc.payload), exc.status_code
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 502
+
+
+@api_v1_bp.route("/commands/set-current-waypoint", methods=["POST"])
+def set_current_waypoint():
+    payload = request.get_json(silent=True) or {}
+    try:
+        seq = int(payload.get("seq"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "seq is required and must be an integer"}), 400
+    if seq < 0:
+        return jsonify({"ok": False, "error": "seq must be zero or greater"}), 400
+    try:
+        response, status = _get_adapter().send_command(
+            "set-current-waypoint",
+            {"request_id": payload.get("request_id"), "seq": seq},
         )
         return jsonify(response), status
     except MissionPlannerBridgeError as exc:

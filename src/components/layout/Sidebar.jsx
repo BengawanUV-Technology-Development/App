@@ -1,5 +1,5 @@
 const navItems = [
-  { id: "dashboard", label: "Flight Data" },
+  { id: "dashboard", label: "Operations" },
   { id: "logs", label: "Messages" },
 ];
 
@@ -8,7 +8,10 @@ function Sidebar({ activeView, onNavigate }) {
     <aside className="sidebar" aria-label="Primary navigation">
       <div className="sidebar-brand">
         <span className="brand-mark">BUV</span>
-        <strong className="brand-text">Ground Control</strong>
+        <span className="brand-copy">
+          <strong className="brand-text">Bengawan UV</strong>
+          <small>Ground Control 2026</small>
+        </span>
       </div>
       <nav className="nav-list">
         {navItems.map((item) => (

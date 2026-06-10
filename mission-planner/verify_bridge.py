@@ -55,7 +55,7 @@ def wait_for_mode(base_url, expected_mode, timeout_seconds):
     )
 
 
-def verify(base_url, test_mode=None):
+def verify(base_url, test_mode=None, test_current_wp=None):
     health_status, health = request_json(base_url + "/api/v1/health")
     assert health_status == 200
     assert health["ok"] is True
@@ -72,8 +72,15 @@ def verify(base_url, test_mode=None):
     assert mission_status == 200
     assert mission["ok"] is True
     assert isinstance(mission["waypoints"], list)
+    assert "current_seq" in mission
+
+    messages_status, messages = request_json(base_url + "/api/v1/messages")
+    assert messages_status == 200
+    assert messages["ok"] is True
+    assert isinstance(messages["messages"], list)
 
     command = None
+    waypoint_command = None
     if test_mode:
         command_status, command = request_json(
             base_url + "/api/v1/commands/set-flight-mode",
@@ -85,8 +92,18 @@ def verify(base_url, test_mode=None):
         assert command["command"] == "set-flight-mode"
         telemetry = wait_for_mode(base_url, test_mode, timeout_seconds=5.0)
 
+    if test_current_wp is not None:
+        command_status, waypoint_command = request_json(
+            base_url + "/api/v1/commands/set-current-waypoint",
+            method="POST",
+            payload={"request_id": "bridge-verifier-wp", "seq": test_current_wp},
+        )
+        assert command_status == 200
+        assert waypoint_command["ok"] is True
+        assert waypoint_command["command"] == "set-current-waypoint"
+
     print("Bridge contract OK")
-    print(json.dumps({"health": health, "telemetry": telemetry, "mission": mission, "command": command}, indent=2))
+    print(json.dumps({"health": health, "telemetry": telemetry, "mission": mission, "messages": messages, "command": command, "waypoint_command": waypoint_command}, indent=2))
 
 
 def main():
@@ -96,10 +113,15 @@ def main():
         "--test-mode",
         help="Send and confirm a flight-mode command. Use only with fake bridge or SITL.",
     )
+    parser.add_argument(
+        "--test-current-wp",
+        type=int,
+        help="Send a set-current-waypoint command. Use only with fake bridge or SITL.",
+    )
     args = parser.parse_args()
 
     try:
-        verify(args.base_url.rstrip("/"), test_mode=args.test_mode)
+        verify(args.base_url.rstrip("/"), test_mode=args.test_mode, test_current_wp=args.test_current_wp)
     except (AssertionError, HTTPError, URLError, KeyError, RuntimeError, ValueError) as exc:
         print("Bridge verification failed: " + str(exc), file=sys.stderr)
         raise SystemExit(1)

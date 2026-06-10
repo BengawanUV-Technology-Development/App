@@ -28,25 +28,25 @@ function StatusBar({ health, telemetry }) {
         <span>{isConnected ? "Connected" : health?.status || "Offline"}</span>
       </div>
       <div className="status-item">
-        <span>🔋</span>
+        <span className="status-key">BAT</span>
         <Badge tone={batteryClass(battery)}>
           {battery === null || battery === undefined ? "-" : `${battery.toFixed(1)}%`}
         </Badge>
       </div>
       <div className="status-item">
-        <span>🛡️</span>
+        <span className="status-key">SYS</span>
         <Badge tone={isArmed ? "danger" : "success"}>{isArmed ? "Armed" : "Disarmed"}</Badge>
       </div>
       <div className="status-item">
-        <span>✈️</span>
+        <span className="status-key">MODE</span>
         <Badge>{telemetry?.flight_mode || "-"}</Badge>
       </div>
       <div className="status-item">
-        <span>📡</span>
+        <span className="status-key">GPS</span>
         <span>{formatCoordinate(telemetry?.lat)}, {formatCoordinate(telemetry?.lng)}</span>
       </div>
       <div className="status-item">
-        <span>⏱️</span>
+        <span className="status-key">SYNC</span>
         <span>{formatTime(telemetry?.last_update || health?.last_update)}</span>
       </div>
     </footer>

@@ -159,12 +159,23 @@ class MissionPlannerAdapter:
             })
 
         positioned = [item for item in waypoints if item["has_position"]]
+        current_seq = raw.get("current_seq")
+        try:
+            current_seq = int(current_seq) if current_seq is not None else None
+        except (TypeError, ValueError):
+            current_seq = None
+        current_waypoint = next(
+            (item for item in waypoints if item.get("seq") == current_seq or item.get("index") == current_seq),
+            None,
+        )
         return {
             "ok": True,
             "timestamp": raw.get("timestamp", time.time()),
             "source": raw.get("source", "mission-planner"),
             "count": len(waypoints),
             "positioned_count": len(positioned),
+            "current_seq": current_seq,
+            "current_waypoint": current_waypoint,
             "waypoints": waypoints,
         }
 
@@ -271,3 +282,30 @@ class MissionPlannerAdapter:
         if status != 200 or not raw.get("ok"):
             raise RuntimeError(raw.get("error") or "Mission Planner bridge returned an invalid mission response")
         return self._normalize_mission(raw)
+
+    def messages(self):
+        status, raw = self._request_json("/api/v1/messages")
+        if status != 200 or not raw.get("ok"):
+            raise RuntimeError(raw.get("error") or "Mission Planner bridge returned an invalid messages response")
+        messages = []
+        for item in raw.get("messages") or []:
+            text = str(item.get("message") or "").strip()
+            if not text:
+                continue
+            try:
+                timestamp = float(item.get("timestamp")) if item.get("timestamp") is not None else None
+            except (TypeError, ValueError):
+                timestamp = None
+            messages.append({
+                "timestamp": timestamp,
+                "message": text,
+                "source": item.get("source") or raw.get("source", "mission-planner"),
+            })
+        return {
+            "ok": True,
+            "timestamp": raw.get("timestamp", time.time()),
+            "source": raw.get("source", "mission-planner"),
+            "count": len(messages),
+            "messages": messages[:80],
+            "sources_checked": raw.get("sources_checked") or [],
+        }

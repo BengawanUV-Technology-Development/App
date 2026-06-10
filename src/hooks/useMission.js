@@ -5,6 +5,8 @@ const initialMission = {
   ok: true,
   count: 0,
   positioned_count: 0,
+  current_seq: null,
+  current_waypoint: null,
   waypoints: [],
   error: null,
 };

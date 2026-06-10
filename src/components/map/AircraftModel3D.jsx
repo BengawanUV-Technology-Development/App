@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
-const MODEL_HEADING_OFFSET_DEG = 0;
+const MODEL_HEADING_OFFSET_DEG = 180;
 const ACCENT_NAME_PATTERN = /(accent|nose|tip|tail|prop|motor|stripe|logo)/i;
 
 function toRadians(value) {
@@ -13,8 +13,8 @@ function AircraftModel3D({
   headingDeg = 0,
   rollDeg = 0,
   pitchDeg = 0,
-  modelColor = "#e2e8f0",
-  accentColor = "#ef4444",
+  modelColor = "#cffff8",
+  accentColor = "#00bda5",
 }) {
   const mountRef = useRef(null);
   const attitudeRef = useRef({ headingDeg, rollDeg, pitchDeg });

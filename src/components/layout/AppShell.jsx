@@ -8,12 +8,15 @@ function AppShell({ activeView, onNavigate, health, telemetry, children }) {
         <Sidebar activeView={activeView} onNavigate={onNavigate} />
         <div className="connection-panel">
           <div className="connection-summary">
-            <strong>Mission Planner Bridge</strong>
-            <span>{health.bridge?.online ? "ONLINE" : "OFFLINE"}</span>
+            <span className={`connection-dot ${health.bridge?.online ? "is-online" : ""}`} />
+            <span>
+              <strong>Mission Planner Link</strong>
+              <small>{health.bridge?.online ? "Bridge online" : "Bridge offline"}</small>
+            </span>
           </div>
           <div className="connection-meta">
             <span>Telemetry {health.stale ? "STALE" : "LIVE"}</span>
-            <span>WebSocket {health.websocket || "DISCONNECTED"}</span>
+            <span>Vehicle {health.connected ? "CONNECTED" : "STANDBY"}</span>
           </div>
         </div>
       </header>

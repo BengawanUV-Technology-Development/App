@@ -6,40 +6,34 @@ function AttitudeIndicator({ rollDeg = 0, pitchDeg = 0 }) {
   const hasData = rollDeg !== null && rollDeg !== undefined && pitchDeg !== null && pitchDeg !== undefined;
   const roll = Number(rollDeg || 0);
   const pitch = clamp(Number(pitchDeg || 0), -30, 30);
-  const pitchOffset = pitch * 3;
+  const pitchOffset = pitch * 2.4;
   const ladder = [-30, -20, -10, 10, 20, 30];
 
   return (
-    <svg className="attitude-indicator" viewBox="0 0 280 280" role="img" aria-label="Attitude indicator">
+    <svg className="attitude-indicator attitude-indicator-digital" viewBox="0 0 280 220" role="img" aria-label="Digital attitude indicator">
       <defs>
         <clipPath id="attitude-clip">
-          <circle cx="140" cy="140" r="132" />
+          <rect x="8" y="8" width="264" height="176" rx="5" />
         </clipPath>
-        <linearGradient id="sky-gradient" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor="#0ea5e9" />
-          <stop offset="100%" stopColor="#7dd3fc" />
-        </linearGradient>
-        <linearGradient id="ground-gradient" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor="#92400e" />
-          <stop offset="100%" stopColor="#451a03" />
-        </linearGradient>
+        <pattern id="ahi-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+          <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#00bda5" strokeOpacity="0.12" strokeWidth="1" />
+        </pattern>
       </defs>
 
-      <circle cx="140" cy="140" r="136" fill="#020617" stroke="rgba(148,163,184,0.45)" strokeWidth="4" />
+      <rect x="5" y="5" width="270" height="182" rx="7" fill="#03100e" stroke="rgba(207,255,248,0.22)" strokeWidth="2" />
+      <rect x="8" y="8" width="264" height="176" rx="5" fill="url(#ahi-grid)" />
       {hasData ? (
         <g clipPath="url(#attitude-clip)">
-          <g transform={`rotate(${-roll} 140 140) translate(0 ${pitchOffset})`}>
-            <rect x="-80" y="-120" width="440" height="260" fill="url(#sky-gradient)" />
-            <rect x="-80" y="140" width="440" height="300" fill="url(#ground-gradient)" />
-            <line x1="-80" x2="360" y1="140" y2="140" stroke="#f8fafc" strokeWidth="3" />
+          <g transform={`rotate(${-roll} 140 96) translate(0 ${pitchOffset})`}>
+            <line x1="-80" x2="360" y1="96" y2="96" stroke="#cffff8" strokeWidth="2" />
             {ladder.map((mark) => {
-              const y = 140 - mark * 3;
+              const y = 96 - mark * 2.4;
               return (
                 <g key={mark}>
-                  <line x1="100" x2="128" y1={y} y2={y} stroke="#f8fafc" strokeWidth="2" />
-                  <line x1="152" x2="180" y1={y} y2={y} stroke="#f8fafc" strokeWidth="2" />
-                  <text x="86" y={y + 4} fill="#f8fafc" fontSize="11" textAnchor="middle">{Math.abs(mark)}</text>
-                  <text x="194" y={y + 4} fill="#f8fafc" fontSize="11" textAnchor="middle">{Math.abs(mark)}</text>
+                  <line x1="106" x2="130" y1={y} y2={y} stroke="#00bda5" strokeWidth="1.5" />
+                  <line x1="150" x2="174" y1={y} y2={y} stroke="#00bda5" strokeWidth="1.5" />
+                  <text x="92" y={y + 4} fill="#00bda5" fontSize="9" textAnchor="middle">{Math.abs(mark)}</text>
+                  <text x="188" y={y + 4} fill="#00bda5" fontSize="9" textAnchor="middle">{Math.abs(mark)}</text>
                 </g>
               );
             })}
@@ -47,23 +41,23 @@ function AttitudeIndicator({ rollDeg = 0, pitchDeg = 0 }) {
         </g>
       ) : (
         <g>
-          <circle cx="140" cy="140" r="128" fill="#111827" />
-          <text x="140" y="136" textAnchor="middle" fill="#94a3b8" fontSize="14" fontFamily="JetBrains Mono">
+          <text x="140" y="91" textAnchor="middle" fill="#cffff8" fontSize="14" fontFamily="JetBrains Mono">
             NO ATTITUDE
           </text>
-          <text x="140" y="158" textAnchor="middle" fill="#64748b" fontSize="11" fontFamily="JetBrains Mono">
+          <text x="140" y="111" textAnchor="middle" fill="#00bda5" fontSize="11" fontFamily="JetBrains Mono">
             CONNECT FC
           </text>
         </g>
       )}
 
-      <g stroke="#fbbf24" strokeWidth="4" strokeLinecap="round" fill="none">
-        <line x1="82" x2="122" y1="140" y2="140" />
-        <line x1="158" x2="198" y1="140" y2="140" />
-        <polyline points="122,140 140,154 158,140" />
+      <g stroke="#cffff8" strokeWidth="3" strokeLinecap="round" fill="none">
+        <line x1="88" x2="124" y1="96" y2="96" />
+        <line x1="156" x2="192" y1="96" y2="96" />
+        <polyline points="124,96 140,106 156,96" />
       </g>
-      <circle cx="140" cy="140" r="4" fill="#fbbf24" />
-      <text x="140" y="264" textAnchor="middle" className="hud-readout">
+      <path d="M 140 13 l -5 9 h 10 z" fill="#00bda5" />
+      <circle cx="140" cy="96" r="3" fill="#00bda5" />
+      <text x="140" y="210" textAnchor="middle" className="hud-readout">
         {hasData ? `ROLL ${roll.toFixed(0)} / PITCH ${pitch.toFixed(0)}` : "ROLL - / PITCH -"}
       </text>
     </svg>

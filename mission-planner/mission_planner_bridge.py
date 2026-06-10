@@ -20,6 +20,11 @@ try:
 except ImportError:
     import __builtin__ as bridge_runtime
 
+try:
+    basestring
+except NameError:
+    basestring = str
+
 import clr
 
 clr.AddReference("System")
@@ -35,7 +40,7 @@ from System.Text import Encoding
 
 HOST = "127.0.0.1"
 PORT = 5000
-BRIDGE_VERSION = "1.2.0"
+BRIDGE_VERSION = "1.5.0"
 SNAPSHOT_RATE_HZ = 10.0
 COMMAND_TIMEOUT_SECONDS = 5.0
 MAX_REQUEST_BYTES = 65536
@@ -152,6 +157,14 @@ def _read_integer(state, name, default=None):
         return default
 
 
+def _first_integer(obj, names, default=None):
+    for name in names:
+        value = _read_integer(obj, name, None)
+        if value is not None:
+            return value
+    return default
+
+
 def _vehicle_connected():
     try:
         return bool(MAV.BaseStream.IsOpen)
@@ -220,7 +233,7 @@ def _health_payload():
         "timestamp": _unix_time(),
         "service": "mission-planner-bridge",
         "version": BRIDGE_VERSION,
-        "capabilities": ["telemetry", "mission", "arm", "disarm", "set-flight-mode", "reboot", "diagnostics"],
+        "capabilities": ["telemetry", "mission", "messages", "arm", "disarm", "set-flight-mode", "set-current-waypoint", "reboot", "diagnostics"],
         "vehicle_connected": bool(vehicle.get("connected", False)),
         "snapshot_timestamp": snapshot.get("timestamp"),
         "state_source": _state_source,
@@ -257,8 +270,103 @@ def _enum_name(value):
         return str(value)
 
 
+def _timestamp_from_value(value):
+    if value is None:
+        return None
+    try:
+        # .NET DateTime
+        return value.ToUniversalTime().Subtract(DateTime(1970, 1, 1)).TotalSeconds
+    except Exception:
+        pass
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _append_message(items, timestamp, text, source_name):
+    message = str(text or "").strip()
+    if not message:
+        return
+    items.append({
+        "timestamp": timestamp,
+        "message": message,
+        "source": source_name,
+    })
+
+
+def _read_message_collection(collection, source_name):
+    items = []
+    if collection is None:
+        return items
+    if isinstance(collection, basestring):
+        _append_message(items, None, collection, source_name)
+        return items
+
+    try:
+        keys = list(collection.Keys)
+        for key in keys:
+            try:
+                _append_message(items, _timestamp_from_value(key), collection[key], source_name)
+            except Exception:
+                pass
+        return items
+    except Exception:
+        pass
+
+    try:
+        for item in collection:
+            timestamp = None
+            message = None
+            try:
+                timestamp = _timestamp_from_value(getattr(item, "time"))
+            except Exception:
+                pass
+            try:
+                message = getattr(item, "message")
+            except Exception:
+                message = item
+            _append_message(items, timestamp, message, source_name)
+    except Exception:
+        pass
+    return items
+
+
+def _messages_payload():
+    items = []
+    sources_checked = []
+    for source_name, source in _state_candidates() + [("MAV", MAV)]:
+        for property_name in ("messages", "Messages", "message", "Message"):
+            sources_checked.append(source_name + "." + property_name)
+            try:
+                collection = getattr(source, property_name)
+            except Exception:
+                continue
+            items.extend(_read_message_collection(collection, source_name + "." + property_name))
+
+    deduped = []
+    seen = set()
+    for item in items:
+        key = (item.get("timestamp"), item.get("message"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+
+    deduped.sort(key=lambda item: item.get("timestamp") or 0, reverse=True)
+    return {
+        "ok": True,
+        "timestamp": _unix_time(),
+        "source": "mission-planner",
+        "count": len(deduped[:80]),
+        "messages": deduped[:80],
+        "sources_checked": sources_checked,
+    }
+
+
 def _mission_payload():
     waypoints = []
+    current_seq = None
     try:
         count = int(MAV.getWPCount())
     except Exception as exc:
@@ -269,6 +377,17 @@ def _mission_payload():
             "count": 0,
             "waypoints": [],
         }
+
+    try:
+        current_seq = _first_integer(
+            _active_state(),
+            ("wpno", "wp", "missioncurrent", "mission_current", "currentwp", "current_wp"),
+        )
+    except Exception:
+        current_seq = None
+
+    if current_seq is None:
+        current_seq = _first_integer(MAV, ("wpno", "wps_current", "currentwp", "current_wp"))
 
     for index in range(max(0, count)):
         try:
@@ -301,6 +420,7 @@ def _mission_payload():
         "timestamp": _unix_time(),
         "source": "mission-planner",
         "count": len(waypoints),
+        "current_seq": current_seq,
         "waypoints": waypoints,
     }
 
@@ -310,6 +430,41 @@ def _normalize_mode(mode):
     if normalized not in ALLOWED_FLIGHT_MODES:
         raise ValueError("Unsupported flight mode: " + normalized)
     return normalized
+
+
+def _mission_count():
+    try:
+        return int(MAV.getWPCount())
+    except Exception:
+        return 0
+
+
+def _set_current_waypoint(seq):
+    count = _mission_count()
+    if count <= 0:
+        raise RuntimeError("Mission Planner has no loaded mission")
+    if seq < 0 or seq >= count:
+        raise ValueError("Waypoint index {0} is outside mission range 0..{1}".format(seq, count - 1))
+
+    helper_names = ("setWPCurrent", "setWPCur", "setWPCurrentIndex", "setCurrentWP")
+    attempted = []
+    for helper_name in helper_names:
+        helper = getattr(MAV, helper_name, None)
+        if helper is None:
+            continue
+        attempted.append(helper_name)
+        try:
+            result = helper(seq)
+            if result is False:
+                raise RuntimeError(helper_name + " returned False")
+            return helper_name
+        except Exception as exc:
+            attempted.append(helper_name + ": " + str(exc))
+
+    raise RuntimeError(
+        "Mission Planner waypoint-current helper is unavailable. Tried: "
+        + (", ".join(attempted) if attempted else ", ".join(helper_names))
+    )
 
 
 def _execute_command(command):
@@ -360,6 +515,21 @@ def _execute_command(command):
             "request_id": command["request_id"],
             "command": command_name,
             "message": "Flight controller reboot requested; telemetry will disconnect temporarily",
+            "timestamp": _unix_time(),
+        }
+
+    if command_name == "set-current-waypoint":
+        try:
+            seq = int(payload.get("seq"))
+        except Exception:
+            raise ValueError("seq is required and must be an integer")
+        helper_name = _set_current_waypoint(seq)
+        return {
+            "ok": True,
+            "request_id": command["request_id"],
+            "command": command_name,
+            "seq": seq,
+            "message": "Current mission waypoint requested: WP {0} via {1}".format(seq, helper_name),
             "timestamp": _unix_time(),
         }
 
@@ -445,6 +615,9 @@ def _route_request(method, path, payload):
         mission = _mission_payload()
         return mission, 200 if mission.get("ok") else 503
 
+    if method == "GET" and path == "/api/v1/messages":
+        return _messages_payload(), 200
+
     if method == "POST" and path == "/api/v1/commands/set-flight-mode":
         return _queue_command("set-flight-mode", payload)
 
@@ -456,6 +629,9 @@ def _route_request(method, path, payload):
 
     if method == "POST" and path == "/api/v1/commands/reboot":
         return _queue_command("reboot", payload)
+
+    if method == "POST" and path == "/api/v1/commands/set-current-waypoint":
+        return _queue_command("set-current-waypoint", payload)
 
     return {
         "ok": False,
