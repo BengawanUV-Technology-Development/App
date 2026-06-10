@@ -78,6 +78,12 @@ def verify(base_url, test_mode=None, test_current_wp=None):
     assert messages_status == 200
     assert messages["ok"] is True
     assert isinstance(messages["messages"], list)
+    timestamps = [
+        item.get("timestamp")
+        for item in messages["messages"]
+        if item.get("timestamp") is not None
+    ]
+    assert timestamps == sorted(timestamps, reverse=True), "Messages must be newest first"
 
     command = None
     waypoint_command = None

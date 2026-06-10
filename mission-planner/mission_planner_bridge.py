@@ -40,7 +40,7 @@ from System.Text import Encoding
 
 HOST = "127.0.0.1"
 PORT = 5000
-BRIDGE_VERSION = "1.5.0"
+BRIDGE_VERSION = "1.5.1"
 SNAPSHOT_RATE_HZ = 10.0
 COMMAND_TIMEOUT_SECONDS = 5.0
 MAX_REQUEST_BYTES = 65536
@@ -318,13 +318,24 @@ def _read_message_collection(collection, source_name):
         for item in collection:
             timestamp = None
             message = None
+            # Mission Planner stores CurrentState.messages as tuples where
+            # Item1 is DateTime and Item2 is the displayed message text.
             try:
-                timestamp = _timestamp_from_value(getattr(item, "time"))
+                timestamp = _timestamp_from_value(getattr(item, "Item1"))
+                message = getattr(item, "Item2")
             except Exception:
                 pass
             try:
-                message = getattr(item, "message")
+                if timestamp is None:
+                    timestamp = _timestamp_from_value(getattr(item, "time"))
             except Exception:
+                pass
+            try:
+                if message is None:
+                    message = getattr(item, "message")
+            except Exception:
+                pass
+            if message is None:
                 message = item
             _append_message(items, timestamp, message, source_name)
     except Exception:

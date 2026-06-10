@@ -301,6 +301,10 @@ class MissionPlannerAdapter:
                 "message": text,
                 "source": item.get("source") or raw.get("source", "mission-planner"),
             })
+        messages.sort(
+            key=lambda item: item.get("timestamp") if item.get("timestamp") is not None else 0,
+            reverse=True,
+        )
         return {
             "ok": True,
             "timestamp": raw.get("timestamp", time.time()),

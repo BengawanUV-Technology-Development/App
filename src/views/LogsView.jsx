@@ -15,10 +15,16 @@ function messageTone(message) {
 function LogsView() {
   const { missionMessages, refreshMessages } = useMissionMessages();
   const [filter, setFilter] = useState("all");
-  const messages = useMemo(
-    () => (missionMessages.messages || []).filter((item) => filter === "all" || messageTone(item.message) === filter),
-    [filter, missionMessages.messages],
-  );
+  const messages = useMemo(() => (
+    (missionMessages.messages || [])
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => filter === "all" || messageTone(item.message) === filter)
+      .sort((left, right) => {
+        const timestampDifference = Number(right.item.timestamp || 0) - Number(left.item.timestamp || 0);
+        return timestampDifference || right.index - left.index;
+      })
+      .map(({ item }) => item)
+  ), [filter, missionMessages.messages]);
 
   return (
     <section className="logs-console-view">
