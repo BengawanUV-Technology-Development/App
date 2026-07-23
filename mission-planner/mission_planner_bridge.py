@@ -72,6 +72,11 @@ _snapshot = {}
 _command_queue = queue.Queue()
 _state_source = "cs"
 
+MISSION_CACHE_TTL_SECONDS = 5.0
+_mission_cache_lock = threading.Lock()
+_mission_cache = None
+_mission_cache_at = 0.0
+
 
 def _unix_time():
     epoch = DateTime(1970, 1, 1)
@@ -376,6 +381,19 @@ def _messages_payload():
 
 
 def _mission_payload():
+    global _mission_cache, _mission_cache_at
+
+    now = time.time()
+    with _mission_cache_lock:
+        if (
+            _mission_cache is not None
+            and (now - _mission_cache_at) < MISSION_CACHE_TTL_SECONDS
+        ):
+            cached = dict(_mission_cache)
+            cached["cached"] = True
+            cached["cache_age_seconds"] = now - _mission_cache_at
+            return cached
+
     waypoints = []
     current_seq = None
     try:
@@ -426,14 +444,20 @@ def _mission_payload():
                 "error": str(exc),
             })
 
-    return {
+    payload = {
         "ok": True,
         "timestamp": _unix_time(),
         "source": "mission-planner",
         "count": len(waypoints),
         "current_seq": current_seq,
         "waypoints": waypoints,
+        "cached": False,
+        "cache_age_seconds": 0.0,
     }
+    with _mission_cache_lock:
+        _mission_cache = payload
+        _mission_cache_at = now
+    return dict(payload)
 
 
 def _normalize_mode(mode):
