@@ -1,0 +1,54 @@
+.draggable-modal {
+  position: fixed;
+  z-index: 9999;
+  background-color: var(--bg-surface-2);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  width: 350px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+}
+
+.draggable-modal-header {
+  background-color: var(--bg-surface-3);
+  padding: 8px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: grab;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.draggable-modal-header:active {
+  cursor: grabbing;
+}
+
+.draggable-modal-title {
+  font-size: 0.85rem;
+  font-weight: bold;
+  color: var(--text-primary);
+}
+
+.draggable-modal-close {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 1.2rem;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.draggable-modal-close:hover {
+  color: var(--color-danger);
+}
+
+.draggable-modal-content {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}

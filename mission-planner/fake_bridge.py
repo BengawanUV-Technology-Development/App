@@ -74,6 +74,22 @@ class FakeBridgeState:
                 "voltage_v": 22.4,
                 "current_a": 4.2,
             },
+            "ekf": {
+                "ok": True,
+                "velocity_variance": 0.1,
+                "pos_variance": 0.2,
+                "compass_variance": 0.1,
+            },
+            "vibration": {
+                "x": 0.5,
+                "y": 0.4,
+                "z": 1.2,
+            },
+            "status": {
+                "dist_to_home_m": elapsed * 10,
+                "time_in_air_s": elapsed,
+                "time_since_boot_s": elapsed + 600,
+            },
         }
 
 

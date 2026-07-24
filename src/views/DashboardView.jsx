@@ -8,6 +8,10 @@ import HeadingIndicator from "../components/hud/HeadingIndicator";
 import { useCommand } from "../hooks/useCommand";
 import { useMission } from "../hooks/useMission";
 import { useMissionMessages } from "../hooks/useMissionMessages";
+import BatteryMonitor from "../components/telemetry/BatteryMonitor";
+import EkfVibeBar from "../components/telemetry/EkfVibeBar";
+import DataQuick from "../components/telemetry/DataQuick";
+import EkfVibeModal from "../components/telemetry/EkfVibeModal";
 
 const OperationalMap = lazy(() => import("../components/map/OperationalMap"));
 
@@ -82,6 +86,7 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
   const [eventLog, setEventLog] = useState([]);
   const [selectedWaypointSeq, setSelectedWaypointSeq] = useState("1");
   const [centerMode, setCenterMode] = useState("balanced");
+  const [isEkfModalOpen, setIsEkfModalOpen] = useState(false);
 
   const pushEvent = (tone, text) => {
     setEventLog((items) => [{ tone, text, ts: Date.now() / 1000 }, ...items].slice(0, 40));
@@ -365,14 +370,16 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
           <Badge tone={telemetry.armed ? "danger" : "success"}>SYS: {telemetry.armed ? "ARMED" : "DISARMED"}</Badge>
         </div>
 
+        <DataQuick telemetry={telemetry} />
+        <BatteryMonitor percent={telemetry.battery_percent} voltage={telemetry.battery_voltage_v} current={telemetry.battery_current_a} />
+        <EkfVibeBar telemetry={telemetry} onClick={() => setIsEkfModalOpen(true)} />
+
         <section className="readout-panel">
-          <h3>Flight Controller</h3>
+          <h3>Flight Data</h3>
           <dl>
             <div><dt>MODE</dt><dd>{telemetry.flight_mode || "-"}</dd></div>
             <div><dt>ALT (AGL)</dt><dd>{formatNumber(telemetry.alt)} m</dd></div>
-            <div><dt>GND SPEED</dt><dd>{formatNumber(telemetry.groundspeed_m_s)} m/s</dd></div>
             <div><dt>V/S</dt><dd>{formatNumber(telemetry.v_speed_m_s)} m/s</dd></div>
-            <div><dt>BAT</dt><dd>{formatBattery(telemetry.battery_percent)}</dd></div>
             <div><dt>GPS</dt><dd>{hasGps ? "3D Fix" : "-"}</dd></div>
           </dl>
         </section>
@@ -419,6 +426,13 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
           </div>
         </section>
       </aside>
+      
+      {isEkfModalOpen && (
+        <EkfVibeModal 
+          telemetry={telemetry} 
+          onClose={() => setIsEkfModalOpen(false)} 
+        />
+      )}
     </section>
   );
 }

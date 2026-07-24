@@ -60,6 +60,17 @@ class MissionPlannerAdapter:
             "gps_status": None,
             "gps_hdop": None,
             "satellites": None,
+            "dist_to_home_m": None,
+            "time_in_air_s": None,
+            "time_since_boot_s": None,
+            "ekf_ok": None,
+            "ekf_flags": None,
+            "ekf_velocity_variance": None,
+            "ekf_pos_variance": None,
+            "ekf_compass_variance": None,
+            "vibration_x": None,
+            "vibration_y": None,
+            "vibration_z": None,
             "last_update": None,
             "error": None,
             "source": "mission-planner",
@@ -89,6 +100,9 @@ class MissionPlannerAdapter:
         attitude = raw.get("attitude") or {}
         velocity = raw.get("velocity") or {}
         battery = raw.get("battery") or {}
+        ekf = raw.get("ekf") or {}
+        vibration = raw.get("vibration") or {}
+        status = raw.get("status") or {}
         bridge_vehicle_connected = bool(vehicle.get("connected"))
         flight_mode = vehicle.get("flight_mode")
         mode_valid = str(flight_mode or "").strip().upper() not in {"", "UNKNOWN", "NONE"}
@@ -122,6 +136,17 @@ class MissionPlannerAdapter:
             "gps_status": position.get("gps_status"),
             "gps_hdop": position.get("gps_hdop"),
             "satellites": position.get("satellites"),
+            "dist_to_home_m": status.get("dist_to_home_m"),
+            "time_in_air_s": status.get("time_in_air_s"),
+            "time_since_boot_s": status.get("time_since_boot_s"),
+            "ekf_ok": ekf.get("ok"),
+            "ekf_flags": ekf.get("flags"),
+            "ekf_velocity_variance": ekf.get("velocity_variance"),
+            "ekf_pos_variance": ekf.get("pos_variance"),
+            "ekf_compass_variance": ekf.get("compass_variance"),
+            "vibration_x": vibration.get("x"),
+            "vibration_y": vibration.get("y"),
+            "vibration_z": vibration.get("z"),
             "last_update": raw.get("timestamp"),
             "error": None,
             "source": raw.get("source", "mission-planner"),

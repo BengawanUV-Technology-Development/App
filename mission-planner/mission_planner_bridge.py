@@ -215,6 +215,23 @@ def _build_snapshot():
             "voltage_v": _read_number(state, "battery_voltage"),
             "current_a": _read_number(state, "current"),
         },
+        "ekf": {
+            "ok": bool(_read_state(state, "ekf_ok", True)),
+            "flags": _read_integer(state, "ekfstatus"),
+            "velocity_variance": _read_number(state, "vw"),
+            "pos_variance": _read_number(state, "pe"),
+            "compass_variance": _read_number(state, "me"),
+        },
+        "vibration": {
+            "x": _read_number(state, "vibex"),
+            "y": _read_number(state, "vibey"),
+            "z": _read_number(state, "vibez"),
+        },
+        "status": {
+            "dist_to_home_m": _read_number(state, "distToHome"),
+            "time_in_air_s": _read_number(state, "timeInAir"),
+            "time_since_boot_s": (_read_number(state, "time_boot_ms") or 0) / 1000.0,
+        },
     }
 
 
