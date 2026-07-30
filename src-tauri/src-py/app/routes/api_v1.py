@@ -20,16 +20,39 @@ def _get_adapter():
 
 @api_v1_bp.route("/health", methods=["GET"])
 def health():
+    """
+    Get system health and status.
+    ---
+    responses:
+      200:
+        description: Returns the connection status and address
+    """
     return jsonify(_get_adapter().health())
 
 
 @api_v1_bp.route("/telemetry", methods=["GET"])
 def telemetry():
+    """
+    Get full flight telemetry.
+    ---
+    responses:
+      200:
+        description: Returns current position, attitude, speed, and battery
+    """
     return jsonify(_get_adapter().snapshot())
 
 
 @api_v1_bp.route("/mission", methods=["GET"])
 def mission():
+    """
+    Get current mission progress.
+    ---
+    responses:
+      200:
+        description: Returns mission waypoints and progress
+      502:
+        description: Mission Planner connection error
+    """
     try:
         return jsonify(_get_adapter().mission())
     except MissionPlannerBridgeError as exc:
@@ -50,6 +73,27 @@ def messages():
 
 @api_v1_bp.route("/commands/set-flight-mode", methods=["POST"])
 def set_flight_mode():
+    """
+    Change the UAV flight mode.
+    ---
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            mode:
+              type: string
+              example: "GUIDED"
+    responses:
+      200:
+        description: Command accepted
+      400:
+        description: Invalid mode
+      502:
+        description: MAVLink error
+    """
     payload = request.get_json(silent=True) or {}
     mode = str(payload.get("mode") or "").strip()
     if not mode:
@@ -103,14 +147,122 @@ def _proxy_simple_command(command):
 
 @api_v1_bp.route("/commands/arm", methods=["POST"])
 def arm():
+    """
+    Arm the vehicle.
+    ---
+    responses:
+      200:
+        description: Vehicle armed successfully
+    """
     return _proxy_simple_command("arm")
 
 
 @api_v1_bp.route("/commands/disarm", methods=["POST"])
 def disarm():
+    """
+    Disarm the vehicle.
+    ---
+    responses:
+      200:
+        description: Vehicle disarmed successfully
+    """
     return _proxy_simple_command("disarm")
 
 
 @api_v1_bp.route("/commands/reboot", methods=["POST"])
 def reboot():
+    """
+    Reboot the flight controller.
+    ---
+    responses:
+      200:
+        description: Vehicle rebooted
+    """
     return _proxy_simple_command("reboot")
+
+
+@api_v1_bp.route("/detection/ingest", methods=["POST"])
+def ingest_detection():
+    """
+    Ingest detection data from CV (Jetson/Mock).
+    ---
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            detection_id:
+              type: string
+              example: "DET-20260728-001"
+            timestamp:
+              type: string
+              example: "2026-07-28T15:30:00Z"
+            drone_id:
+              type: string
+              example: "BENGAWAN-UAV-01"
+            reconstructed_location:
+              type: object
+              properties:
+                latitude:
+                  type: number
+                longitude:
+                  type: number
+                estimated_margin_error_m:
+                  type: number
+            detection_data:
+              type: object
+              properties:
+                class:
+                  type: string
+                count:
+                  type: integer
+                confidence_avg:
+                  type: number
+    responses:
+      200:
+        description: Detection ingested successfully
+      400:
+        description: Invalid payload
+    """
+    payload = request.get_json(silent=True)
+    if not payload:
+        return jsonify({"ok": False, "error": "Invalid JSON payload"}), 400
+        
+    # TODO: Phase 3 LLM trigger goes here.
+    
+    # 1. Fetch telemetry state for context aggregation
+    telemetry_state = _get_adapter().snapshot()
+    
+    # 2. Aggregate data
+    ingested_data = {
+        "cv_payload": payload,
+        "telemetry_context": telemetry_state
+    }
+    
+    print("\n" + "="*50)
+    print("[AI AGENT INGESTION] New Detection Received!")
+    print(f"Target ID: {payload.get('detection_id')}")
+    print(f"Location: {payload.get('reconstructed_location')}")
+    print(f"Drone Altitude: {telemetry_state.get('altitude')}m")
+    print("="*50 + "\n")
+    
+    # 3. Trigger Priority Agent LLM Evaluation
+    from app.agents.priority_agent import evaluate_detection
+    ai_decision = evaluate_detection(ingested_data)
+    
+    # 4. Trigger Dispatcher if emergency
+    priority_level = ai_decision.get("priority_level", "")
+    if priority_level in ["HIGH", "CRITICAL"]:
+        from app.agents.telegram_dispatcher import send_telegram_alert
+        from app.agents.notion_dispatcher import send_notion_task
+        send_telegram_alert(ai_decision, payload)
+        send_notion_task(ai_decision, payload)
+    
+    return jsonify({
+        "ok": True, 
+        "message": "Detection ingested and evaluated", 
+        "data": ingested_data,
+        "ai_decision": ai_decision
+    })

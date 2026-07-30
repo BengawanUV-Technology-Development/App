@@ -3,9 +3,13 @@ import logging
 import os
 import time
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from flask import Flask, request
 from flask_cors import CORS
 from flask_sock import Sock
+from flasgger import Swagger
 
 from app.routes.api_v1 import api_v1_bp, init_api_v1_routes
 from app.routes.logs import init_log_routes, logs_bp
@@ -16,6 +20,7 @@ from app.utils.session_log import SessionLogStore
 API_PORT = int(os.getenv("API_PORT", "5001"))
 
 app = Flask(__name__)
+swagger = Swagger(app)
 CORS(app)
 sock = Sock(app)
 

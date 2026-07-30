@@ -23,12 +23,33 @@ def _get_store_or_abort():
 
 @logs_bp.route("/summary", methods=["GET"])
 def log_summary():
+    """
+    Get session log summary.
+    ---
+    responses:
+      200:
+        description: Returns a summary of the current session
+    """
     store = _get_store_or_abort()
     return jsonify({"ok": True, "session": store.summary()})
 
 
 @logs_bp.route("/recent", methods=["GET"])
 def recent_logs():
+    """
+    Get recent log events.
+    ---
+    parameters:
+      - name: limit
+        in: query
+        type: integer
+        required: false
+        default: 50
+        description: Maximum number of events to return
+    responses:
+      200:
+        description: Returns a list of recent log events
+    """
     store = _get_store_or_abort()
     try:
         limit = int(request.args.get("limit", "50"))
