@@ -89,4 +89,4 @@ def _print_startup_banner():
 if __name__ == "__main__":
     _print_startup_banner()
     mission_planner_adapter.start()
-    app.run(host="127.0.0.1", port=API_PORT, threaded=True)
+    app.run(host="0.0.0.0", port=API_PORT, threaded=True)

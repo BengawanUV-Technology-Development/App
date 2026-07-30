@@ -57,24 +57,32 @@ The project is evolving into a specialized SAR tool with the following intellige
 
 ### Running the Application
 
-This project requires both the Python backend and the Tauri frontend to be running simultaneously.
+This project utilizes Docker for the Python backend and Tauri for the frontend. Both must run simultaneously.
 
-#### 1. Start the Python Backend
+#### 1. Start the Backend Services (Docker)
 ```bash
-cd src-tauri/src-py
-# Recommended: Create a virtual environment
-python -m venv .venv
-source .venv/bin/activate # or .venv\Scripts\activate on Windows
-pip install -r requirements.txt
-python main.py
+# In the project root
+docker compose up -d
 ```
-*Note: The default `MAVSDK_ADDRESS` is `serial://COM9:115200`. You can override this using environment variables.*
+*Note: The backend runs on port 5001 and communicates with the Mission Planner bridge via `host.docker.internal:5000` (defined in `.env`).*
 
-#### 2. Start the Tauri Frontend
+#### 2. Start the Frontend UI (Tauri)
 ```bash
 # In the project root
 npm install
 npm run tauri dev
+```
+
+#### Alternative: Manual Setup (Without Docker)
+If Docker is unavailable, you can run the backend natively:
+1. Change `MISSION_PLANNER_API_URL` in `.env` to `http://127.0.0.1:5000`.
+2. Run the following:
+```bash
+cd src-tauri/src-py
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+python main.py
 ```
 
 ## Development Conventions

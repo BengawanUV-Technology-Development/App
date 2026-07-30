@@ -818,7 +818,7 @@ def _server_loop(listener):
 def _start_server():
     _stop_previous_server()
 
-    listener = TcpListener(IPAddress.Loopback, PORT)
+    listener = TcpListener(IPAddress.Any, PORT)
     listener.Start()
     bridge_runtime._buv_bridge_listener = listener
 

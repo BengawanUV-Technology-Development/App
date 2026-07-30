@@ -17,21 +17,63 @@ Flight Controller
   -> React + Tauri Frontend
 ```
 
-## Menjalankan
+## Setup and Installation
 
-1. Jalankan `mission-planner/mission_planner_bridge.py` dari Mission Planner.
-2. Jalankan backend:
+This project utilizes Docker to containerize the Python backend and AI dependencies, ensuring a consistent development environment.
 
-   ```powershell
+### Prerequisites
+- Node.js & npm
+- Docker Desktop
+- Mission Planner (Windows)
+
+### Quick Start
+
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd <repository-folder>
+   ```
+
+2. **Configure Environment Variables**
+   ```bash
+   cp src-tauri/src-py/.env.example src-tauri/src-py/.env
+   ```
+   *Edit `src-tauri/src-py/.env` and insert your Gemini, Notion, and Telegram API keys.*
+
+3. **Start the Mission Planner Bridge**
+   Open Mission Planner, navigate to the Scripts tab, and run `mission-planner/mission_planner_bridge.py`. This bridge is required to forward telemetry data to the backend.
+
+4. **Start the Backend Services (Docker)**
+   ```bash
+   docker compose up -d
+   ```
+   *The Flask API and AI Orchestrator will run in the background on port 5001.*
+
+5. **Start the Frontend UI (Tauri)**
+   ```bash
+   npm install
+   npm run tauri dev
+   ```
+
+### Alternative: Manual Setup (Without Docker)
+
+If you prefer to run the backend natively using a Python virtual environment:
+
+1. **Adjust Environment Variables**: Ensure `MISSION_PLANNER_API_URL` in `src-tauri/src-py/.env` is set to `http://127.0.0.1:5000` (instead of `host.docker.internal`).
+2. **Start the Backend**:
+   ```bash
    cd src-tauri/src-py
-   .\.venv\Scripts\python.exe main.py
+   python -m venv .venv
+   .\.venv\Scripts\activate   # Use `source .venv/bin/activate` on Linux/Mac
+   pip install -r requirements.txt
+   python main.py
    ```
 
-3. Jalankan frontend:
-
-   ```powershell
-   npm run dev -- --host 127.0.0.1
-   ```
+### Testing the AI Pipeline
+To simulate a target detection from the companion computer (e.g., Jetson Nano):
+```bash
+python src-tauri/src-py/mock_jetson.py
+```
 
 ## Endpoint Backend
 
