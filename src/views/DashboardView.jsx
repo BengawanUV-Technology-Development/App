@@ -13,6 +13,7 @@ import EkfVibeBar from "../components/telemetry/EkfVibeBar";
 import DataQuick from "../components/telemetry/DataQuick";
 import EkfVibeModal from "../components/telemetry/EkfVibeModal";
 import FlightRecorderControl from "../components/recording/FlightRecorderControl";
+import CameraPreview from "../components/recording/CameraPreview";
 
 const OperationalMap = lazy(() => import("../components/map/OperationalMap"));
 
@@ -324,20 +325,7 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
           <div className="camera-readout">
             JETSON ORIN SUPER | CAM 1 | SAR DETECTION | LAT {formatCoordinate(telemetry.lat, 5)} LON {formatCoordinate(telemetry.lng, 5)}
           </div>
-          <div className="vision-frame">
-            <div className="flood-zone flood-zone-a" />
-            <div className="flood-zone flood-zone-b" />
-            <div className="detection-box detection-primary">
-              <span>VICTIM CANDIDATE</span>
-              <strong>0.87</strong>
-            </div>
-            <div className="detection-box detection-secondary">
-              <span>DEBRIS / RAFT</span>
-              <strong>0.64</strong>
-            </div>
-            <div className="vision-reticle" />
-            <div className="vision-caption">LIVE VIDEO FEED PLACEHOLDER</div>
-          </div>
+          <CameraPreview />
         </section>
 
         <section className="map-panel-tactical sar-map-panel">
@@ -404,12 +392,12 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
           <dl>
             <div><dt>DEVICE</dt><dd>JETSON ORIN</dd></div>
             <div><dt>MODEL</dt><dd>SAR DETECT</dd></div>
-            <div><dt>STREAM</dt><dd>PLACEHOLDER</dd></div>
-            <div><dt>DETECTIONS</dt><dd>2 CANDIDATES</dd></div>
+            <div><dt>STREAM</dt><dd>VRX / EASYCAP</dd></div>
+            <div><dt>DETECTIONS</dt><dd>NOT CONNECTED</dd></div>
           </dl>
           <div className="vision-detection-summary">
-            <span>Victim candidate <strong>1</strong></span>
-            <span>Debris / raft candidate <strong>1</strong></span>
+            <span>Live preview <strong>ACTIVE</strong></span>
+            <span>Frame-aligned recording <strong>READY</strong></span>
           </div>
         </section>
 

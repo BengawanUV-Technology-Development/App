@@ -3228,3 +3228,86 @@ button:hover:not(:disabled) {
   color: #ff7979;
   overflow-wrap: anywhere;
 }
+
+.live-camera-frame {
+  position: relative;
+  overflow: hidden;
+  background: #020608;
+}
+
+.camera-preview-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+}
+
+.camera-preview-image.is-live {
+  opacity: 1;
+}
+
+.camera-preview-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: #8ba0aa;
+  text-align: center;
+  font-family: var(--font-mono);
+}
+
+.camera-preview-empty strong {
+  color: #dcecf2;
+  letter-spacing: 0.12em;
+}
+
+.camera-preview-empty span {
+  max-width: 560px;
+  color: #ff8b72;
+  overflow-wrap: anywhere;
+}
+
+.camera-preview-controls {
+  position: absolute;
+  z-index: 4;
+  right: 10px;
+  bottom: 10px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  background: rgba(2, 8, 11, 0.78);
+  border: 1px solid rgba(139, 170, 182, 0.3);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+}
+
+.camera-preview-controls span.is-live {
+  color: #67e8a5;
+}
+
+.camera-preview-controls div {
+  display: flex;
+  gap: 5px;
+}
+
+.camera-preview-controls button {
+  padding: 4px 7px;
+  border: 1px solid rgba(139, 170, 182, 0.5);
+  background: rgba(14, 28, 34, 0.9);
+  color: #dcecf2;
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+.camera-preview-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}

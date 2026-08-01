@@ -8,7 +8,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 
 class FlightRecorderError(RuntimeError):
@@ -16,7 +16,7 @@ class FlightRecorderError(RuntimeError):
 
 
 class FlightRecorder:
-    """Owns the capture device and writes frame-aligned telemetry."""
+    """One EasyCAP owner shared by MJPEG preview and the flight recorder."""
 
     def __init__(self, telemetry_provider: Callable[[], dict], recordings_dir: str | Path | None = None):
         self.telemetry_provider = telemetry_provider
@@ -29,13 +29,38 @@ class FlightRecorder:
         self.requested_fps = float(os.getenv("VRX_CAPTURE_FPS", "25"))
         self.video_standard = os.getenv("VRX_VIDEO_STANDARD", "PAL")
         self.codec = os.getenv("VRX_VIDEO_CODEC", "mp4v")
-        self._lock = threading.Lock()
-        self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._state = self._idle_state()
+        self.jpeg_quality = int(os.getenv("VRX_PREVIEW_JPEG_QUALITY", "75"))
+
+        self._lock = threading.RLock()
+        self._frame_ready = threading.Condition(self._lock)
+        self._camera_stop = threading.Event()
+        self._camera_thread: threading.Thread | None = None
+        self._latest_jpeg: bytes | None = None
+        self._preview_version = 0
+        self._camera_state = self._empty_camera_state()
+        self._state = self._idle_recording_state()
+
+        # These resources are created and used by the capture thread only.
+        self._writer = None
+        self._telemetry_file = None
+        self._recording_monotonic_start: float | None = None
+        self._capture_actual: dict = {}
 
     @staticmethod
-    def _idle_state() -> dict:
+    def _empty_camera_state() -> dict:
+        return {
+            "camera_running": False,
+            "camera_status": "STOPPED",
+            "camera_error": None,
+            "camera_index": None,
+            "width": None,
+            "height": None,
+            "fps": None,
+            "preview_frame_count": 0,
+        }
+
+    @staticmethod
+    def _idle_recording_state() -> dict:
         return {
             "recording": False,
             "status": "IDLE",
@@ -45,32 +70,83 @@ class FlightRecorder:
             "ended_at": None,
             "frame_count": 0,
             "error": None,
+            "label": None,
         }
 
     def status(self) -> dict:
         with self._lock:
-            state = dict(self._state)
+            state = {**self._state, **self._camera_state}
         if state["recording"] and state["started_at"]:
             state["duration_seconds"] = max(0, time.time() - state["started_at"])
         else:
-            start = state.get("started_at")
-            end = state.get("ended_at")
+            start, end = state.get("started_at"), state.get("ended_at")
             state["duration_seconds"] = max(0, end - start) if start and end else 0
         return state
 
+    def start_camera(self) -> dict:
+        with self._lock:
+            if self._camera_thread and self._camera_thread.is_alive():
+                return self.status()
+            self._camera_stop.clear()
+            self._latest_jpeg = None
+            self._camera_state = {
+                **self._empty_camera_state(),
+                "camera_status": "STARTING",
+                "camera_index": self.camera_index,
+            }
+            self._camera_thread = threading.Thread(
+                target=self._capture_loop,
+                daemon=True,
+                name="vrx-easycap-capture",
+            )
+            self._camera_thread.start()
+        return self.status()
+
+    def stop_camera(self) -> dict:
+        with self._lock:
+            if self._state["recording"]:
+                raise FlightRecorderError("Stop and save the active recording before stopping the camera")
+            thread = self._camera_thread
+            if not thread or not thread.is_alive():
+                self._camera_state.update(camera_running=False, camera_status="STOPPED")
+                return self.status()
+            self._camera_state["camera_status"] = "STOPPING"
+            self._camera_stop.set()
+        thread.join(timeout=10)
+        if thread.is_alive():
+            raise FlightRecorderError("Camera did not stop within 10 seconds")
+        return self.status()
+
+    def preview_stream(self) -> Iterator[bytes]:
+        self.start_camera()
+        with self._lock:
+            last_version = self._preview_version - 1 if self._latest_jpeg is not None else self._preview_version
+        while True:
+            with self._frame_ready:
+                self._frame_ready.wait_for(
+                    lambda: self._preview_version != last_version
+                    or self._camera_state["camera_status"] in {"FAILED", "STOPPED"},
+                    timeout=5,
+                )
+                jpeg = self._latest_jpeg
+                version = self._preview_version
+                camera_status = self._camera_state["camera_status"]
+            if jpeg is not None and version != last_version:
+                last_version = version
+                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+            elif camera_status in {"FAILED", "STOPPED"}:
+                return
+
     def start(self, label: str | None = None) -> dict:
         with self._lock:
-            if self._thread and self._thread.is_alive():
+            if self._state["recording"]:
                 raise FlightRecorderError("A flight recording is already active")
-
             now = datetime.now(timezone.utc)
-            safe_stamp = now.strftime("%Y%m%dT%H%M%SZ")
-            session_id = f"flight-{safe_stamp}-{uuid.uuid4().hex[:8]}"
+            session_id = f"flight-{now.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
             session_dir = self.recordings_dir / session_id
             session_dir.mkdir(parents=True, exist_ok=False)
-            self._stop_event.clear()
             self._state = {
-                **self._idle_state(),
+                **self._idle_recording_state(),
                 "recording": True,
                 "status": "STARTING",
                 "session_id": session_id,
@@ -78,28 +154,21 @@ class FlightRecorder:
                 "started_at": now.timestamp(),
                 "label": (label or "").strip() or None,
             }
-            self._thread = threading.Thread(
-                target=self._record_loop,
-                args=(session_dir,),
-                daemon=True,
-                name=f"flight-recorder-{session_id}",
-            )
-            self._thread.start()
+            self._write_metadata(session_dir / "metadata.json")
+        self.start_camera()
         return self.status()
 
     def stop(self) -> dict:
-        with self._lock:
-            thread = self._thread
-            if not thread or not thread.is_alive():
+        with self._frame_ready:
+            if not self._state["recording"]:
                 raise FlightRecorderError("No flight recording is active")
             self._state["status"] = "STOPPING"
-            self._stop_event.set()
-        thread.join(timeout=10)
-        if thread.is_alive():
+            completed = self._frame_ready.wait_for(lambda: not self._state["recording"], timeout=10)
+        if not completed:
             raise FlightRecorderError("Recorder did not stop within 10 seconds")
         return self.status()
 
-    def _write_metadata(self, path: Path, extra: dict | None = None):
+    def _write_metadata(self, path: Path):
         state = self.status()
         metadata = {
             "schema_version": "1.0",
@@ -126,22 +195,72 @@ class FlightRecorder:
                 "requested_fps": self.requested_fps,
                 "video_standard": self.video_standard,
                 "codec": self.codec,
+                **self._capture_actual,
             },
             "host": {"system": platform.system(), "release": platform.release()},
             "error": state["error"],
         }
-        if extra:
-            metadata.update(extra)
         temporary_path = path.with_suffix(".json.tmp")
         temporary_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary_path.replace(path)
 
-    def _record_loop(self, session_dir: Path):
+    def _begin_recording(self, cv2, width: int, height: int, fps: float):
+        session_dir = Path(self._state["session_dir"])
+        self._writer = cv2.VideoWriter(
+            str(session_dir / "video.mp4"),
+            cv2.VideoWriter_fourcc(*self.codec),
+            fps,
+            (width, height),
+        )
+        if not self._writer.isOpened():
+            self._writer.release()
+            self._writer = None
+            raise FlightRecorderError(f"Cannot create video.mp4 with codec {self.codec}")
+        self._telemetry_file = (session_dir / "telemetry.jsonl").open("a", encoding="utf-8", buffering=1)
+        self._recording_monotonic_start = time.monotonic()
+        with self._lock:
+            self._state["status"] = "RECORDING"
+        self._write_metadata(session_dir / "metadata.json")
+
+    def _record_frame(self, frame, captured_at: float):
+        self._writer.write(frame)
+        with self._lock:
+            frame_id = self._state["frame_count"]
+            self._state["frame_count"] += 1
+        snapshot = self.telemetry_provider()
+        row = {
+            "frame_id": frame_id,
+            "captured_at_unix": captured_at,
+            "elapsed_monotonic_seconds": time.monotonic() - self._recording_monotonic_start,
+            "telemetry_version": snapshot.get("version"),
+            "telemetry_received_at_unix": snapshot.get("timestamp"),
+            "telemetry_stale": snapshot.get("stale"),
+            "gps_valid": snapshot.get("gps_valid"),
+            "telemetry": snapshot.get("telemetry", snapshot),
+        }
+        self._telemetry_file.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    def _finish_recording(self, error: str | None = None):
+        if self._writer is not None:
+            self._writer.release()
+            self._writer = None
+        if self._telemetry_file is not None:
+            self._telemetry_file.close()
+            self._telemetry_file = None
+        with self._frame_ready:
+            session_dir = self._state.get("session_dir")
+            self._state.update(
+                recording=False,
+                status="FAILED" if error else "COMPLETED",
+                ended_at=time.time(),
+                error=error,
+            )
+            self._frame_ready.notify_all()
+        if session_dir:
+            self._write_metadata(Path(session_dir) / "metadata.json")
+
+    def _capture_loop(self):
         capture = None
-        writer = None
-        metadata_path = session_dir / "metadata.json"
-        telemetry_path = session_dir / "telemetry.jsonl"
-        actual_capture = {}
         try:
             try:
                 import cv2
@@ -162,58 +281,55 @@ class FlightRecorder:
             fps = float(capture.get(cv2.CAP_PROP_FPS) or self.requested_fps)
             if fps < 1 or fps > 60:
                 fps = self.requested_fps
-
-            writer = cv2.VideoWriter(
-                str(session_dir / "video.mp4"),
-                cv2.VideoWriter_fourcc(*self.codec),
-                fps,
-                (width, height),
-            )
-            if not writer.isOpened():
-                raise FlightRecorderError(f"Cannot create video.mp4 with codec {self.codec}")
-
-            actual_capture = {"actual_width": width, "actual_height": height, "actual_fps": fps}
+            self._capture_actual = {"actual_width": width, "actual_height": height, "actual_fps": fps}
             with self._lock:
-                self._state["status"] = "RECORDING"
-            self._write_metadata(metadata_path, {"capture_actual": actual_capture})
+                self._camera_state.update(
+                    camera_running=True,
+                    camera_status="LIVE",
+                    camera_error=None,
+                    width=width,
+                    height=height,
+                    fps=fps,
+                )
 
-            start_monotonic = time.monotonic()
-            with telemetry_path.open("a", encoding="utf-8", buffering=1) as telemetry_file:
-                while not self._stop_event.is_set():
-                    success, frame = capture.read()
-                    captured_at = time.time()
-                    elapsed = time.monotonic() - start_monotonic
-                    if not success or frame is None:
-                        raise FlightRecorderError("EasyCAP stopped returning video frames")
-                    if frame.shape[1] != width or frame.shape[0] != height:
-                        frame = cv2.resize(frame, (width, height))
+            while not self._camera_stop.is_set():
+                success, frame = capture.read()
+                captured_at = time.time()
+                if not success or frame is None:
+                    raise FlightRecorderError("EasyCAP stopped returning video frames")
+                if frame.shape[1] != width or frame.shape[0] != height:
+                    frame = cv2.resize(frame, (width, height))
 
-                    writer.write(frame)
-                    with self._lock:
-                        frame_id = self._state["frame_count"]
-                        self._state["frame_count"] += 1
-                    snapshot = self.telemetry_provider()
-                    row = {
-                        "frame_id": frame_id,
-                        "captured_at_unix": captured_at,
-                        "elapsed_monotonic_seconds": elapsed,
-                        "telemetry_version": snapshot.get("version"),
-                        "telemetry_received_at_unix": snapshot.get("timestamp"),
-                        "telemetry_stale": snapshot.get("stale"),
-                        "gps_valid": snapshot.get("gps_valid"),
-                        "telemetry": snapshot.get("telemetry", snapshot),
-                    }
-                    telemetry_file.write(json.dumps(row, ensure_ascii=False) + "\n")
+                encoded, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
+                if encoded:
+                    with self._frame_ready:
+                        self._latest_jpeg = jpeg.tobytes()
+                        self._preview_version += 1
+                        self._camera_state["preview_frame_count"] += 1
+                        self._frame_ready.notify_all()
 
-            with self._lock:
-                self._state.update(recording=False, status="COMPLETED", ended_at=time.time())
+                with self._lock:
+                    recording_status = self._state["status"]
+                if recording_status == "STARTING":
+                    self._begin_recording(cv2, width, height, fps)
+                    recording_status = "RECORDING"
+                if recording_status == "RECORDING":
+                    self._record_frame(frame, captured_at)
+                elif recording_status == "STOPPING":
+                    self._finish_recording()
         except Exception as exc:
+            error = str(exc)
             with self._lock:
-                self._state.update(recording=False, status="FAILED", ended_at=time.time(), error=str(exc))
+                recording_active = self._state["recording"]
+                self._camera_state.update(camera_running=False, camera_status="FAILED", camera_error=error)
+            if recording_active:
+                self._finish_recording(error)
         finally:
             if capture is not None:
                 capture.release()
-            if writer is not None:
-                writer.release()
-            self._write_metadata(metadata_path, {"capture_actual": actual_capture})
-
+            with self._frame_ready:
+                if self._camera_state["camera_status"] != "FAILED":
+                    self._camera_state.update(camera_running=False, camera_status="STOPPED")
+                if self._state["recording"]:
+                    self._finish_recording("Camera stopped while recording")
+                self._frame_ready.notify_all()

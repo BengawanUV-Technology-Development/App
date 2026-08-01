@@ -89,6 +89,10 @@ WS   /api/v1/events
 GET  /api/v1/recordings/status
 POST /api/v1/recordings/start
 POST /api/v1/recordings/stop
+GET  /api/v1/camera/status
+GET  /api/v1/camera/preview
+POST /api/v1/camera/start
+POST /api/v1/camera/stop
 POST /api/v1/commands/arm
 POST /api/v1/commands/disarm
 POST /api/v1/commands/reboot
@@ -125,6 +129,11 @@ sensor Mission Planner. Lokasi output dan parameter capture dikonfigurasi lewat
 `src-tauri/src-py/.env` menggunakan `FLIGHT_RECORDINGS_DIR`,
 `VRX_CAMERA_INDEX`, `VRX_CAPTURE_WIDTH`, `VRX_CAPTURE_HEIGHT`, dan
 `VRX_CAPTURE_FPS`.
+
+Dashboard mengambil live preview MJPEG dari capture loop yang sama dengan
+recorder. EasyCAP hanya dibuka satu kali: menghentikan recording tetap
+mempertahankan preview, sedangkan tombol `RELEASE` menutup perangkat kamera.
+Jangan membuka EasyCAP di OBS secara bersamaan dengan backend.
 
 Untuk mengekstrak video menjadi image yang tetap mengikuti `frame_id`:
 

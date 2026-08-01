@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from app.services.mission_planner_adapter import MissionPlannerAdapter, MissionPlannerBridgeError
 from app.services.flight_recorder import FlightRecorder, FlightRecorderError
@@ -25,6 +25,33 @@ def _get_flight_recorder():
     if _flight_recorder is None:
         raise RuntimeError("Flight recorder is not initialized")
     return _flight_recorder
+
+
+@api_v1_bp.route("/camera/status", methods=["GET"])
+def camera_status():
+    return jsonify({"ok": True, **_get_flight_recorder().status()})
+
+
+@api_v1_bp.route("/camera/start", methods=["POST"])
+def start_camera():
+    return jsonify({"ok": True, **_get_flight_recorder().start_camera()}), 202
+
+
+@api_v1_bp.route("/camera/stop", methods=["POST"])
+def stop_camera():
+    try:
+        return jsonify({"ok": True, **_get_flight_recorder().stop_camera()})
+    except FlightRecorderError as exc:
+        return jsonify({"ok": False, "error": str(exc), **_get_flight_recorder().status()}), 409
+
+
+@api_v1_bp.route("/camera/preview", methods=["GET"])
+def camera_preview():
+    return Response(
+        _get_flight_recorder().preview_stream(),
+        mimetype="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
 
 
 @api_v1_bp.route("/recordings/status", methods=["GET"])
