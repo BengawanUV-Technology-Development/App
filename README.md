@@ -55,6 +55,11 @@ This project utilizes Docker to containerize the Python backend and AI dependenc
    npm run tauri dev
    ```
 
+> Flight recording melalui EasyCAP harus menjalankan backend secara native di
+> Windows. Container Docker Linux tidak memiliki akses ke perangkat DirectShow.
+> RD945 juga tetap membutuhkan catu daya fisik; Python mengaktifkan capture
+> EasyCAP, bukan power receiver.
+
 ### Alternative: Manual Setup (Without Docker)
 
 If you prefer to run the backend natively using a Python virtual environment:
@@ -81,6 +86,9 @@ python src-tauri/src-py/mock_jetson.py
 GET  /api/v1/health
 GET  /api/v1/telemetry
 WS   /api/v1/events
+GET  /api/v1/recordings/status
+POST /api/v1/recordings/start
+POST /api/v1/recordings/stop
 POST /api/v1/commands/arm
 POST /api/v1/commands/disarm
 POST /api/v1/commands/reboot
@@ -97,6 +105,32 @@ GET  /logs/recent
 - HTTP snapshot dengan WebSocket real-time dan fallback polling.
 - Deteksi telemetry stale dan validitas GPS.
 - Dashboard SAR, model wahana 3D, serta fondasi map dan computer vision.
+- Flight recorder VRX RD945/EasyCAP dengan video MP4, telemetry per frame, dan
+  metadata JSON dalam satu direktori session lokal.
+
+## Flight Recording
+
+Tombol `START RECORDING` pada dashboard membuka EasyCAP dan membuat struktur:
+
+```text
+recordings/flight-<timestamp>-<id>/
+  video.mp4
+  telemetry.jsonl
+  metadata.json
+```
+
+Setiap record dalam `telemetry.jsonl` memiliki `frame_id` yang sama dengan
+urutan frame di `video.mp4`, beserta waktu capture dan snapshot lengkap data
+sensor Mission Planner. Lokasi output dan parameter capture dikonfigurasi lewat
+`src-tauri/src-py/.env` menggunakan `FLIGHT_RECORDINGS_DIR`,
+`VRX_CAMERA_INDEX`, `VRX_CAPTURE_WIDTH`, `VRX_CAPTURE_HEIGHT`, dan
+`VRX_CAPTURE_FPS`.
+
+Untuk mengekstrak video menjadi image yang tetap mengikuti `frame_id`:
+
+```bash
+python src-tauri/src-py/extract_recording_frames.py <direktori-session>
+```
 
 Roadmap lengkap tersedia di
 `docs/2026-06-06-mission-planner-vision-refactor-plan.md`.

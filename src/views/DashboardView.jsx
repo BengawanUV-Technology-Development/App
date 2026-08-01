@@ -12,6 +12,7 @@ import BatteryMonitor from "../components/telemetry/BatteryMonitor";
 import EkfVibeBar from "../components/telemetry/EkfVibeBar";
 import DataQuick from "../components/telemetry/DataQuick";
 import EkfVibeModal from "../components/telemetry/EkfVibeModal";
+import FlightRecorderControl from "../components/recording/FlightRecorderControl";
 
 const OperationalMap = lazy(() => import("../components/map/OperationalMap"));
 
@@ -369,6 +370,8 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
           <Badge tone="warning">MODE: {telemetry.flight_mode || "-"}</Badge>
           <Badge tone={telemetry.armed ? "danger" : "success"}>SYS: {telemetry.armed ? "ARMED" : "DISARMED"}</Badge>
         </div>
+
+        <FlightRecorderControl onEvent={pushEvent} />
 
         <DataQuick telemetry={telemetry} />
         <BatteryMonitor percent={telemetry.battery_percent} voltage={telemetry.battery_voltage_v} current={telemetry.battery_current_a} />

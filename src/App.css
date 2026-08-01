@@ -3159,3 +3159,72 @@ button:hover:not(:disabled) {
   color: #ff8b72;
   font-weight: 700;
 }
+.flight-recorder-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(118, 147, 164, 0.35);
+  background: rgba(7, 15, 20, 0.88);
+}
+
+.flight-recorder-panel.is-recording {
+  border-color: rgba(255, 65, 65, 0.8);
+  box-shadow: inset 0 0 18px rgba(255, 35, 35, 0.08);
+}
+
+.flight-recorder-heading,
+.flight-recorder-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.flight-recorder-heading span,
+.flight-recorder-heading strong,
+.flight-recorder-metrics span {
+  font-family: "JetBrains Mono", "Consolas", monospace;
+  font-size: 0.72rem;
+}
+
+.flight-recorder-heading i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: #65747c;
+}
+
+.flight-recorder-panel.is-recording .flight-recorder-heading i {
+  background: #ff3535;
+  box-shadow: 0 0 8px #ff3535;
+}
+
+.flight-recorder-metrics span {
+  display: grid;
+  color: #e9f7ff;
+}
+
+.flight-recorder-metrics small {
+  color: #78909c;
+  font-size: 0.58rem;
+}
+
+.flight-recorder-panel button {
+  padding: 9px;
+  border: 1px solid #c43b3b;
+  color: #fff;
+  background: #7e2020;
+  cursor: pointer;
+}
+
+.flight-recorder-panel button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.flight-recorder-error {
+  color: #ff7979;
+  overflow-wrap: anywhere;
+}

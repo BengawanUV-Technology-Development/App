@@ -1,21 +1,52 @@
 from flask import Blueprint, jsonify, request
 
 from app.services.mission_planner_adapter import MissionPlannerAdapter, MissionPlannerBridgeError
+from app.services.flight_recorder import FlightRecorder, FlightRecorderError
 
 
 api_v1_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 _adapter: MissionPlannerAdapter | None = None
+_flight_recorder: FlightRecorder | None = None
 
 
 def init_api_v1_routes(adapter: MissionPlannerAdapter):
-    global _adapter
+    global _adapter, _flight_recorder
     _adapter = adapter
+    _flight_recorder = FlightRecorder(adapter.snapshot)
 
 
 def _get_adapter():
     if _adapter is None:
         raise RuntimeError("Mission Planner adapter is not initialized")
     return _adapter
+
+
+def _get_flight_recorder():
+    if _flight_recorder is None:
+        raise RuntimeError("Flight recorder is not initialized")
+    return _flight_recorder
+
+
+@api_v1_bp.route("/recordings/status", methods=["GET"])
+def recording_status():
+    return jsonify({"ok": True, **_get_flight_recorder().status()})
+
+
+@api_v1_bp.route("/recordings/start", methods=["POST"])
+def start_recording():
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify({"ok": True, **_get_flight_recorder().start(payload.get("label"))}), 202
+    except FlightRecorderError as exc:
+        return jsonify({"ok": False, "error": str(exc), **_get_flight_recorder().status()}), 409
+
+
+@api_v1_bp.route("/recordings/stop", methods=["POST"])
+def stop_recording():
+    try:
+        return jsonify({"ok": True, **_get_flight_recorder().stop()})
+    except FlightRecorderError as exc:
+        return jsonify({"ok": False, "error": str(exc), **_get_flight_recorder().status()}), 409
 
 
 @api_v1_bp.route("/health", methods=["GET"])
