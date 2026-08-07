@@ -6,6 +6,7 @@ services:
     container_name: buv_backend
     ports:
       - "5001:5001"
+      - "5000:5000/udp"
     env_file:
       - ./src-tauri/src-py/.env
     restart: unless-stopped

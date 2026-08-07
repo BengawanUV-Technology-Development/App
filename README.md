@@ -17,6 +17,17 @@ Flight Controller
   -> React + Tauri Frontend
 ```
 
+Video dan recording Arducam berjalan melalui Jetson, bukan melalui laptop:
+
+```text
+Arducam CSI/Argus -> Jetson split pipeline
+  ├─ high-res -> YOLO/SAHI + video.mp4 lokal Jetson
+  ├─ low-res H.264/RTP/UDP :5000 -> GCS preview
+  └─ bbox HTTP :5001 -> GCS overlay
+
+GCS website -> recording agent Jetson :5101 -> START / STOP & SAVE
+```
+
 ## Setup and Installation
 
 This project utilizes Docker to containerize the Python backend and AI dependencies, ensuring a consistent development environment.
@@ -25,6 +36,8 @@ This project utilizes Docker to containerize the Python backend and AI dependenc
 - Node.js & npm
 - Docker Desktop
 - Mission Planner (Windows)
+- Tailscale, atau jaringan modem/LAN yang membuat Jetson dan GCS saling terjangkau
+- Jetson dengan kamera Arducam CSI/Argus dan GStreamer
 
 ### Quick Start
 
@@ -45,9 +58,10 @@ This project utilizes Docker to containerize the Python backend and AI dependenc
 
 4. **Start the Backend Services (Docker)**
    ```bash
-   docker compose up -d
+   docker compose up --build -d backend
    ```
-   *The Flask API and AI Orchestrator will run in the background on port 5001.*
+   *The Flask API runs on TCP port 5001. The Docker Compose configuration juga
+   mem-publish UDP port 5000 untuk low-res RTP dari Jetson.*
 
 5. **Start the Frontend UI (Tauri)**
    ```bash
@@ -102,6 +116,9 @@ GET  /api/v1/camera/status
 GET  /api/v1/camera/preview
 POST /api/v1/camera/start
 POST /api/v1/camera/stop
+GET  /api/v1/detection/overlay
+POST /api/v1/detection/overlay
+POST /api/v1/detection/ingest
 POST /api/v1/commands/arm
 POST /api/v1/commands/disarm
 POST /api/v1/commands/reboot
@@ -118,26 +135,28 @@ GET  /logs/recent
 - HTTP snapshot dengan WebSocket real-time dan fallback polling.
 - Deteksi telemetry stale dan validitas GPS.
 - Dashboard SAR, model wahana 3D, serta fondasi map dan computer vision.
-- Flight recorder Arducam Jetson H.264/RTP/UDP dengan video MP4, telemetry per
-  frame, dan metadata JSON dalam satu direktori session lokal. VRX
+- Arducam Jetson split pipeline: high-res MP4/detection sidecar lokal Jetson,
+  low-res H.264/RTP/UDP preview ke GCS, dan overlay bbox di frontend. VRX
   RD945/EasyCAP tetap tersedia sebagai source legacy.
 
 ## Flight Recording
 
-Tombol `START RECORDING` pada dashboard memulai capture source yang dikonfigurasi
-dan membuat struktur:
+Untuk `CAMERA_SOURCE=jetson_udp`, tombol `START RECORDING` pada dashboard
+mengontrol recorder high-res di Jetson melalui backend GCS dan jaringan
+Tailscale. GCS tidak membuat file relay recording. Setelah `STOP & SAVE`, file
+berada di Jetson:
 
 ```text
-recordings/flight-<timestamp>-<id>/
+/data/flight-recordings/flight-<timestamp>-<id>/
   video.mp4
-  telemetry.jsonl
+  detections.jsonl
   metadata.json
 ```
 
-Setiap record dalam `telemetry.jsonl` memiliki `frame_id` yang sama dengan
-urutan frame di `video.mp4`, beserta waktu capture dan snapshot lengkap data
-sensor Mission Planner. Untuk source Jetson, `source_frame_id` juga disimpan;
-nilai itu adalah urutan frame yang diterima GCS dari stream RTP.
+`video.mp4` adalah cabang high-res yang sama dengan input YOLO/SAHI;
+`detections.jsonl` berisi `frame_id`, PTS, bbox high-res, dan bbox network.
+Live preview low-res dan overlay bbox tetap dikirim/ditampilkan di GCS, tetapi
+tidak disimpan sebagai recording kedua di laptop.
 
 Konfigurasi utama berada di `src-tauri/src-py/.env`:
 
@@ -146,18 +165,258 @@ Konfigurasi utama berada di `src-tauri/src-py/.env`:
   `JETSON_VIDEO_JITTER_LATENCY_MS` harus cocok dengan sender;
 - `JETSON_VIDEO_PREVIEW_WIDTH` dan `JETSON_VIDEO_PREVIEW_HEIGHT` mengatur
   resolusi decode/preview backend;
-- `FLIGHT_RECORDINGS_DIR` mengatur lokasi output;
+- `JETSON_RECORDING_AGENT_URL` dan `JETSON_RECORDING_AGENT_TOKEN` menghubungkan
+  backend GCS ke service recording di Jetson;
+- `DETECTION_OVERLAY_TTL_SECONDS` mengatur berapa lama bbox terakhir boleh
+  ditampilkan ketika detector berhenti mengirim;
+- `FLIGHT_RECORDINGS_DIR` hanya dipakai oleh source EasyCAP legacy;
 - `CAMERA_SOURCE=easycap` mengaktifkan source VRX lama dan memakai
   `VRX_CAMERA_INDEX`, `VRX_CAPTURE_WIDTH`, `VRX_CAPTURE_HEIGHT`, dan
   `VRX_CAPTURE_FPS`.
 
-Dashboard mengambil live preview MJPEG dari service backend yang sama dengan
-recorder. Pada source Jetson, backend menerima H.264/RTP/UDP dengan
-GStreamer, melakukan decode, lalu melakukan fan-out frame terbaru ke viewer dan
-recorder. Pada source EasyCAP, perangkat hanya dibuka satu kali: menghentikan
-recording tetap mempertahankan preview, sedangkan tombol `RELEASE` menutup
-perangkat kamera. Jangan membuka EasyCAP di OBS secara bersamaan dengan
-backend.
+Konfigurasi sender dan recording agent Jetson berada di `jetson/.env`. Salin
+`jetson/.env.example` ke file tersebut di Jetson; file ini harus memuat
+`JETSON_GCS_HOST` dan token yang sama dengan konfigurasi GCS.
+
+Dashboard mengambil live preview MJPEG dari service backend. Pada source Jetson,
+backend menerima H.264/RTP/UDP dengan GStreamer dan hanya menyediakan preview;
+perintah recording diteruskan ke Jetson Recording Agent. Pada source EasyCAP,
+perangkat legacy masih dapat direkam secara lokal oleh backend.
+
+## Jetson split pipeline: high-res local + low-res network
+
+Untuk produksi, jalankan `jetson/arducam_split_pipeline.py` secara native di
+Jetson. Satu capture Argus dibagi menjadi tiga cabang:
+
+```text
+Arducam high-res
+  ├─ x264enc → video.mp4 lokal Jetson       (evidence penerbangan)
+  ├─ BGR appsink → YOLO/SAHI                 (detail objek)
+  │                └─ detections.jsonl + POST bbox ke GCS
+  └─ resize + x264enc → H.264/RTP/UDP        (low-res live preview GCS)
+```
+
+Default yang aman untuk mulai adalah high-res `1920x1080@30` untuk recording
+dan YOLO/SAHI, lalu network `960x540@15` dengan bitrate `2 Mbps`. Orin Nano
+tidak memiliki NVENC, sehingga sender menggunakan `x264enc` software; ukur
+beban CPU/FPS di unit aktual sebelum menaikkan resolusi. File high-res dan
+sidecar detector berada di Jetson, sedangkan GCS hanya menerima cabang
+network dan overlay bbox.
+
+Contoh command (ganti IP, model, dan direktori sesuai instalasi):
+
+```bash
+cd <repository-folder>
+python3 jetson/arducam_split_pipeline.py \
+  --host IP_TAILSCALE_GCS \
+  --port 5000 \
+  --high-width 1920 --high-height 1080 --high-fps 30 \
+  --network-width 960 --network-height 540 --network-fps 15 \
+  --record-dir /data/flight-recordings \
+  --weights /absolute/path/to/best.pt \
+  --sahi --slice-width 640 --slice-height 640 --overlap 0.2 \
+  --ingest-url http://IP_TAILSCALE_GCS:5001/api/v1/detection/overlay
+```
+
+`--weights` boleh dihilangkan untuk menguji capture, recording, dan streaming
+tanpa detector. Command manual ini adalah smoke test; jangan menjalankannya
+bersamaan dengan `recording_agent.py`. Endpoint `/api/v1/detection/overlay` hanya menyimpan hasil
+frame terbaru dengan TTL singkat; endpoint ini sengaja terpisah dari
+`/api/v1/detection/ingest`, yang tetap digunakan untuk event detection yang
+boleh memicu evaluasi AI/dispatcher. Bbox dikirim dalam koordinat high-res dan
+network; frontend menggambar `bbox_network` di atas preview low-res.
+
+Sebelum penerbangan, verifikasi plugin Jetson:
+
+```bash
+gst-inspect-1.0 nvarguscamerasrc nvvidconv x264enc rtph264pay mp4mux appsink
+```
+
+Sender membuat satu direktori session berisi `video.mp4`,
+`detections.jsonl`, dan `metadata.json`. Untuk mengaktifkan button website,
+jalankan agent di Jetson:
+
+```bash
+cd <repository-folder>
+set -a; source jetson/.env; set +a
+python3 jetson/recording_agent.py
+```
+
+Service ini menjalankan split pipeline sebagai satu child process, mencegah
+dua recorder berjalan bersamaan, dan mengirim SIGINT saat `STOP & SAVE` agar
+MP4 ditutup dengan EOS. Untuk deployment penerbangan, gunakan template
+`jetson/buv-recording-agent.service.example` sebagai service `systemd` dan isi
+`JETSON_RECORDING_AGENT_TOKEN` di Jetson serta GCS.
+
+## End-to-end hardware test
+
+Lakukan smoke test tanpa model terlebih dahulu. Dengan cara ini kamera,
+koneksi modem, preview UDP, dan penyimpanan lokal dapat diverifikasi secara
+terpisah dari YOLO/SAHI.
+
+### 1. Verifikasi koneksi Jetson dan GCS
+
+Jika Jetson dan laptop berada di jaringan modem yang sama, IP LAN dapat
+digunakan. Jika Jetson hanya memiliki koneksi seluler atau berada di jaringan
+berbeda, gunakan IP/hostname Tailscale. Tidak diperlukan port forwarding publik.
+
+Jalankan di kedua perangkat:
+
+```bash
+tailscale ip -4
+tailscale ping <IP_PERANGKAT_LAIN>
+```
+
+Catat `<JETSON_IP>` dan `<GCS_IP>`. Jetson harus dapat menjangkau GCS pada TCP
+5001 dan UDP 5000; GCS harus dapat menjangkau Jetson pada TCP 5101.
+
+### 2. Test kamera di Jetson
+
+Untuk kamera CSI/Argus:
+
+```bash
+sudo systemctl restart nvargus-daemon
+gst-inspect-1.0 nvarguscamerasrc nvvidconv x264enc rtph264pay mp4mux appsink
+gst-launch-1.0 -e \
+  nvarguscamerasrc sensor-id=0 num-buffers=30 ! \
+  'video/x-raw(memory:NVMM),width=1920,height=1080,format=NV12,framerate=30/1' ! \
+  fakesink sync=false
+```
+
+Jika mode 1920x1080 tidak didukung kamera, gunakan mode Argus yang tersedia,
+misalnya 1280x720, lalu sesuaikan `JETSON_HIGH_WIDTH` dan
+`JETSON_HIGH_HEIGHT`.
+
+### 3. Siapkan konfigurasi
+
+Di GCS/laptop:
+
+```bash
+cp src-tauri/src-py/.env.example src-tauri/src-py/.env
+```
+
+Edit nilai berikut di `src-tauri/src-py/.env`:
+
+```env
+CAMERA_SOURCE=jetson_udp
+JETSON_RECORDING_AGENT_URL=http://<JETSON_IP>:5101
+JETSON_RECORDING_AGENT_TOKEN=<TOKEN_BERSAMA>
+```
+
+Di Jetson:
+
+```bash
+cp jetson/.env.example jetson/.env
+```
+
+Edit `jetson/.env`:
+
+```env
+JETSON_GCS_HOST=<GCS_IP>
+JETSON_RECORDING_AGENT_TOKEN=<TOKEN_BERSAMA>
+JETSON_RECORD_DIR=/data/flight-recordings
+```
+
+Untuk smoke test pertama, biarkan `JETSON_MODEL_WEIGHTS` tetap dikomentari.
+Pastikan `JETSON_RECORD_DIR` dapat ditulis oleh user yang menjalankan agent.
+
+### 4. Jalankan backend dan recording agent
+
+Di GCS/laptop:
+
+```bash
+docker compose config --quiet
+docker compose up --build -d backend
+docker compose logs -f backend
+```
+
+Di terminal GCS yang lain, aktifkan receiver:
+
+```bash
+curl http://127.0.0.1:5001/api/v1/health
+curl -X POST http://127.0.0.1:5001/api/v1/camera/start
+curl http://127.0.0.1:5001/api/v1/camera/status
+```
+
+Di Jetson, jalankan agent dan biarkan terminalnya terbuka:
+
+```bash
+set -a
+source jetson/.env
+set +a
+python3 jetson/recording_agent.py
+```
+
+Test status agent dari GCS:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer <TOKEN_BERSAMA>" \
+  http://<JETSON_IP>:5101/recording/status
+```
+
+Status awal yang diharapkan adalah `IDLE`.
+
+### 5. Test tombol recording
+
+Jalankan frontend:
+
+```bash
+npm install       # cukup sekali jika dependency belum terpasang
+npm run tauri dev
+```
+
+Di dashboard:
+
+1. Pastikan preview kamera muncul.
+2. Klik `START RECORDING`.
+3. Tunggu status `RECORDING` dan biarkan berjalan beberapa detik.
+4. Klik `STOP & SAVE`.
+
+Hasil yang diharapkan:
+
+- Preview GCS menerima low-res sekitar 960x540 pada 15 FPS.
+- Status berubah dari `STARTING` menjadi `RECORDING`, lalu `COMPLETED`.
+- Jetson membuat `video.mp4`, `detections.jsonl`, dan `metadata.json`.
+- Tidak ada video relay baru yang disimpan di laptop/GCS untuk
+  `CAMERA_SOURCE=jetson_udp`.
+
+Periksa hasil di Jetson:
+
+```bash
+find /data/flight-recordings -maxdepth 2 -type f -print
+ls -lh /data/flight-recordings/*/video.mp4
+gst-discoverer-1.0 /data/flight-recordings/<session-id>/video.mp4
+```
+
+### 6. Aktifkan YOLO/SAHI setelah smoke test berhasil
+
+Setelah capture, network, dan recording berhasil, isi konfigurasi model di
+`jetson/.env`:
+
+```env
+JETSON_MODEL_WEIGHTS=/absolute/path/to/best.pt
+JETSON_MODEL_SAHI=true
+JETSON_MODEL_SLICE_WIDTH=640
+JETSON_MODEL_SLICE_HEIGHT=640
+JETSON_MODEL_OVERLAP=0.2
+```
+
+Restart recording agent, lakukan recording baru, lalu periksa:
+
+```bash
+tail -f /data/flight-recordings/<session-id>/detections.jsonl
+curl http://127.0.0.1:5001/api/v1/detection/overlay
+```
+
+`detections.jsonl` boleh kosong jika tidak ada objek pada frame. Jika deteksi
+tersedia, frontend menggambar `bbox_network` pada preview low-res.
+
+Jika preview hilang, periksa log backend dan pastikan UDP `5000`, payload type,
+serta IP GCS cocok. Jika tombol recording gagal, periksa token dan koneksi TCP
+ke Jetson port `5101`. Orin Nano menggunakan `x264enc` software; pantau beban
+dengan `tegrastats` dan turunkan resolusi/FPS jika pipeline tidak mampu menjaga
+frame rate.
 
 Untuk mengekstrak video menjadi image yang tetap mengikuti `frame_id`:
 

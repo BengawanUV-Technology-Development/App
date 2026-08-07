@@ -34,7 +34,7 @@ app.register_blueprint(logs_bp)
 
 
 class _WerkzeugPollingFilter(logging.Filter):
-    _QUIET_FRAGMENTS = ("/api/v1/health", "/api/v1/telemetry")
+    _QUIET_FRAGMENTS = ("/api/v1/health", "/api/v1/telemetry", "/api/v1/detection/overlay")
 
     def filter(self, record: logging.LogRecord) -> bool:
         return not any(fragment in record.getMessage() for fragment in self._QUIET_FRAGMENTS)
@@ -42,10 +42,16 @@ class _WerkzeugPollingFilter(logging.Filter):
 
 logging.getLogger("werkzeug").addFilter(_WerkzeugPollingFilter())
 
+_QUIET_REQUEST_PATHS = {
+    "/api/v1/health",
+    "/api/v1/telemetry",
+    "/api/v1/detection/overlay",
+}
+
 
 @app.before_request
 def _log_http_request():
-    if request.path in {"/api/v1/health", "/api/v1/telemetry"}:
+    if request.path in _QUIET_REQUEST_PATHS:
         return
     payload = request.get_json(silent=True) if request.method in {"POST", "PUT", "PATCH"} else None
     print(f"[http] -> {request.method} {request.path} payload={payload or '-'}", flush=True)
@@ -53,7 +59,7 @@ def _log_http_request():
 
 @app.after_request
 def _log_http_response(response):
-    if request.path not in {"/api/v1/health", "/api/v1/telemetry"}:
+    if request.path not in _QUIET_REQUEST_PATHS:
         print(f"[http] <- {request.method} {request.path} status={response.status_code}", flush=True)
     return response
 

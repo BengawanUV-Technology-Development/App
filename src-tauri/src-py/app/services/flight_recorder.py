@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from .jetson_video_service import JetsonVideoError, JetsonVideoService
+from .jetson_recording_client import JetsonRecordingClient, JetsonRecordingError
 
 
 class FlightRecorderError(RuntimeError):
@@ -18,11 +19,12 @@ class FlightRecorderError(RuntimeError):
 
 
 class FlightRecorder:
-    """Own one camera source for preview and flight recording.
+    """Own one camera source for preview and recording control.
 
     ``CAMERA_SOURCE=jetson_udp`` receives the Arducam stream at the GCS via
-    GStreamer. ``CAMERA_SOURCE=easycap`` remains available for the legacy VRX
-    capture setup and local development.
+    GStreamer, while recording commands are proxied to the Jetson agent. The
+    GCS does not create a relay video for this source. ``CAMERA_SOURCE=easycap``
+    remains available for the legacy local capture setup.
     """
 
     def __init__(self, telemetry_provider: Callable[[], dict], recordings_dir: str | Path | None = None):
@@ -72,13 +74,15 @@ class FlightRecorder:
         self._capture_actual: dict = {}
 
         self._jetson_video: JetsonVideoService | None = None
+        self._jetson_recording: JetsonRecordingClient | None = None
         if self.camera_source == "jetson_udp":
             try:
+                self._jetson_recording = JetsonRecordingClient()
                 self._jetson_video = JetsonVideoService(
                     frame_handler=self._handle_jetson_frame,
                     error_handler=self._handle_jetson_error,
                 )
-            except JetsonVideoError as exc:
+            except (JetsonVideoError, JetsonRecordingError) as exc:
                 raise FlightRecorderError(str(exc)) from exc
 
     @staticmethod
@@ -121,8 +125,13 @@ class FlightRecorder:
         else:
             with self._lock:
                 camera_state = dict(self._camera_state)
+        if self._jetson_recording is not None:
+            recording_state = self._jetson_recording.status()
+        else:
+            with self._lock:
+                recording_state = dict(self._state)
         with self._lock:
-            state = {**self._state, **camera_state}
+            state = {**self._state, **recording_state, **camera_state}
         if state["recording"] and state["started_at"]:
             state["duration_seconds"] = max(0, time.time() - state["started_at"])
         else:
@@ -160,9 +169,8 @@ class FlightRecorder:
         return self.status()
 
     def stop_camera(self) -> dict:
-        with self._lock:
-            if self._state["recording"]:
-                raise FlightRecorderError("Stop and save the active recording before stopping the camera")
+        if self.status().get("recording"):
+            raise FlightRecorderError("Stop and save the active recording before stopping the camera")
 
         if self._jetson_video is not None:
             try:
@@ -214,6 +222,9 @@ class FlightRecorder:
                 return
 
     def start(self, label: str | None = None) -> dict:
+        if self._jetson_recording is not None:
+            return self._start_jetson_recording(label)
+
         with self._lock:
             if self._state["recording"]:
                 raise FlightRecorderError("A flight recording is already active")
@@ -239,6 +250,16 @@ class FlightRecorder:
         return self.status()
 
     def stop(self) -> dict:
+        if self._jetson_recording is not None:
+            current = self.status()
+            if not current.get("recording"):
+                raise FlightRecorderError("No high-res Jetson recording is active")
+            try:
+                self._jetson_recording.stop()
+            except JetsonRecordingError as exc:
+                raise FlightRecorderError(str(exc)) from exc
+            return self.status()
+
         with self._frame_ready:
             if not self._state["recording"]:
                 raise FlightRecorderError("No flight recording is active")
@@ -255,6 +276,18 @@ class FlightRecorder:
                     else None
                 )
             self._finish_recording(stop_error)
+        return self.status()
+
+    def _start_jetson_recording(self, label: str | None = None) -> dict:
+        current = self.status()
+        if current.get("recording"):
+            raise FlightRecorderError("A high-res Jetson recording is already active")
+        try:
+            # Keep the GCS receiver ready before asking Jetson to send frames.
+            self.start_camera()
+            self._jetson_recording.start(label)
+        except (FlightRecorderError, JetsonRecordingError) as exc:
+            raise FlightRecorderError(str(exc)) from exc
         return self.status()
 
     def _write_metadata(self, path: Path):
@@ -393,6 +426,11 @@ class FlightRecorder:
         height: int,
         fps: float,
     ) -> None:
+        # Jetson UDP recording is performed on Jetson by the split pipeline.
+        # The GCS receiver only serves the low-res preview and must never
+        # create a second local relay video for this source.
+        if self._jetson_recording is not None:
+            return
         with self._lock:
             recording_status = self._state["status"]
         if recording_status == "STOPPING":

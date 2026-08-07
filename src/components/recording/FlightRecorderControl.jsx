@@ -26,7 +26,7 @@ function FlightRecorderControl({ onEvent }) {
   return (
     <section className={`flight-recorder-panel ${active ? "is-recording" : ""}`}>
       <div className="flight-recorder-heading">
-        <span><i /> FLIGHT RECORD</span>
+        <span><i /> JETSON HIGH-RES</span>
         <strong>{recorder.status}</strong>
       </div>
       <div className="flight-recorder-metrics">

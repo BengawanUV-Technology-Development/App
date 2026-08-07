@@ -2,17 +2,20 @@ from flask import Blueprint, Response, jsonify, request
 
 from app.services.mission_planner_adapter import MissionPlannerAdapter, MissionPlannerBridgeError
 from app.services.flight_recorder import FlightRecorder, FlightRecorderError
+from app.services.vision_overlay import VisionOverlayError, VisionOverlayStore
 
 
 api_v1_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 _adapter: MissionPlannerAdapter | None = None
 _flight_recorder: FlightRecorder | None = None
+_vision_overlay_store: VisionOverlayStore | None = None
 
 
 def init_api_v1_routes(adapter: MissionPlannerAdapter):
-    global _adapter, _flight_recorder
+    global _adapter, _flight_recorder, _vision_overlay_store
     _adapter = adapter
     _flight_recorder = FlightRecorder(adapter.snapshot)
+    _vision_overlay_store = VisionOverlayStore()
 
 
 def _get_adapter():
@@ -25,6 +28,12 @@ def _get_flight_recorder():
     if _flight_recorder is None:
         raise RuntimeError("Flight recorder is not initialized")
     return _flight_recorder
+
+
+def _get_vision_overlay_store():
+    if _vision_overlay_store is None:
+        raise RuntimeError("Vision overlay store is not initialized")
+    return _vision_overlay_store
 
 
 @api_v1_bp.route("/camera/status", methods=["GET"])
@@ -58,6 +67,24 @@ def camera_preview():
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@api_v1_bp.route("/detection/overlay", methods=["GET"])
+def latest_detection_overlay():
+    """Return the latest short-lived bbox overlay for the low-res preview."""
+
+    return jsonify(_get_vision_overlay_store().latest())
+
+
+@api_v1_bp.route("/detection/overlay", methods=["POST"])
+def ingest_detection_overlay():
+    """Accept per-frame YOLO/SAHI boxes without invoking the priority agent."""
+
+    payload = request.get_json(silent=True)
+    try:
+        return jsonify(_get_vision_overlay_store().ingest(payload)), 202
+    except VisionOverlayError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
 
 @api_v1_bp.route("/recordings/status", methods=["GET"])

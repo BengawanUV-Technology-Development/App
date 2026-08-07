@@ -1,8 +1,32 @@
 import { useCallback, useEffect, useState } from "react";
 import { API_BASE, apiGet, apiPost } from "../../services/api";
 
+const EMPTY_OVERLAY = { stale: true, detections: [] };
+
+function overlayBoxStyle(detection, width, height) {
+  const bbox = detection?.bbox_network;
+  if (!Array.isArray(bbox) || bbox.length !== 4 || width <= 0 || height <= 0) return null;
+
+  const [x1, y1, x2, y2] = bbox.map(Number);
+  if (![x1, y1, x2, y2].every(Number.isFinite) || x2 <= x1 || y2 <= y1) return null;
+
+  const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+  const left = clamp((x1 / width) * 100, 0, 100);
+  const top = clamp((y1 / height) * 100, 0, 100);
+  const right = clamp((x2 / width) * 100, 0, 100);
+  const bottom = clamp((y2 / height) * 100, 0, 100);
+
+  return {
+    left: `${left}%`,
+    top: `${top}%`,
+    width: `${Math.max(0, right - left)}%`,
+    height: `${Math.max(0, bottom - top)}%`,
+  };
+}
+
 function CameraPreview() {
   const [camera, setCamera] = useState({ camera_status: "STARTING", camera_error: null });
+  const [overlay, setOverlay] = useState(EMPTY_OVERLAY);
   const [streamKey, setStreamKey] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -16,6 +40,31 @@ function CameraPreview() {
     const interval = setInterval(refresh, 1000);
     return () => clearInterval(interval);
   }, [refresh]);
+
+  const refreshOverlay = useCallback(async () => {
+    const result = await apiGet("/api/v1/detection/overlay");
+    if (result.ok) {
+      setOverlay(result.data);
+    } else {
+      setOverlay((current) => ({ ...current, ...EMPTY_OVERLAY }));
+    }
+  }, []);
+
+  useEffect(() => {
+    let inFlight = false;
+    const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        await refreshOverlay();
+      } finally {
+        inFlight = false;
+      }
+    };
+    poll();
+    const interval = setInterval(poll, 250);
+    return () => clearInterval(interval);
+  }, [refreshOverlay]);
 
   const restart = async () => {
     setIsLoading(true);
@@ -35,6 +84,14 @@ function CameraPreview() {
     setIsLoading(false);
   };
 
+  const overlayWidth = Number(overlay.network_width || camera.width || 0);
+  const overlayHeight = Number(overlay.network_height || camera.height || 0);
+  const detections = overlay.stale || camera.camera_status !== "LIVE"
+    ? []
+    : Array.isArray(overlay.detections)
+      ? overlay.detections
+      : [];
+
   return (
     <div className="vision-frame live-camera-frame">
       <img
@@ -43,6 +100,22 @@ function CameraPreview() {
         src={`${API_BASE}/api/v1/camera/preview?stream=${streamKey}`}
         alt="Live Jetson Arducam preview"
       />
+      <div className="camera-detection-overlay" aria-label="Live object detections">
+        {detections.map((detection, index) => {
+          const style = overlayBoxStyle(detection, overlayWidth, overlayHeight);
+          if (!style) return null;
+          return (
+            <div
+              className="camera-detection-box"
+              key={`${overlay.frame_id ?? "frame"}-${index}`}
+              style={style}
+            >
+              <span>{detection.class || "object"}</span>
+              <strong>{`${(Number(detection.confidence || 0) * 100).toFixed(0)}%`}</strong>
+            </div>
+          );
+        })}
+      </div>
       {camera.camera_status !== "LIVE" ? (
         <div className="camera-preview-empty">
           <strong>{camera.camera_status || "CONNECTING"}</strong>
