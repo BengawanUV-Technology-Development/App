@@ -16,5 +16,6 @@ flasgger==0.9.7.1
 google-genai==2.14.0
 python-dotenv==1.2.2
 
-# DirectShow/VideoCapture and MJPEG preview for VRX RD945 via EasyCAP.
+# JPEG decode/MP4 recording and legacy EasyCAP support. Jetson UDP ingest uses
+# the system GStreamer executable, not OpenCV's GStreamer backend.
 opencv-python==4.12.0.88

@@ -80,6 +80,15 @@ To simulate a target detection from the companion computer (e.g., Jetson Nano):
 python src-tauri/src-py/mock_jetson.py
 ```
 
+Untuk menguji bounding box, `frame_id`, dan koordinat dummy pada footage lokal:
+```bash
+python src-tauri/src-py/mock_vision.py --show
+```
+
+Script tersebut menghasilkan video ber-overlay dan metadata JSONL di bawah
+`src-tauri/src-py/runtime/mock_vision/`. Koordinat yang dihasilkan berstatus
+`SIMULATED` dan tidak boleh digunakan sebagai koordinat penerbangan nyata.
+
 ## Endpoint Backend
 
 ```text
@@ -109,12 +118,14 @@ GET  /logs/recent
 - HTTP snapshot dengan WebSocket real-time dan fallback polling.
 - Deteksi telemetry stale dan validitas GPS.
 - Dashboard SAR, model wahana 3D, serta fondasi map dan computer vision.
-- Flight recorder VRX RD945/EasyCAP dengan video MP4, telemetry per frame, dan
-  metadata JSON dalam satu direktori session lokal.
+- Flight recorder Arducam Jetson H.264/RTP/UDP dengan video MP4, telemetry per
+  frame, dan metadata JSON dalam satu direktori session lokal. VRX
+  RD945/EasyCAP tetap tersedia sebagai source legacy.
 
 ## Flight Recording
 
-Tombol `START RECORDING` pada dashboard membuka EasyCAP dan membuat struktur:
+Tombol `START RECORDING` pada dashboard memulai capture source yang dikonfigurasi
+dan membuat struktur:
 
 ```text
 recordings/flight-<timestamp>-<id>/
@@ -125,15 +136,28 @@ recordings/flight-<timestamp>-<id>/
 
 Setiap record dalam `telemetry.jsonl` memiliki `frame_id` yang sama dengan
 urutan frame di `video.mp4`, beserta waktu capture dan snapshot lengkap data
-sensor Mission Planner. Lokasi output dan parameter capture dikonfigurasi lewat
-`src-tauri/src-py/.env` menggunakan `FLIGHT_RECORDINGS_DIR`,
-`VRX_CAMERA_INDEX`, `VRX_CAPTURE_WIDTH`, `VRX_CAPTURE_HEIGHT`, dan
-`VRX_CAPTURE_FPS`.
+sensor Mission Planner. Untuk source Jetson, `source_frame_id` juga disimpan;
+nilai itu adalah urutan frame yang diterima GCS dari stream RTP.
 
-Dashboard mengambil live preview MJPEG dari capture loop yang sama dengan
-recorder. EasyCAP hanya dibuka satu kali: menghentikan recording tetap
-mempertahankan preview, sedangkan tombol `RELEASE` menutup perangkat kamera.
-Jangan membuka EasyCAP di OBS secara bersamaan dengan backend.
+Konfigurasi utama berada di `src-tauri/src-py/.env`:
+
+- `CAMERA_SOURCE=jetson_udp` untuk Arducam melalui Tailscale;
+- `JETSON_VIDEO_PORT`, `JETSON_VIDEO_PAYLOAD_TYPE`, dan
+  `JETSON_VIDEO_JITTER_LATENCY_MS` harus cocok dengan sender;
+- `JETSON_VIDEO_PREVIEW_WIDTH` dan `JETSON_VIDEO_PREVIEW_HEIGHT` mengatur
+  resolusi decode/preview backend;
+- `FLIGHT_RECORDINGS_DIR` mengatur lokasi output;
+- `CAMERA_SOURCE=easycap` mengaktifkan source VRX lama dan memakai
+  `VRX_CAMERA_INDEX`, `VRX_CAPTURE_WIDTH`, `VRX_CAPTURE_HEIGHT`, dan
+  `VRX_CAPTURE_FPS`.
+
+Dashboard mengambil live preview MJPEG dari service backend yang sama dengan
+recorder. Pada source Jetson, backend menerima H.264/RTP/UDP dengan
+GStreamer, melakukan decode, lalu melakukan fan-out frame terbaru ke viewer dan
+recorder. Pada source EasyCAP, perangkat hanya dibuka satu kali: menghentikan
+recording tetap mempertahankan preview, sedangkan tombol `RELEASE` menutup
+perangkat kamera. Jangan membuka EasyCAP di OBS secara bersamaan dengan
+backend.
 
 Untuk mengekstrak video menjadi image yang tetap mengikuti `frame_id`:
 

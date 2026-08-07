@@ -34,7 +34,10 @@ def camera_status():
 
 @api_v1_bp.route("/camera/start", methods=["POST"])
 def start_camera():
-    return jsonify({"ok": True, **_get_flight_recorder().start_camera()}), 202
+    try:
+        return jsonify({"ok": True, **_get_flight_recorder().start_camera()}), 202
+    except FlightRecorderError as exc:
+        return jsonify({"ok": False, "error": str(exc), **_get_flight_recorder().status()}), 503
 
 
 @api_v1_bp.route("/camera/stop", methods=["POST"])
@@ -50,7 +53,10 @@ def camera_preview():
     return Response(
         _get_flight_recorder().preview_stream(),
         mimetype="multipart/x-mixed-replace; boundary=frame",
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
