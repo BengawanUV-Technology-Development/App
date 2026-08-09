@@ -2,6 +2,7 @@
 Description=BUV Jetson high-resolution recording agent
 After=network-online.target nvargus-daemon.service
 Wants=network-online.target
+RequiresMountsFor=/media/<user>/<ssd-label>/flight-recordings
 
 [Service]
 Type=simple

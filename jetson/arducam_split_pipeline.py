@@ -27,6 +27,7 @@ import json
 import queue
 import re
 import signal
+import shutil
 import threading
 import time
 import uuid
@@ -40,8 +41,10 @@ from urllib.request import Request, urlopen
 
 try:
     from .mavlink_telemetry import MAVLinkTelemetryCollector
+    from .storage_guard import StorageInfo, validate_record_storage
 except ImportError:  # Script execution from the Jetson service directory.
     from mavlink_telemetry import MAVLinkTelemetryCollector
+    from storage_guard import StorageInfo, validate_record_storage
 
 
 def utc_iso(timestamp: float) -> str:
@@ -98,7 +101,11 @@ def _gst_quote(value: str | Path) -> str:
     return f'"{text}"'
 
 
-def build_pipeline_description(args: argparse.Namespace, video_path: Path) -> str:
+def build_pipeline_description(
+    args: argparse.Namespace,
+    video_path: Path,
+    recovery_file: Path | None = None,
+) -> str:
     """Build the validated GStreamer split pipeline description."""
 
     high_width = validate_dimension(args.high_width, "high-width")
@@ -129,6 +136,9 @@ def build_pipeline_description(args: argparse.Namespace, video_path: Path) -> st
         raise ValueError("ingest-timeout must be greater than 0 and at most 30 seconds")
     if not 0 <= args.overlap < 1:
         raise ValueError("overlap must be between 0 (inclusive) and 1 (exclusive)")
+    eos_timeout_seconds = float(getattr(args, "eos_timeout_seconds", 30.0))
+    if not 1 <= eos_timeout_seconds <= 300:
+        raise ValueError("eos-timeout-seconds must be between 1 and 300")
 
     key_int = max(1, round(high_fps))
     network_key_int = max(1, round(network_fps))
@@ -141,6 +151,7 @@ def build_pipeline_description(args: argparse.Namespace, video_path: Path) -> st
         if args.weights
         else "queue max-size-buffers=16 max-size-time=0 max-size-bytes=0"
     )
+    recovery_file = recovery_file or video_path.with_name(f"{video_path.name}.moov.recovery")
     return f"""
 nvarguscamerasrc sensor-id={args.sensor_id} wbmode=1 !
 video/x-raw(memory:NVMM),width={high_width},height={high_height},format=NV12,framerate={high_fps_caps} !
@@ -148,7 +159,7 @@ tee name=capture
 capture. ! queue max-size-buffers=8 max-size-time=0 max-size-bytes=0 !
 nvvidconv ! video/x-raw,format=I420,width={high_width},height={high_height} !
 x264enc bitrate={args.local_bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max={key_int} bframes=0 !
-h264parse ! mp4mux faststart=true ! filesink location={_gst_quote(video_path)}
+h264parse ! mp4mux fragment-duration=1000 fragment-mode=first-moov-then-finalise moov-recovery-file={_gst_quote(recovery_file)} ! filesink location={_gst_quote(video_path)}
 capture. ! {appsink_queue} !
 nvvidconv ! video/x-raw,format=BGRx,width={high_width},height={high_height} !
 videoconvert ! video/x-raw,format=BGR,width={high_width},height={high_height} !
@@ -423,8 +434,18 @@ class DetectionWorker:
 class SplitPipeline:
     def __init__(self, args: argparse.Namespace):
         self.args = args
+        self.storage_info: StorageInfo = validate_record_storage(
+            args.record_dir,
+            min_free_bytes=args.min_free_bytes,
+            mountpoint=args.mountpoint,
+            allow_root=args.allow_root_record_dir,
+        )
         self.session_dir = self._create_session_dir()
         self.video_path = self.session_dir / "video.mp4"
+        # Keep mp4mux's recovery index beside the recording on the validated
+        # SSD. Fragmented MP4 grows continuously and does not stage the entire
+        # recording in /tmp before writing the final moov atom.
+        self.recovery_file = self.session_dir / "video.mp4.moov.recovery"
         self.started_at = time.time()
         self.pipeline = None
         self.loop = None
@@ -451,7 +472,7 @@ class SplitPipeline:
         self._write_metadata("STARTING")
         try:
             # Validate all CLI/GStreamer properties before loading a model.
-            build_pipeline_description(args, self.video_path)
+            build_pipeline_description(args, self.video_path, self.recovery_file)
             self.worker = DetectionWorker(args, self.session_dir, self.started_at)
         except Exception as exc:
             self._close_telemetry_file()
@@ -482,7 +503,7 @@ class SplitPipeline:
             self.gst = Gst
             self.glib = GLib
             Gst.init(None)
-            description = build_pipeline_description(self.args, self.video_path)
+            description = build_pipeline_description(self.args, self.video_path, self.recovery_file)
             print("[pipeline] high-res recording and low-res RTP branches enabled", flush=True)
             print(f"[pipeline] local={self.args.high_width}x{self.args.high_height}@{self.args.high_fps:g}", flush=True)
             print(f"[pipeline] network={self.args.network_width}x{self.args.network_height}@{self.args.network_fps:g} -> {self.args.host}:{self.args.port}", flush=True)
@@ -515,6 +536,15 @@ class SplitPipeline:
                 self.telemetry.stop()
                 self._telemetry_started = False
             self._close_telemetry_file()
+            if not self.failure_error:
+                self.failure_error = self._validate_video_output()
+            if not self.failure_error:
+                try:
+                    self.recovery_file.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    print(f"[pipeline] could not remove MP4 recovery file: {exc}", flush=True)
             if self.failure_error:
                 self._write_metadata("FAILED", error=self.failure_error)
             elif self.pipeline is not None:
@@ -531,7 +561,10 @@ class SplitPipeline:
         print("[pipeline] stopping with EOS", flush=True)
         self.pipeline.send_event(self.gst.Event.new_eos())
         if self.glib:
-            self.glib.timeout_add(5000, self._force_quit)
+            self.glib.timeout_add(
+                int(self.args.eos_timeout_seconds * 1000),
+                self._force_quit,
+            )
 
     def _force_quit(self):
         if self.loop and self.loop.is_running():
@@ -617,6 +650,31 @@ class SplitPipeline:
         if self.pipeline is not None:
             self.pipeline.set_state(self.gst.State.NULL)
 
+    def _validate_video_output(self) -> str | None:
+        """Reject a nominally completed session with an empty/invalid MP4."""
+
+        try:
+            size = self.video_path.stat().st_size
+            if size <= 0:
+                return "video.mp4 is empty after pipeline shutdown"
+            if self.frame_counter <= 0:
+                return "video.mp4 finalized without captured frames"
+            with self.video_path.open("rb") as handle:
+                head = handle.read(1024 * 1024)
+                if size > 8 * 1024 * 1024:
+                    handle.seek(max(0, size - 8 * 1024 * 1024))
+                tail = handle.read(8 * 1024 * 1024)
+        except OSError as exc:
+            return f"cannot validate video.mp4: {exc}"
+
+        if b"ftyp" not in head:
+            return "video.mp4 is missing the MP4 ftyp atom"
+        if b"moov" not in head and b"moov" not in tail:
+            return "video.mp4 is missing the MP4 moov atom"
+        if b"moof" not in head and b"moof" not in tail:
+            return "video.mp4 is missing fragmented MP4 media atoms"
+        return None
+
     def _close_telemetry_file(self) -> None:
         if self._telemetry_file is not None:
             self._telemetry_file.close()
@@ -647,6 +705,19 @@ class SplitPipeline:
         self._telemetry_file.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     def _write_metadata(self, status: str, error: str | None = None) -> None:
+        try:
+            usage = shutil.disk_usage(self.session_dir)
+            video_size = self.video_path.stat().st_size if self.video_path.exists() else 0
+            recovery_size = self.recovery_file.stat().st_size if self.recovery_file.exists() else 0
+            storage = {
+                **self.storage_info.as_dict(),
+                "free_bytes": usage.free,
+                "used_bytes": usage.used,
+                "video_size_bytes": video_size,
+                "recovery_file_size_bytes": recovery_size,
+            }
+        except OSError as exc:
+            storage = {**self.storage_info.as_dict(), "error": str(exc)}
         metadata = {
             "schema_version": "1.1",
             "session_id": self.session_dir.name,
@@ -672,9 +743,11 @@ class SplitPipeline:
             },
             "files": {
                 "video": "video.mp4",
+                "video_recovery_file": "video.mp4.moov.recovery",
                 "telemetry": "telemetry.jsonl",
                 "detections": "detections.jsonl",
             },
+            "storage": storage,
             "frame_identity": {
                 "source": "Sequential source callback index in capture-only mode; PTS is retained for timing",
                 "field": "frame_id",
@@ -713,6 +786,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--local-bitrate-kbps", type=int, default=12000)
     parser.add_argument("--network-bitrate-kbps", type=int, default=2000)
     parser.add_argument("--record-dir", type=Path, default=Path("recordings"))
+    parser.add_argument(
+        "--mountpoint",
+        type=Path,
+        default=None,
+        help="Expected mounted filesystem containing --record-dir",
+    )
+    parser.add_argument(
+        "--min-free-bytes",
+        type=int,
+        default=10 * 1024**3,
+        help="Minimum free bytes required before recording",
+    )
+    parser.add_argument(
+        "--allow-root-record-dir",
+        action="store_true",
+        help="Allow recording on the root filesystem for development only",
+    )
+    parser.add_argument(
+        "--eos-timeout-seconds",
+        type=float,
+        default=30.0,
+        help="Maximum time to wait for MP4 EOS/finalization",
+    )
     parser.add_argument("--session-id")
     parser.add_argument("--label")
     parser.add_argument("--weights", help="YOLO/SAHI model path; omit to run capture-only")

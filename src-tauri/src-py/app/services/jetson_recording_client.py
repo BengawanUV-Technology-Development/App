@@ -81,6 +81,7 @@ class JetsonRecordingClient:
                 "ok": False,
                 "recording": False,
                 "status": "REMOTE_UNCONFIGURED",
+                "state_known": True,
                 "session_id": None,
                 "session_dir": None,
                 "started_at": None,
@@ -94,14 +95,18 @@ class JetsonRecordingClient:
         except JetsonRecordingError as exc:
             return {
                 "ok": False,
-                "recording": False,
-                "status": "REMOTE_OFFLINE",
+                # The host cannot infer the remote child state from a failed
+                # HTTP request. Keep this explicitly unknown so the UI cannot
+                # start a second session while the Jetson may still record.
+                "recording": None,
+                "status": "REMOTE_UNKNOWN",
                 "session_id": None,
                 "session_dir": None,
                 "started_at": None,
                 "ended_at": None,
                 "frame_count": 0,
                 "duration_seconds": 0,
+                "state_known": False,
                 "error": str(exc),
             }
 

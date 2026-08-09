@@ -29,6 +29,9 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertIn("max-size-buffers=16", description)
         self.assertIn("drop=false", description)
         self.assertIn("rtph264pay pt=96", description)
+        self.assertIn("fragment-duration=1000", description)
+        self.assertIn("fragment-mode=first-moov-then-finalise", description)
+        self.assertIn("moov-recovery-file=\"/tmp/video.mp4.moov.recovery\"", description)
         self.assertIn("filesink location=\"/tmp/video.mp4\"", description)
 
     def test_bbox_is_mapped_from_highres_to_network_coordinates(self):

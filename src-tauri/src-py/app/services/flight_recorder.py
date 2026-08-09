@@ -82,6 +82,19 @@ class FlightRecorder:
                     frame_handler=self._handle_jetson_frame,
                     error_handler=self._handle_jetson_error,
                 )
+                autostart = os.getenv("JETSON_VIDEO_AUTOSTART", "true").strip().lower()
+                if autostart in {"1", "true", "yes", "on"} and self._jetson_recording.configured:
+                    try:
+                        # Keep the UDP socket/receiver ready independently of
+                        # whether a browser currently has the MJPEG preview
+                        # open. The receiver reconnects on its own.
+                        self._jetson_video.start()
+                    except JetsonVideoError as exc:
+                        # A missing local GStreamer binary should be visible in
+                        # status but must not prevent the backend from serving
+                        # the recording-control API.
+                        self._camera_state["camera_status"] = "FAILED"
+                        self._camera_state["camera_error"] = str(exc)
             except (JetsonVideoError, JetsonRecordingError) as exc:
                 raise FlightRecorderError(str(exc)) from exc
 
@@ -169,7 +182,8 @@ class FlightRecorder:
         return self.status()
 
     def stop_camera(self) -> dict:
-        if self.status().get("recording"):
+        current = self.status()
+        if current.get("recording") is True or current.get("status") == "REMOTE_UNKNOWN":
             raise FlightRecorderError("Stop and save the active recording before stopping the camera")
 
         if self._jetson_video is not None:
@@ -280,7 +294,11 @@ class FlightRecorder:
 
     def _start_jetson_recording(self, label: str | None = None) -> dict:
         current = self.status()
-        if current.get("recording"):
+        if current.get("status") == "REMOTE_UNKNOWN":
+            raise FlightRecorderError(
+                "Jetson recording state is unknown; reconnect to Jetson before starting another session"
+            )
+        if current.get("recording") is True:
             raise FlightRecorderError("A high-res Jetson recording is already active")
         try:
             # Keep the GCS receiver ready before asking Jetson to send frames.
@@ -453,7 +471,17 @@ class FlightRecorder:
             self._handle_camera_error(str(exc))
 
     def _handle_jetson_error(self, error: str) -> None:
-        self._handle_camera_error(error)
+        # The Jetson receiver is a preview/telemetry channel. Its packet loss
+        # or restart must not finalize the recording that is being written on
+        # Jetson. JetsonVideoService exposes RECONNECTING/STALE through
+        # status(); only the remote recording agent may end that session.
+        with self._lock:
+            if self._jetson_video is None:
+                self._camera_state.update(
+                    camera_running=False,
+                    camera_status="FAILED",
+                    camera_error=error,
+                )
 
     def _handle_camera_error(self, error: str) -> None:
         with self._lock:

@@ -60,6 +60,7 @@ class JetsonRecordingControlTests(unittest.TestCase):
             self.assertEqual(popen.call_count, 1)
             self.assertEqual(stopped["status"], "COMPLETED")
             self.assertFalse(stopped["recording"])
+            controller.shutdown()
 
     def test_gcs_client_reports_unconfigured_agent_explicitly(self):
         client = JetsonRecordingClient()
@@ -69,6 +70,20 @@ class JetsonRecordingControlTests(unittest.TestCase):
 
         self.assertFalse(state["ok"])
         self.assertEqual(state["status"], "REMOTE_UNCONFIGURED")
+
+    def test_gcs_client_does_not_claim_idle_when_jetson_is_unreachable(self):
+        client = JetsonRecordingClient()
+        client.base_url = "http://jetson.test:5101"
+
+        with patch(
+            "app.services.jetson_recording_client.urlopen",
+            side_effect=OSError("network is down"),
+        ):
+            state = client.status()
+
+        self.assertIsNone(state["recording"])
+        self.assertEqual(state["status"], "REMOTE_UNKNOWN")
+        self.assertFalse(state["state_known"])
 
     def test_jetson_flight_recorder_does_not_fall_back_to_gcs_video(self):
         with patch.dict(

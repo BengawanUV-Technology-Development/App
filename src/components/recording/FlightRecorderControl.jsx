@@ -22,7 +22,11 @@ function FlightRecorderControl({ onEvent }) {
     );
   };
 
-  const active = recorder.recording || recorder.status === "STARTING" || recorder.status === "STOPPING";
+  const remoteUnknown = recorder.status === "REMOTE_UNKNOWN";
+  const active = recorder.recording === true
+    || recorder.status === "STARTING"
+    || recorder.status === "STOPPING"
+    || remoteUnknown;
   return (
     <section className={`flight-recorder-panel ${active ? "is-recording" : ""}`}>
       <div className="flight-recorder-heading">
@@ -33,8 +37,12 @@ function FlightRecorderControl({ onEvent }) {
         <span><small>TIME</small>{formatDuration(recorder.duration_seconds)}</span>
         <span><small>FRAMES</small>{recorder.frame_count || 0}</span>
       </div>
-      <button type="button" onClick={toggleRecording} disabled={isLoading || recorder.status === "STOPPING"}>
-        {active ? "STOP & SAVE" : "START RECORDING"}
+      <button
+        type="button"
+        onClick={toggleRecording}
+        disabled={isLoading || recorder.status === "STOPPING" || remoteUnknown}
+      >
+        {remoteUnknown ? "JETSON CONNECTION LOST" : active ? "STOP & SAVE" : "START RECORDING"}
       </button>
       {recorder.error ? <small className="flight-recorder-error">{recorder.error}</small> : null}
       {recorder.session_id ? <small title={recorder.session_dir || ""}>{recorder.session_id}</small> : null}

@@ -135,7 +135,13 @@ function CameraPreview() {
         </span>
         <div>
           <button type="button" onClick={restart} disabled={isLoading}>RECONNECT</button>
-          <button type="button" onClick={stop} disabled={isLoading || camera.recording}>RELEASE</button>
+          <button
+            type="button"
+            onClick={stop}
+            disabled={isLoading || camera.recording === true || camera.status === "REMOTE_UNKNOWN"}
+          >
+            RELEASE
+          </button>
         </div>
       </div>
     </div>

@@ -144,6 +144,8 @@ class JetsonVideoService:
             "decoder_error_count": 0,
             "last_pipeline_message": None,
             "pipeline_returncode": None,
+            "pipeline_pid": None,
+            "restart_count": 0,
             "stream_port": None,
             "payload_type": None,
             "decoder": None,
@@ -289,8 +291,43 @@ class JetsonVideoService:
                 return
 
     def _run(self) -> None:
+        """Keep the receiver process alive across packet/process failures."""
+
+        restart_delay = 1.0
+        while not self._stop_event.is_set():
+            failure = self._run_once()
+            if self._stop_event.is_set():
+                break
+
+            with self._frame_ready:
+                self._camera_state.update(
+                    camera_running=False,
+                    camera_status="RECONNECTING",
+                    camera_error=failure or "GStreamer receiver exited unexpectedly",
+                    restart_count=self._camera_state.get("restart_count", 0) + 1,
+                )
+                self._frame_ready.notify_all()
+
+            # A temporary UDP loss must not turn the Jetson recording into a
+            # failed session. The receiver retries independently while the
+            # local writer remains authoritative on Jetson.
+            self._stop_event.wait(restart_delay)
+            restart_delay = min(10.0, restart_delay * 2)
+
+        with self._frame_ready:
+            self._process = None
+            self._thread = None
+            self._camera_state.update(
+                camera_running=False,
+                camera_status="STOPPED",
+                pipeline_pid=None,
+            )
+            self._frame_ready.notify_all()
+
+    def _run_once(self) -> str | None:
         process: subprocess.Popen[bytes] | None = None
         stderr_thread: threading.Thread | None = None
+        stale_thread: threading.Thread | None = None
         parser = JpegFrameParser()
         received_frame = False
         failure: str | None = None
@@ -309,7 +346,18 @@ class JetsonVideoService:
                 self._process = process
                 self._camera_state["pipeline_pid"] = process.pid
                 self._camera_state["camera_running"] = True
+                self._camera_state["last_frame_at_unix"] = None
+                self._camera_state["last_frame_timestamp"] = None
+                if self._camera_state.get("restart_count", 0):
+                    self._camera_state["camera_status"] = "RECONNECTING"
 
+            stale_thread = threading.Thread(
+                target=self._watch_stale_stream,
+                args=(process,),
+                daemon=True,
+                name="jetson-gstreamer-watchdog",
+            )
+            stale_thread.start()
             stderr_thread = threading.Thread(
                 target=self._read_pipeline_messages,
                 args=(process.stderr,),
@@ -330,7 +378,7 @@ class JetsonVideoService:
 
             returncode = process.poll()
             if self._stop_event.is_set():
-                return
+                return None
             if returncode not in (None, 0):
                 failure = self._pipeline_failure_message(returncode)
             elif not received_frame:
@@ -344,6 +392,8 @@ class JetsonVideoService:
         finally:
             if process is not None and process.poll() is None:
                 self._terminate_process(process)
+            if stale_thread and stale_thread.is_alive():
+                stale_thread.join(timeout=1)
             if stderr_thread and stderr_thread.is_alive():
                 stderr_thread.join(timeout=1)
             if process is not None:
@@ -353,24 +403,33 @@ class JetsonVideoService:
                     process.stderr.close()
 
             with self._frame_ready:
-                self._process = None
-                self._thread = None
+                if self._process is process:
+                    self._process = None
                 self._camera_state["pipeline_pid"] = None
                 self._camera_state["pipeline_returncode"] = process.poll() if process else None
-                if self._stop_event.is_set():
-                    self._camera_state.update(camera_running=False, camera_status="STOPPED")
-                elif failure:
-                    self._camera_state.update(
-                        camera_running=False,
-                        camera_status="FAILED",
-                        camera_error=failure,
-                    )
-                else:
-                    self._camera_state.update(camera_running=False, camera_status="STOPPED")
                 self._frame_ready.notify_all()
 
-            if failure and not self._stop_event.is_set() and self.error_handler:
-                self.error_handler(failure)
+        return failure
+
+    def _watch_stale_stream(self, process: subprocess.Popen[bytes]) -> None:
+        """Restart a receiver whose UDP pipeline stopped delivering frames."""
+
+        while not self._stop_event.is_set() and process.poll() is None:
+            self._stop_event.wait(1.0)
+            if self._stop_event.is_set() or process.poll() is not None:
+                return
+            with self._lock:
+                last_frame = self._camera_state.get("last_frame_at_unix")
+            # Before the first frame, keep listening: the sender may start
+            # later. Once the stream was live, reset the receiver after a
+            # timeout so the next sender path can be acquired cleanly.
+            if last_frame is not None and time.time() - last_frame > self.frame_timeout_seconds:
+                with self._lock:
+                    self._camera_state["last_pipeline_message"] = (
+                        f"receiver watchdog: no frame for more than {self.frame_timeout_seconds:g} seconds"
+                    )
+                self._terminate_process(process)
+                return
 
     def _publish_frame(self, jpeg: bytes) -> None:
         now = time.time()
@@ -388,7 +447,7 @@ class JetsonVideoService:
                 elapsed = self._fps_samples[-1] - self._fps_samples[0]
                 if elapsed > 0:
                     self._camera_state["fps"] = (len(self._fps_samples) - 1) / elapsed
-            if self._camera_state["camera_status"] == "STARTING":
+            if self._camera_state["camera_status"] in {"STARTING", "RECONNECTING", "STALE"}:
                 self._camera_state["camera_status"] = "LIVE"
             self._latest_jpeg = jpeg
             self._preview_version += 1
