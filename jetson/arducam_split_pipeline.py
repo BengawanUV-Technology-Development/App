@@ -28,6 +28,7 @@ import queue
 import re
 import signal
 import shutil
+import socket
 import threading
 import time
 import uuid
@@ -169,7 +170,7 @@ nvvidconv ! video/x-raw,format=I420,width={network_width},height={network_height
 videorate ! video/x-raw,format=I420,framerate={network_fps_caps} !
 x264enc bitrate={args.network_bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max={network_key_int} bframes=0 !
 h264parse ! rtph264pay pt={args.payload_type} config-interval=1 mtu=1200 !
-udpsink host={host} port={args.port} sync=false async=false
+appsink name=network_sink emit-signals=true max-buffers=128 drop=true sync=false
 """.strip()
 
 
@@ -179,6 +180,122 @@ class FramePacket:
     capture_timestamp: float
     pts_ns: int | None
     image: Any
+
+
+class RtpNetworkSender:
+    """Best-effort RTP sender isolated from the local recording pipeline."""
+
+    def __init__(self, host: str, port: int, queue_size: int = 256):
+        self.host = host
+        self.port = port
+        self._queue: queue.Queue[bytes | None] = queue.Queue(maxsize=queue_size)
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._socket: socket.socket | None = None
+        self._destination = None
+        self._lock = threading.Lock()
+        self.packets_sent = 0
+        self.packets_dropped = 0
+        self.send_error_count = 0
+        self.last_error: str | None = None
+        self._last_error_at = 0.0
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            daemon=True,
+            name="jetson-rtp-network-sender",
+        )
+        self._thread.start()
+
+    def submit(self, packet: bytes) -> None:
+        if not self._thread or not self._thread.is_alive():
+            return
+        try:
+            self._queue.put_nowait(packet)
+        except queue.Full:
+            with self._lock:
+                self.packets_dropped += 1
+
+    def stop(self) -> None:
+        thread = self._thread
+        if not thread:
+            return
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._queue.put_nowait(None)
+            except queue.Full:
+                pass
+        thread.join(timeout=3)
+        self._stop_event.set()
+        if thread.is_alive():
+            thread.join(timeout=1)
+        self._thread = None
+
+    def metadata(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "status": "ACTIVE" if self._thread and self._thread.is_alive() else "STOPPED",
+                "host": self.host,
+                "port": self.port,
+                "transport": "H264/RTP/UDP",
+                "packets_sent": self.packets_sent,
+                "packets_dropped": self.packets_dropped,
+                "send_error_count": self.send_error_count,
+                "last_error": self.last_error,
+            }
+
+    def _run(self) -> None:
+        try:
+            self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            while not self._stop_event.is_set():
+                packet = self._queue.get()
+                if packet is None:
+                    return
+                if self._destination is None:
+                    try:
+                        self._destination = socket.getaddrinfo(
+                            self.host,
+                            self.port,
+                            socket.AF_INET,
+                            socket.SOCK_DGRAM,
+                        )[0][4]
+                    except OSError as exc:
+                        self._record_error(exc)
+                        continue
+                try:
+                    self._socket.sendto(packet, self._destination)
+                    with self._lock:
+                        self.packets_sent += 1
+                except OSError as exc:
+                    self._destination = None
+                    with self._lock:
+                        self.packets_dropped += 1
+                    self._record_error(exc)
+        except OSError as exc:
+            self._record_error(exc)
+        finally:
+            if self._socket is not None:
+                self._socket.close()
+                self._socket = None
+
+    def _record_error(self, error: OSError) -> None:
+        now = time.time()
+        with self._lock:
+            self.send_error_count += 1
+            self.last_error = str(error)
+        if now - self._last_error_at >= 5:
+            print(f"[network] RTP sender unavailable: {error}", flush=True)
+            self._last_error_at = now
 
 
 class DetectionRunner:
@@ -457,6 +574,7 @@ class SplitPipeline:
         self.first_pts_ns: int | None = None
         self.last_frame_id = -1
         self.worker: DetectionWorker | None = None
+        self.network_sender = RtpNetworkSender(args.host, args.port)
         self.telemetry = MAVLinkTelemetryCollector()
         self.telemetry_path = self.session_dir / "telemetry.jsonl"
         self._telemetry_file = None
@@ -512,6 +630,10 @@ class SplitPipeline:
             if sink is None:
                 raise RuntimeError("GStreamer pipeline did not create highres_sink")
             sink.connect("new-sample", self._on_sample)
+            network_sink = self.pipeline.get_by_name("network_sink")
+            if network_sink is None:
+                raise RuntimeError("GStreamer pipeline did not create network_sink")
+            network_sink.connect("new-sample", self._on_network_sample)
 
             bus = self.pipeline.get_bus()
             bus.add_signal_watch()
@@ -519,6 +641,7 @@ class SplitPipeline:
             if self.worker is None:
                 raise RuntimeError("Detection worker was not initialized")
             self.worker.start()
+            self.network_sender.start()
             self.pipeline.set_state(Gst.State.PLAYING)
             self._write_metadata("RECORDING")
             self.loop = GLib.MainLoop()
@@ -530,6 +653,7 @@ class SplitPipeline:
             raise
         finally:
             self._shutdown_pipeline()
+            self.network_sender.stop()
             if self.worker is not None:
                 self.worker.close()
             if self._telemetry_started:
@@ -646,6 +770,24 @@ class SplitPipeline:
             self.worker.submit(packet)
         return self.gst.FlowReturn.OK
 
+    def _on_network_sample(self, sink):
+        sample = sink.emit("pull-sample")
+        if sample is None:
+            return self.gst.FlowReturn.ERROR
+        buffer = sample.get_buffer()
+        success, map_info = buffer.map(self.gst.MapFlags.READ)
+        if not success:
+            return self.gst.FlowReturn.OK
+        try:
+            # Only enqueue the already-packetized RTP datagram. No socket
+            # operation occurs in the GStreamer streaming callback, so a
+            # disconnected Tailscale/network path cannot block the local
+            # recording branch.
+            self.network_sender.submit(bytes(map_info.data))
+        finally:
+            buffer.unmap(map_info)
+        return self.gst.FlowReturn.OK
+
     def _shutdown_pipeline(self) -> None:
         if self.pipeline is not None:
             self.pipeline.set_state(self.gst.State.NULL)
@@ -739,8 +881,9 @@ class SplitPipeline:
                 "host": self.args.host,
                 "port": self.args.port,
                 "payload_type": self.args.payload_type,
-                "transport": "H264/RTP/UDP",
+                "transport": "H264/RTP/UDP (best-effort sender)",
             },
+            "network_sender": self.network_sender.metadata(),
             "files": {
                 "video": "video.mp4",
                 "video_recovery_file": "video.mp4.moov.recovery",

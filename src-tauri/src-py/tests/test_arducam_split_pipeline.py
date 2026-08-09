@@ -1,6 +1,8 @@
 import sys
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 APP_ROOT = Path(__file__).resolve().parents[3]
@@ -8,6 +10,7 @@ if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 
 from jetson.arducam_split_pipeline import (  # noqa: E402
+    RtpNetworkSender,
     build_pipeline_description,
     parse_args,
     scale_bbox,
@@ -32,6 +35,8 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertIn("fragment-duration=1000", description)
         self.assertIn("fragment-mode=first-moov-then-finalise", description)
         self.assertIn("moov-recovery-file=\"/tmp/video.mp4.moov.recovery\"", description)
+        self.assertIn("appsink name=network_sink", description)
+        self.assertNotIn("udpsink", description)
         self.assertIn("filesink location=\"/tmp/video.mp4\"", description)
 
     def test_bbox_is_mapped_from_highres_to_network_coordinates(self):
@@ -45,6 +50,37 @@ class ArducamSplitPipelineTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             build_pipeline_description(args, Path("/tmp/video.mp4"))
+
+    def test_network_sender_does_not_block_pipeline_on_udp_queue(self):
+        class FakeSocket:
+            def __init__(self):
+                self.sent = []
+
+            def sendto(self, packet, destination):
+                self.sent.append((packet, destination))
+
+            def close(self):
+                return None
+
+        fake_socket = FakeSocket()
+        sender = RtpNetworkSender("127.0.0.1", 5000)
+        try:
+            with patch(
+                "jetson.arducam_split_pipeline.socket.socket",
+                return_value=fake_socket,
+            ), patch(
+                "jetson.arducam_split_pipeline.socket.getaddrinfo",
+                return_value=[(2, 2, 17, "", ("127.0.0.1", 5000))],
+            ):
+                sender.start()
+                sender.submit(b"rtp-test")
+                deadline = time.time() + 1
+                while sender.packets_sent < 1 and time.time() < deadline:
+                    time.sleep(0.01)
+            self.assertEqual(fake_socket.sent[0][0], b"rtp-test")
+            self.assertEqual(sender.packets_sent, 1)
+        finally:
+            sender.stop()
 
 
 if __name__ == "__main__":
