@@ -9,8 +9,10 @@ SIGINT so the MP4 muxer receives EOS and finalizes the local recording.
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -68,6 +70,31 @@ def env_bool(name: str, default: bool = False) -> bool:
     raise RecordingAgentError(f"{name} must be true or false")
 
 
+def normalize_gcs_host(value: Any, name: str = "gcs_host") -> str:
+    """Validate a destination without allowing URL/argument injection."""
+
+    if not isinstance(value, str):
+        raise RecordingAgentError(f"{name} must be a string")
+    host = value.strip()
+    if not host:
+        raise RecordingAgentError(f"{name} must not be empty")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        if len(host) > 253 or not re.fullmatch(
+            r"(?=.{1,253}\.?$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
+            r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.?",
+            host,
+        ):
+            raise RecordingAgentError(f"{name} must be a valid IPv4 address or hostname")
+        return host.rstrip(".")
+    if address.version != 4:
+        raise RecordingAgentError(
+            f"{name} must be IPv4 because the current RTP sender uses IPv4 UDP"
+        )
+    return str(address)
+
+
 class AgentConfig:
     def __init__(self):
         self.bind_address = os.getenv("JETSON_RECORDING_AGENT_BIND_ADDRESS", "0.0.0.0")
@@ -75,9 +102,10 @@ class AgentConfig:
         self.token = os.getenv("JETSON_RECORDING_AGENT_TOKEN", "").strip()
         if not self.token:
             raise RecordingAgentError("JETSON_RECORDING_AGENT_TOKEN must be configured")
-        self.gcs_host = os.getenv("JETSON_GCS_HOST", "").strip()
-        if not self.gcs_host:
-            raise RecordingAgentError("JETSON_GCS_HOST must contain the GCS Tailscale IP or hostname")
+        raw_gcs_host = os.getenv("JETSON_GCS_HOST", "").strip()
+        self.gcs_host = normalize_gcs_host(raw_gcs_host, "JETSON_GCS_HOST") if raw_gcs_host else None
+        self.allow_gcs_host_override = env_bool("JETSON_ALLOW_GCS_HOST_OVERRIDE", False)
+        self.gcs_api_port = env_int("JETSON_GCS_API_PORT", 5001, 1, 65535)
 
         self.pipeline_script = Path(
             os.getenv(
@@ -118,19 +146,34 @@ class AgentConfig:
         self.slice_width = env_int("JETSON_MODEL_SLICE_WIDTH", 640, 16, 7680)
         self.slice_height = env_int("JETSON_MODEL_SLICE_HEIGHT", 640, 16, 7680)
         self.overlap = env_float("JETSON_MODEL_OVERLAP", 0.2, 0, 0.99)
-        self.ingest_url = os.getenv(
-            "JETSON_DETECTION_INGEST_URL",
-            f"http://{self.gcs_host}:5001/api/v1/detection/overlay",
-        ).strip()
+        self.ingest_url = os.getenv("JETSON_DETECTION_INGEST_URL", "").strip() or None
 
-    def command(self, session_id: str, label: str | None) -> list[str]:
+    def command(
+        self,
+        session_id: str,
+        label: str | None,
+        gcs_host: str | None = None,
+        video_port: int | None = None,
+        api_port: int | None = None,
+    ) -> list[str]:
+        target_host = gcs_host or self.gcs_host
+        if not target_host:
+            raise RecordingAgentError(
+                "GCS host is unavailable; call /recording/start directly from the GCS "
+                "or configure JETSON_GCS_HOST as a fallback"
+            )
+        target_video_port = video_port or self.video_port
+        target_api_port = api_port or self.gcs_api_port
+        ingest_url = self.ingest_url or (
+            f"http://{target_host}:{target_api_port}/api/v1/detection/overlay"
+        )
         command = [
             sys.executable,
             str(self.pipeline_script),
             "--host",
-            self.gcs_host,
+            target_host,
             "--port",
-            str(self.video_port),
+            str(target_video_port),
             "--payload-type",
             str(self.payload_type),
             "--sensor-id",
@@ -172,7 +215,7 @@ class AgentConfig:
             "--overlap",
             str(self.overlap),
             "--ingest-url",
-            self.ingest_url,
+            ingest_url,
         ]
         if self.record_mountpoint:
             command.extend(["--mountpoint", self.record_mountpoint])
@@ -198,6 +241,9 @@ class RecordingController:
         self._session_id: str | None = None
         self._session_dir: Path | None = None
         self._label: str | None = None
+        self._gcs_host: str | None = None
+        self._video_port: int | None = None
+        self._api_port: int | None = None
         self._started_at: float | None = None
         self._ended_at: float | None = None
         self._stop_requested = False
@@ -279,6 +325,9 @@ class RecordingController:
             "session_id": self._session_id,
             "session_dir": str(self._session_dir) if self._session_dir else None,
             "label": self._label,
+            "gcs_host": self._gcs_host,
+            "video_port": self._video_port,
+            "api_port": self._api_port,
             "started_at": self._started_at,
             "pipeline_script": str(self.config.pipeline_script),
         }
@@ -320,6 +369,9 @@ class RecordingController:
         self._session_id = payload.get("session_id")
         self._session_dir = Path(session_dir)
         self._label = payload.get("label")
+        self._gcs_host = payload.get("gcs_host") or getattr(self.config, "gcs_host", None)
+        self._video_port = payload.get("video_port") or getattr(self.config, "video_port", 5000)
+        self._api_port = payload.get("api_port") or getattr(self.config, "gcs_api_port", 5001)
         self._started_at = payload.get("started_at")
         self._ended_at = None
         self._stop_requested = False
@@ -396,17 +448,72 @@ class RecordingController:
             "highres": metadata.get("highres"),
             "network": metadata.get("network"),
             "storage": metadata.get("storage"),
+            "stream_target": {
+                "host": self._gcs_host,
+                "video_port": self._video_port,
+                "api_port": self._api_port,
+            } if self._gcs_host else None,
         }
 
     def status(self) -> dict[str, Any]:
         with self._lock:
             return self._state_locked()
 
-    def start(self, label: str | None = None) -> dict[str, Any]:
+    @staticmethod
+    def _runtime_port(value: Any, fallback: int, name: str) -> int:
+        if value is None:
+            return fallback
+        if isinstance(value, bool):
+            raise RecordingAgentError(f"{name} must be an integer")
+        try:
+            port = int(value)
+        except (TypeError, ValueError) as exc:
+            raise RecordingAgentError(f"{name} must be an integer") from exc
+        if not 1 <= port <= 65535:
+            raise RecordingAgentError(f"{name} must be between 1 and 65535")
+        return port
+
+    def _runtime_gcs_host(self, requested_host: Any, request_host: str | None) -> str:
+        caller = normalize_gcs_host(request_host, "request source IP") if request_host else None
+        if requested_host is not None:
+            requested = normalize_gcs_host(requested_host)
+            allow_override = bool(getattr(self.config, "allow_gcs_host_override", False))
+            if caller and requested != caller and not allow_override:
+                raise RecordingAgentError(
+                    "gcs_host override does not match the request source; set "
+                    "JETSON_ALLOW_GCS_HOST_OVERRIDE=true only when routing requires an override"
+                )
+            return requested
+        fallback = getattr(self.config, "gcs_host", None)
+        if caller:
+            return caller
+        if fallback:
+            return normalize_gcs_host(fallback, "JETSON_GCS_HOST")
+        raise RecordingAgentError(
+            "GCS host could not be detected and JETSON_GCS_HOST is not configured"
+        )
+
+    def start(
+        self,
+        label: str | None = None,
+        *,
+        request_host: str | None = None,
+        gcs_host: Any = None,
+        video_port: Any = None,
+        api_port: Any = None,
+    ) -> dict[str, Any]:
         with self._lock:
             current = self._state_locked()
             if current["recording"]:
                 return current
+
+            target_host = self._runtime_gcs_host(gcs_host, request_host)
+            target_video_port = self._runtime_port(
+                video_port, getattr(self.config, "video_port", 5000), "video_port"
+            )
+            target_api_port = self._runtime_port(
+                api_port, getattr(self.config, "gcs_api_port", 5001), "api_port"
+            )
 
             if self._storage_guard_enabled:
                 try:
@@ -427,10 +534,19 @@ class RecordingController:
             self._session_id = session_id
             self._session_dir = self.config.record_dir / session_id
             self._label = (label or "").strip() or None
+            self._gcs_host = target_host
+            self._video_port = target_video_port
+            self._api_port = target_api_port
             self._started_at = time.time()
             self._ended_at = None
             self._stop_requested = False
-            command = self.config.command(session_id, self._label)
+            command = self.config.command(
+                session_id,
+                self._label,
+                gcs_host=target_host,
+                video_port=target_video_port,
+                api_port=target_api_port,
+            )
             try:
                 self._process = subprocess.Popen(
                     command,
@@ -573,7 +689,13 @@ class RecordingRequestHandler(BaseHTTPRequestHandler):
                 label = payload.get("label")
                 if label is not None and not isinstance(label, str):
                     raise RecordingAgentError("label must be a string")
-                result = self.controller.start(label)
+                result = self.controller.start(
+                    label,
+                    request_host=self.client_address[0],
+                    gcs_host=payload.get("gcs_host"),
+                    video_port=payload.get("video_port"),
+                    api_port=payload.get("api_port"),
+                )
                 self._send_json(202, result)
                 return
             if self.path == "/recording/stop":
@@ -604,7 +726,8 @@ def main() -> int:
     signal.signal(signal.SIGTERM, stop_server)
     print(
         f"[recording-agent] listening on {config.bind_address}:{config.port}; "
-        f"GCS={config.gcs_host}:{config.video_port}",
+        f"GCS=auto-detect (fallback={config.gcs_host or 'none'}); "
+        f"default-video-port={config.video_port}",
         flush=True,
     )
     try:

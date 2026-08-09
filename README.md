@@ -196,8 +196,10 @@ Konfigurasi utama berada di `src-tauri/src-py/.env`:
   `VRX_CAPTURE_FPS`.
 
 Konfigurasi sender dan recording agent Jetson berada di `jetson/.env`. Salin
-`jetson/.env.example` ke file tersebut di Jetson; file ini harus memuat
-`JETSON_GCS_HOST` dan token yang sama dengan konfigurasi GCS.
+`jetson/.env.example` ke file tersebut di Jetson. Token harus sama dengan
+konfigurasi GCS. Alamat GCS tidak perlu disimpan di Jetson: saat recording
+dimulai, agent otomatis memakai IPv4 pemanggil `/recording/start` sebagai
+tujuan RTP dan detection overlay.
 
 Dashboard mengambil live preview MJPEG dari service backend. Pada source Jetson,
 backend menerima H.264/RTP/UDP dengan GStreamer dan hanya menyediakan preview;
@@ -289,7 +291,7 @@ tailscale ip -4
 tailscale ping <IP_PERANGKAT_LAIN>
 ```
 
-Catat `<JETSON_IP>` dan `<GCS_IP>`. Jetson harus dapat menjangkau GCS pada TCP
+Catat `<JETSON_IP>`. Jetson harus dapat menjangkau GCS pada TCP
 5001 dan UDP 5000; GCS harus dapat menjangkau Jetson pada TCP 5101.
 
 ### 2. Test kamera di Jetson
@@ -334,10 +336,17 @@ cp jetson/.env.example jetson/.env
 Edit `jetson/.env`:
 
 ```env
-JETSON_GCS_HOST=<GCS_IP>
 JETSON_RECORDING_AGENT_TOKEN=<TOKEN_BERSAMA>
 JETSON_RECORD_DIR=/media/<user>/<ssd-label>/flight-recordings
 ```
+
+`JETSON_GCS_HOST` bersifat opsional dan hanya menjadi fallback untuk caller
+lama. Pada koneksi langsung GCS ke Jetson, setiap `START RECORDING` otomatis
+memperbarui tujuan stream ke IP GCS yang melakukan request sehingga perubahan
+IP tidak memerlukan edit `/etc/buv/jetson-recording.env` atau restart service.
+Override ke alamat yang berbeda dari IP pemanggil ditolak secara default;
+aktifkan `JETSON_ALLOW_GCS_HOST_OVERRIDE=true` hanya jika deployment memakai
+proxy atau routing khusus.
 
 Untuk smoke test pertama, biarkan `JETSON_MODEL_WEIGHTS` tetap dikomentari.
 Pastikan mountpoint SSD aktif dan `JETSON_RECORD_DIR` dapat ditulis oleh user

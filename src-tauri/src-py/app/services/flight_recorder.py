@@ -303,7 +303,7 @@ class FlightRecorder:
         try:
             # Keep the GCS receiver ready before asking Jetson to send frames.
             self.start_camera()
-            self._jetson_recording.start(label)
+            self._jetson_recording.start(label, video_port=self._jetson_video.port)
         except (FlightRecorderError, JetsonRecordingError) as exc:
             raise FlightRecorderError(str(exc)) from exc
         return self.status()

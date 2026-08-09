@@ -33,6 +33,18 @@ class JetsonRecordingClient:
             raise JetsonRecordingError(
                 "JETSON_RECORDING_AGENT_TIMEOUT_SECONDS must be between 0.1 and 10"
             )
+        self.api_port = self._env_port("API_PORT", 5001)
+
+    @staticmethod
+    def _env_port(name: str, default: int) -> int:
+        raw = os.getenv(name, str(default))
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise JetsonRecordingError(f"{name} must be an integer") from exc
+        if not 1 <= value <= 65535:
+            raise JetsonRecordingError(f"{name} must be between 1 and 65535")
+        return value
 
     @property
     def configured(self) -> bool:
@@ -110,8 +122,22 @@ class JetsonRecordingClient:
                 "error": str(exc),
             }
 
-    def start(self, label: str | None = None) -> dict:
-        return self._request("/recording/start", "POST", {"label": label})
+    def start(
+        self,
+        label: str | None = None,
+        *,
+        video_port: int | None = None,
+        gcs_host: str | None = None,
+    ) -> dict:
+        payload: dict[str, Any] = {
+            "label": label,
+            "api_port": self.api_port,
+        }
+        if video_port is not None:
+            payload["video_port"] = video_port
+        if gcs_host:
+            payload["gcs_host"] = gcs_host
+        return self._request("/recording/start", "POST", payload)
 
     def stop(self) -> dict:
         return self._request("/recording/stop", "POST")

@@ -45,6 +45,11 @@ function FlightRecorderControl({ onEvent }) {
         {remoteUnknown ? "JETSON CONNECTION LOST" : active ? "STOP & SAVE" : "START RECORDING"}
       </button>
       {recorder.error ? <small className="flight-recorder-error">{recorder.error}</small> : null}
+      {recorder.stream_target?.host ? (
+        <small>
+          STREAM → {recorder.stream_target.host}:{recorder.stream_target.video_port}
+        </small>
+      ) : null}
       {recorder.session_id ? <small title={recorder.session_dir || ""}>{recorder.session_id}</small> : null}
     </section>
   );
