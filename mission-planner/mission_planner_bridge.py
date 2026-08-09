@@ -32,9 +32,9 @@ clr.AddReference("MAVLink")
 
 import MAVLink
 
-from System import Array, Byte, DateTime, Guid
+from System import AppDomain, Array, Byte, DateTime, Guid
 from System.Net import IPAddress
-from System.Net.Sockets import TcpListener
+from System.Net.Sockets import SocketOptionLevel, SocketOptionName, TcpListener
 from System.Text import Encoding
 
 
@@ -79,8 +79,18 @@ _mission_cache_at = 0.0
 
 
 def _unix_time():
-    epoch = DateTime(1970, 1, 1)
-    return DateTime.UtcNow.Subtract(epoch).TotalSeconds
+    return time.time()
+
+
+def _gui_is_busy():
+    try:
+        if bool(getattr(MAV, "givebackstream", False)):
+            return True
+        if bool(getattr(MAV, "buzy", False)):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _read_state(state, name, default=None):
@@ -152,6 +162,15 @@ def _read_number(state, name, default=None):
         return default
 
 
+def _read_coord(state, name, default=None):
+    val = _read_number(state, name, default)
+    if val is None:
+        return None
+    if abs(val) > 180.0:
+        val = val / 1e7
+    return val
+
+
 def _read_integer(state, name, default=None):
     value = _read_state(state, name, default)
     if value is None:
@@ -172,9 +191,30 @@ def _first_integer(obj, names, default=None):
 
 def _vehicle_connected():
     try:
-        return bool(MAV.BaseStream.IsOpen)
+        if hasattr(MAV, "BaseStream") and MAV.BaseStream is not None:
+            if hasattr(MAV.BaseStream, "IsOpen"):
+                if bool(MAV.BaseStream.IsOpen):
+                    return True
     except Exception:
-        return bool(_read_cs("lat", 0) or _read_cs("lng", 0))
+        pass
+
+    try:
+        state = _active_state()
+        mode = str(_read_state(state, "mode", "")).strip().upper()
+        if mode not in ("", "UNKNOWN", "NONE"):
+            return True
+        if bool(_read_state(state, "armed", False)):
+            return True
+        if float(_read_state(state, "battery_voltage", 0) or 0) > 0:
+            return True
+        if int(_read_state(state, "satcount", 0) or 0) > 0:
+            return True
+        if float(_read_state(state, "lat", 0) or 0) != 0 or float(_read_state(state, "lng", 0) or 0) != 0:
+            return True
+    except Exception:
+        pass
+
+    return False
 
 
 def _build_snapshot():
@@ -237,9 +277,15 @@ def _build_snapshot():
 
 def _update_snapshot():
     global _snapshot
-    next_snapshot = _build_snapshot()
-    with _snapshot_lock:
-        _snapshot = next_snapshot
+    try:
+        next_snapshot = _build_snapshot()
+        with _snapshot_lock:
+            _snapshot = next_snapshot
+    except Exception as exc:
+        print("Failed to update snapshot: {0}".format(exc))
+        with _snapshot_lock:
+            if isinstance(_snapshot, dict):
+                _snapshot["timestamp"] = _unix_time()
 
 
 def _get_snapshot():
@@ -411,18 +457,15 @@ def _mission_payload():
             cached["cache_age_seconds"] = now - _mission_cache_at
             return cached
 
+    if _gui_is_busy():
+        with _mission_cache_lock:
+            if _mission_cache is not None:
+                cached = dict(_mission_cache)
+                cached["cached"] = True
+                return cached
+
     waypoints = []
     current_seq = None
-    try:
-        count = int(MAV.getWPCount())
-    except Exception as exc:
-        return {
-            "ok": False,
-            "timestamp": _unix_time(),
-            "error": "Mission Planner waypoint list unavailable: " + str(exc),
-            "count": 0,
-            "waypoints": [],
-        }
 
     try:
         current_seq = _first_integer(
@@ -435,36 +478,73 @@ def _mission_payload():
     if current_seq is None:
         current_seq = _first_integer(MAV, ("wpno", "wps_current", "currentwp", "current_wp"))
 
-    for index in range(max(0, count)):
+    loaded_from_ram = False
+
+    # Try RAM read from MAV.MAV.wps (C# MAVLinkInterface RAM dictionary)
+    try:
+        mav_obj = getattr(MAV, "MAV", None)
+        wps_dict = getattr(mav_obj, "wps", None) if mav_obj is not None else None
+        if wps_dict is not None and len(wps_dict) > 0:
+            keys = list(wps_dict.Keys)
+            for seq in sorted(keys):
+                wp = wps_dict[seq]
+                command_id = _read_integer(wp, "id") or _read_integer(wp, "command")
+                frame_id = _read_integer(wp, "frame")
+                waypoints.append({
+                    "index": int(seq),
+                    "seq": int(seq),
+                    "command": command_id,
+                    "command_name": _enum_name(command_id),
+                    "frame": frame_id,
+                    "lat": _read_coord(wp, "lat") or _read_coord(wp, "x"),
+                    "lng": _read_coord(wp, "lng") or _read_coord(wp, "y"),
+                    "alt_m": _read_number(wp, "alt") or _read_number(wp, "z"),
+                    "param1": _read_number(wp, "p1") or _read_number(wp, "param1"),
+                    "param2": _read_number(wp, "p2") or _read_number(wp, "param2"),
+                    "param3": _read_number(wp, "p3") or _read_number(wp, "param3"),
+                    "param4": _read_number(wp, "p4") or _read_number(wp, "param4"),
+                })
+            if len(waypoints) > 0:
+                loaded_from_ram = True
+    except Exception:
+        pass
+
+    # Tier 3: Safe MAV.getWPCount() & MAV.getWP() FC query when NOT busy and RAM returned 0
+    if not loaded_from_ram and not _gui_is_busy():
         try:
-            waypoint = MAV.getWP(index)
-            command_id = _read_integer(waypoint, "id")
-            frame_id = _read_integer(waypoint, "frame")
-            waypoints.append({
-                "index": index,
-                "seq": index,
-                "command": command_id,
-                "command_name": _enum_name(command_id),
-                "frame": frame_id,
-                "lat": _read_number(waypoint, "lat"),
-                "lng": _read_number(waypoint, "lng"),
-                "alt_m": _read_number(waypoint, "alt"),
-                "param1": _read_number(waypoint, "p1"),
-                "param2": _read_number(waypoint, "p2"),
-                "param3": _read_number(waypoint, "p3"),
-                "param4": _read_number(waypoint, "p4"),
-            })
-        except Exception as exc:
-            waypoints.append({
-                "index": index,
-                "seq": index,
-                "error": str(exc),
-            })
+            count = int(MAV.getWPCount())
+            for index in range(max(0, count)):
+                try:
+                    waypoint = MAV.getWP(index)
+                    command_id = _read_integer(waypoint, "id")
+                    frame_id = _read_integer(waypoint, "frame")
+                    waypoints.append({
+                        "index": index,
+                        "seq": index,
+                        "command": command_id,
+                        "command_name": _enum_name(command_id),
+                        "frame": frame_id,
+                        "lat": _read_coord(waypoint, "lat"),
+                        "lng": _read_coord(waypoint, "lng"),
+                        "alt_m": _read_number(waypoint, "alt"),
+                        "param1": _read_number(waypoint, "p1"),
+                        "param2": _read_number(waypoint, "p2"),
+                        "param3": _read_number(waypoint, "p3"),
+                        "param4": _read_number(waypoint, "p4"),
+                    })
+                except Exception as exc:
+                    waypoints.append({
+                        "index": index,
+                        "seq": index,
+                        "error": str(exc),
+                    })
+        except Exception:
+            pass
 
     payload = {
         "ok": True,
         "timestamp": _unix_time(),
-        "source": "mission-planner",
+        "source": "mission-planner-ram" if loaded_from_ram else "mission-planner",
         "count": len(waypoints),
         "current_seq": current_seq,
         "waypoints": waypoints,
@@ -783,17 +863,22 @@ def _handle_client(client):
 
 
 def _stop_previous_server():
-    previous_listener = getattr(bridge_runtime, "_buv_bridge_listener", None)
-    if previous_listener is None:
-        return
+    prev = AppDomain.CurrentDomain.GetData("BUV_BRIDGE_LISTENER")
+    if prev is None:
+        prev = getattr(bridge_runtime, "_buv_bridge_listener", None)
 
+    if prev is not None:
+        try:
+            prev.Stop()
+            print("Stopped previous BUV Mission Planner bridge listener from AppDomain")
+        except Exception as exc:
+            print("Could not stop previous bridge listener: {0}".format(exc))
+
+    AppDomain.CurrentDomain.SetData("BUV_BRIDGE_LISTENER", None)
     try:
-        previous_listener.Stop()
-        print("Stopped previous BUV Mission Planner bridge listener")
-    except Exception as exc:
-        print("Could not stop previous bridge listener: {0}".format(exc))
-    finally:
         bridge_runtime._buv_bridge_listener = None
+    except Exception:
+        pass
 
 
 def _server_loop(listener):
@@ -818,9 +903,29 @@ def _server_loop(listener):
 def _start_server():
     _stop_previous_server()
 
-    listener = TcpListener(IPAddress.Any, PORT)
-    listener.Start()
-    bridge_runtime._buv_bridge_listener = listener
+    listener = None
+    for attempt in range(5):
+        try:
+            listener = TcpListener(IPAddress.Any, PORT)
+            try:
+                listener.Server.SetSocketOption(
+                    SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1
+                )
+            except Exception:
+                pass
+            listener.Start()
+            break
+        except Exception as exc:
+            if attempt < 4:
+                time.sleep(0.5)
+            else:
+                raise exc
+
+    AppDomain.CurrentDomain.SetData("BUV_BRIDGE_LISTENER", listener)
+    try:
+        bridge_runtime._buv_bridge_listener = listener
+    except Exception:
+        pass
 
     server = threading.Thread(target=_server_loop, args=(listener,))
     server.daemon = True
@@ -832,6 +937,9 @@ _update_snapshot()
 _start_server()
 
 while True:
-    _update_snapshot()
-    _process_pending_commands()
+    try:
+        _update_snapshot()
+        _process_pending_commands()
+    except Exception as exc:
+        print("Bridge loop exception: {0}".format(exc))
     Script.Sleep(int(1000.0 / SNAPSHOT_RATE_HZ))

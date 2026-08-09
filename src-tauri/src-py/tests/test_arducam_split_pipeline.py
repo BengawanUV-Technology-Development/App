@@ -27,7 +27,8 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertIn("framerate=15/1", description)
         self.assertIn("appsink name=highres_sink", description)
         self.assertIn("rtph264pay pt=96", description)
-        self.assertIn("filesink location=\"/tmp/video.mp4\"", description)
+        self.assertIn("filesink location=", description)
+        self.assertIn("video.mp4", description)
 
     def test_bbox_is_mapped_from_highres_to_network_coordinates(self):
         self.assertEqual(

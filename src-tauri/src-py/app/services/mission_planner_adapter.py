@@ -161,6 +161,10 @@ class MissionPlannerAdapter:
             try:
                 lat = float(lat) if lat is not None else None
                 lng = float(lng) if lng is not None else None
+                if lat is not None and abs(lat) > 90.0:
+                    lat = lat / 1e7
+                if lng is not None and abs(lng) > 180.0:
+                    lng = lng / 1e7
             except (TypeError, ValueError):
                 lat = None
                 lng = None
@@ -169,6 +173,14 @@ class MissionPlannerAdapter:
                 alt_m = float(item.get("alt_m")) if item.get("alt_m") is not None else None
             except (TypeError, ValueError):
                 alt_m = None
+
+            has_position = (
+                lat is not None
+                and lng is not None
+                and abs(lat) <= 90.0
+                and abs(lng) <= 180.0
+                and not (lat == 0.0 and lng == 0.0)
+            )
 
             waypoints.append({
                 "index": item.get("index"),
@@ -179,7 +191,7 @@ class MissionPlannerAdapter:
                 "lat": lat,
                 "lng": lng,
                 "alt_m": alt_m,
-                "has_position": lat is not None and lng is not None and not (lat == 0.0 and lng == 0.0),
+                "has_position": has_position,
                 "error": item.get("error"),
             })
 
@@ -249,7 +261,8 @@ class MissionPlannerAdapter:
             stale = (
                 last_success_at is None
                 or source_timestamp is None
-                or now - float(source_timestamp) > self.stale_after_seconds
+                or (now - last_success_at) > self.stale_after_seconds
+                or (last_success_at - float(source_timestamp)) > self.stale_after_seconds
             )
             bridge_online = self._bridge_error is None and last_success_at is not None
             if stale:
