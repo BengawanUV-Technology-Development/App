@@ -26,6 +26,8 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertIn("framerate=30/1", description)
         self.assertIn("framerate=15/1", description)
         self.assertIn("appsink name=highres_sink", description)
+        self.assertIn("max-size-buffers=16", description)
+        self.assertIn("drop=false", description)
         self.assertIn("rtph264pay pt=96", description)
         self.assertIn("filesink location=\"/tmp/video.mp4\"", description)
 

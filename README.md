@@ -3,9 +3,11 @@
 BUV SAR Console adalah aplikasi operasional pendamping Mission Planner untuk
 monitoring penerbangan, visualisasi map, dan pengembangan computer vision.
 
-Mission Planner tetap menjadi sumber kebenaran untuk koneksi flight controller,
-telemetry, konfigurasi parameter, dan mission. Aplikasi ini tidak berkomunikasi
-langsung dengan MAVLink/MAVSDK.
+Mission Planner tetap menjadi sumber kebenaran untuk dashboard, command,
+konfigurasi parameter, dan mission. Untuk flight recording, Jetson juga dapat
+membaca stream MAVLink flight controller secara read-only melalui
+`mavlink-router`; jalur ini tidak mengirim command dan tidak membutuhkan
+Mission Planner.
 
 ## Arsitektur
 
@@ -15,13 +17,20 @@ Flight Controller
   -> Mission Planner HTTP Bridge :5000
   -> BUV Backend API/WebSocket :5001
   -> React + Tauri Frontend
+
+Flight Controller
+  -> MAVLink Router di Jetson
+  -> telemetry collector read-only :5760 localhost
+  -> telemetry.jsonl per frame
 ```
 
 Video dan recording Arducam berjalan melalui Jetson, bukan melalui laptop:
 
 ```text
 Arducam CSI/Argus -> Jetson split pipeline
-  ├─ high-res -> YOLO/SAHI + video.mp4 lokal Jetson
+  ├─ high-res -> video.mp4 lokal Jetson
+  ├─ frame PTS + MAVLink snapshot -> telemetry.jsonl lokal Jetson
+  ├─ optional YOLO/SAHI -> detections.jsonl lokal Jetson
   ├─ low-res H.264/RTP/UDP :5000 -> GCS preview
   └─ bbox HTTP :5001 -> GCS overlay
 
@@ -35,7 +44,7 @@ This project utilizes Docker to containerize the Python backend and AI dependenc
 ### Prerequisites
 - Node.js & npm
 - Docker Desktop
-- Mission Planner (Windows)
+- Mission Planner (Windows; optional untuk capture-only)
 - Tailscale, atau jaringan modem/LAN yang membuat Jetson dan GCS saling terjangkau
 - Jetson dengan kamera Arducam CSI/Argus dan GStreamer
 
@@ -53,8 +62,11 @@ This project utilizes Docker to containerize the Python backend and AI dependenc
    ```
    *Edit `src-tauri/src-py/.env` and insert your Gemini, Notion, and Telegram API keys.*
 
-3. **Start the Mission Planner Bridge**
-   Open Mission Planner, navigate to the Scripts tab, and run `mission-planner/mission_planner_bridge.py`. This bridge is required to forward telemetry data to the backend.
+3. **Start the Mission Planner Bridge (optional)**
+   Open Mission Planner, navigate to the Scripts tab, and run
+   `mission-planner/mission_planner_bridge.py` if the dashboard needs live
+   telemetry, mission, or flight-controller commands. Capture-only recording
+   can skip this step; Jetson reads MAVLink separately in read-only mode.
 
 4. **Start the Backend Services (Docker)**
    ```bash
@@ -129,15 +141,17 @@ GET  /logs/recent
 
 ## Scope Saat Ini
 
-- Telemetry HUD dari Mission Planner.
+- Telemetry HUD dari Mission Planner serta read-only telemetry sidecar dari
+  MAVLink Router Jetson untuk flight recording.
 - Arm, disarm, reboot saat disarmed, dan perubahan flight mode melalui Mission
   Planner.
 - HTTP snapshot dengan WebSocket real-time dan fallback polling.
 - Deteksi telemetry stale dan validitas GPS.
 - Dashboard SAR, model wahana 3D, serta fondasi map dan computer vision.
 - Arducam Jetson split pipeline: high-res MP4/detection sidecar lokal Jetson,
-  low-res H.264/RTP/UDP preview ke GCS, dan overlay bbox di frontend. VRX
-  RD945/EasyCAP tetap tersedia sebagai source legacy.
+  telemetry sidecar per frame, low-res H.264/RTP/UDP preview ke GCS, dan
+  overlay bbox di frontend. VRX RD945/EasyCAP tetap tersedia sebagai source
+  legacy.
 
 ## Flight Recording
 
@@ -147,16 +161,23 @@ Tailscale. GCS tidak membuat file relay recording. Setelah `STOP & SAVE`, file
 berada di Jetson:
 
 ```text
-/data/flight-recordings/flight-<timestamp>-<id>/
+/media/<user>/<ssd-label>/flight-recordings/flight-<timestamp>-<id>/
   video.mp4
+  telemetry.jsonl
   detections.jsonl
   metadata.json
 ```
 
 `video.mp4` adalah cabang high-res yang sama dengan input YOLO/SAHI;
-`detections.jsonl` berisi `frame_id`, PTS, bbox high-res, dan bbox network.
-Live preview low-res dan overlay bbox tetap dikirim/ditampilkan di GCS, tetapi
-tidak disimpan sebagai recording kedua di laptop.
+`telemetry.jsonl` berisi snapshot telemetry read-only yang dicocokkan ke
+`frame_id` dan PTS. Pada mode capture-only, `detections.jsonl` tetap berisi
+record per frame dengan `detections=[]` dan `bbox=null`; YOLO dapat dijalankan
+offline setelah flight. Live preview low-res dan overlay bbox tetap
+dikirim/ditampilkan di GCS, tetapi tidak disimpan sebagai recording kedua di
+laptop.
+
+Dokumentasi workflow lengkap tersedia di
+[`docs/JETSON_CAPTURE_ONLY_WORKFLOW.md`](docs/JETSON_CAPTURE_ONLY_WORKFLOW.md).
 
 Konfigurasi utama berada di `src-tauri/src-py/.env`:
 
@@ -191,8 +212,9 @@ Jetson. Satu capture Argus dibagi menjadi tiga cabang:
 ```text
 Arducam high-res
   ├─ x264enc → video.mp4 lokal Jetson       (evidence penerbangan)
-  ├─ BGR appsink → YOLO/SAHI                 (detail objek)
-  │                └─ detections.jsonl + POST bbox ke GCS
+  ├─ frame PTS + MAVLink → telemetry.jsonl   (read-only telemetry)
+  ├─ BGR appsink → optional YOLO/SAHI        (detail objek)
+  │                └─ detections.jsonl + optional POST bbox ke GCS
   └─ resize + x264enc → H.264/RTP/UDP        (low-res live preview GCS)
 ```
 
@@ -212,14 +234,14 @@ python3 jetson/arducam_split_pipeline.py \
   --port 5000 \
   --high-width 1920 --high-height 1080 --high-fps 30 \
   --network-width 960 --network-height 540 --network-fps 15 \
-  --record-dir /data/flight-recordings \
-  --weights /absolute/path/to/best.pt \
+  --record-dir /media/<user>/<ssd-label>/flight-recordings \
   --sahi --slice-width 640 --slice-height 640 --overlap 0.2 \
   --ingest-url http://IP_TAILSCALE_GCS:5001/api/v1/detection/overlay
 ```
 
-`--weights` boleh dihilangkan untuk menguji capture, recording, dan streaming
-tanpa detector. Command manual ini adalah smoke test; jangan menjalankannya
+`--weights` boleh dihilangkan untuk mode capture-only tanpa detector. Pada mode
+ini `telemetry.jsonl` dan placeholder `detections.jsonl` tetap dibuat.
+Command manual ini adalah smoke test; jangan menjalankannya
 bersamaan dengan `recording_agent.py`. Endpoint `/api/v1/detection/overlay` hanya menyimpan hasil
 frame terbaru dengan TTL singkat; endpoint ini sengaja terpisah dari
 `/api/v1/detection/ingest`, yang tetap digunakan untuk event detection yang
@@ -314,11 +336,14 @@ Edit `jetson/.env`:
 ```env
 JETSON_GCS_HOST=<GCS_IP>
 JETSON_RECORDING_AGENT_TOKEN=<TOKEN_BERSAMA>
-JETSON_RECORD_DIR=/data/flight-recordings
+JETSON_RECORD_DIR=/media/<user>/<ssd-label>/flight-recordings
 ```
 
 Untuk smoke test pertama, biarkan `JETSON_MODEL_WEIGHTS` tetap dikomentari.
-Pastikan `JETSON_RECORD_DIR` dapat ditulis oleh user yang menjalankan agent.
+Pastikan mountpoint SSD aktif dan `JETSON_RECORD_DIR` dapat ditulis oleh user
+yang menjalankan agent. Untuk telemetry aktual tanpa Mission Planner, pastikan
+flight controller muncul sebagai `/dev/ttyACM0` dan diagnostics MAVLink Router
+menunjukkan heartbeats/bytes received bertambah.
 
 ### 4. Jalankan backend dan recording agent
 
@@ -377,16 +402,17 @@ Hasil yang diharapkan:
 
 - Preview GCS menerima low-res sekitar 960x540 pada 15 FPS.
 - Status berubah dari `STARTING` menjadi `RECORDING`, lalu `COMPLETED`.
-- Jetson membuat `video.mp4`, `detections.jsonl`, dan `metadata.json`.
+- Jetson membuat `video.mp4`, `telemetry.jsonl`, `detections.jsonl`, dan
+  `metadata.json`.
 - Tidak ada video relay baru yang disimpan di laptop/GCS untuk
   `CAMERA_SOURCE=jetson_udp`.
 
 Periksa hasil di Jetson:
 
 ```bash
-find /data/flight-recordings -maxdepth 2 -type f -print
-ls -lh /data/flight-recordings/*/video.mp4
-gst-discoverer-1.0 /data/flight-recordings/<session-id>/video.mp4
+find /media/<user>/<ssd-label>/flight-recordings -maxdepth 2 -type f -print
+ls -lh /media/<user>/<ssd-label>/flight-recordings/*/video.mp4
+gst-discoverer-1.0 /media/<user>/<ssd-label>/flight-recordings/<session-id>/video.mp4
 ```
 
 ### 6. Aktifkan YOLO/SAHI setelah smoke test berhasil
@@ -405,12 +431,13 @@ JETSON_MODEL_OVERLAP=0.2
 Restart recording agent, lakukan recording baru, lalu periksa:
 
 ```bash
-tail -f /data/flight-recordings/<session-id>/detections.jsonl
+tail -f /media/<user>/<ssd-label>/flight-recordings/<session-id>/detections.jsonl
 curl http://127.0.0.1:5001/api/v1/detection/overlay
 ```
 
-`detections.jsonl` boleh kosong jika tidak ada objek pada frame. Jika deteksi
-tersedia, frontend menggambar `bbox_network` pada preview low-res.
+Pada mode capture-only, `detections.jsonl` berisi row per frame dengan
+`detections=[]` dan `bbox=null`. Pada mode YOLO, row berisi bbox bila objek
+terdeteksi; frontend menggambar `bbox_network` pada preview low-res.
 
 Jika preview hilang, periksa log backend dan pastikan UDP `5000`, payload type,
 serta IP GCS cocok. Jika tombol recording gagal, periksa token dan koneksi TCP

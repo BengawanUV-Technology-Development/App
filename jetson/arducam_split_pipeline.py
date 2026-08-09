@@ -7,8 +7,13 @@ and branches it before encoding:
 
     high-res Argus capture
         ├── high-res H.264 software encode -> local video.mp4
-        ├── high-res BGR appsink -> YOLO or SAHI -> detections.jsonl/HTTP
+        ├── high-res BGR appsink -> optional YOLO/SAHI -> detections.jsonl/HTTP
         └── resize -> low-res H.264 software encode -> RTP/UDP -> GCS
+
+The capture-only mode (no ``--weights``) still writes one explicit empty
+detection record per frame and one telemetry snapshot per frame. This makes
+the footage immediately usable for offline YOLO and coordinate reconstruction
+without pretending that a detector or telemetry source was active.
 
 Orin Nano does not provide NVENC, so x264enc is used deliberately. Start with
 1920x1080 for the high-resolution branch and benchmark CPU/FPS before trying a
@@ -32,6 +37,11 @@ from pathlib import Path
 from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+
+try:
+    from .mavlink_telemetry import MAVLinkTelemetryCollector
+except ImportError:  # Script execution from the Jetson service directory.
+    from mavlink_telemetry import MAVLinkTelemetryCollector
 
 
 def utc_iso(timestamp: float) -> str:
@@ -124,6 +134,13 @@ def build_pipeline_description(args: argparse.Namespace, video_path: Path) -> st
     network_key_int = max(1, round(network_fps))
     high_fps_caps = fps_caps(high_fps)
     network_fps_caps = fps_caps(network_fps)
+    appsink_buffers = 1 if args.weights else 16
+    appsink_drop = "drop=true" if args.weights else "drop=false"
+    appsink_queue = (
+        "queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream"
+        if args.weights
+        else "queue max-size-buffers=16 max-size-time=0 max-size-bytes=0"
+    )
     return f"""
 nvarguscamerasrc sensor-id={args.sensor_id} wbmode=1 !
 video/x-raw(memory:NVMM),width={high_width},height={high_height},format=NV12,framerate={high_fps_caps} !
@@ -132,10 +149,10 @@ capture. ! queue max-size-buffers=8 max-size-time=0 max-size-bytes=0 !
 nvvidconv ! video/x-raw,format=I420,width={high_width},height={high_height} !
 x264enc bitrate={args.local_bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max={key_int} bframes=0 !
 h264parse ! mp4mux faststart=true ! filesink location={_gst_quote(video_path)}
-capture. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream !
+capture. ! {appsink_queue} !
 nvvidconv ! video/x-raw,format=BGRx,width={high_width},height={high_height} !
 videoconvert ! video/x-raw,format=BGR,width={high_width},height={high_height} !
-appsink name=highres_sink emit-signals=true max-buffers=1 drop=true sync=false
+appsink name=highres_sink emit-signals=true max-buffers={appsink_buffers} {appsink_drop} sync=false
 capture. ! queue max-size-buffers=4 max-size-time=0 max-size-bytes=0 leaky=downstream !
 nvvidconv ! video/x-raw,format=I420,width={network_width},height={network_height} !
 videorate ! video/x-raw,format=I420,framerate={network_fps_caps} !
@@ -258,6 +275,11 @@ class DetectionWorker:
 
     def submit(self, packet: FramePacket) -> None:
         if self.runner.mode == "none":
+            # The capture-only contract must have one sidecar row per frame.
+            # Write it synchronously instead of allowing a detector queue to
+            # drop rows under load. No overlay HTTP request is made in this
+            # mode because an empty detection is not a live detection event.
+            self._write_placeholder(packet)
             return
         try:
             self.queue.put_nowait(packet)
@@ -274,7 +296,7 @@ class DetectionWorker:
     def close(self) -> None:
         self.stop_event.set()
         try:
-            self.queue.put_nowait(None)
+            self.queue.put(None, timeout=10)
         except queue.Full:
             try:
                 self.queue.get_nowait()
@@ -289,10 +311,12 @@ class DetectionWorker:
         self._detection_file.close()
 
     def _run(self) -> None:
-        while not self.stop_event.is_set():
+        while True:
             try:
                 packet = self.queue.get(timeout=0.5)
             except queue.Empty:
+                if self.stop_event.is_set():
+                    return
                 continue
             if packet is None:
                 return
@@ -314,7 +338,7 @@ class DetectionWorker:
                     ]
 
                 payload = {
-                    "schema_version": "1.0",
+                    "schema_version": "1.1",
                     "type": "vision.overlay",
                     "session_id": self.session_dir.name,
                     "detection_id": f"FRAME-{packet.frame_id}-{uuid.uuid4().hex[:8]}",
@@ -326,13 +350,57 @@ class DetectionWorker:
                     "source_height": self.args.high_height,
                     "network_width": self.args.network_width,
                     "network_height": self.args.network_height,
+                    "detector": {
+                        "enabled": self.runner.mode != "none",
+                        "mode": self.runner.mode,
+                        "status": "DISABLED" if self.runner.mode == "none" else "ACTIVE",
+                        "reason": "YOLO_DISABLED_CAPTURE_ONLY" if self.runner.mode == "none" else None,
+                    },
+                    "bbox": detections[0].get("bbox_highres") if len(detections) == 1 else None,
                     "detections": detections,
+                    "coordinate": {
+                        "status": "UNAVAILABLE",
+                        "latitude": None,
+                        "longitude": None,
+                        "error_radius_m": None,
+                    },
                 }
                 self._detection_file.write(json.dumps(payload, ensure_ascii=False) + "\n")
                 if self.args.ingest_url:
                     self._post_overlay(payload)
             except Exception as exc:
                 print(f"[detector] frame {packet.frame_id} failed: {exc}", flush=True)
+
+    def _write_placeholder(self, packet: FramePacket) -> None:
+        payload = {
+            "schema_version": "1.1",
+            "type": "vision.overlay",
+            "session_id": self.session_dir.name,
+            "detection_id": f"FRAME-{packet.frame_id}-{uuid.uuid4().hex[:8]}",
+            "timestamp": utc_iso(time.time()),
+            "frame_id": packet.frame_id,
+            "frame_timestamp": utc_iso(packet.capture_timestamp),
+            "pts_ns": packet.pts_ns,
+            "source_width": self.args.high_width,
+            "source_height": self.args.high_height,
+            "network_width": self.args.network_width,
+            "network_height": self.args.network_height,
+            "detector": {
+                "enabled": False,
+                "mode": "none",
+                "status": "DISABLED",
+                "reason": "YOLO_DISABLED_CAPTURE_ONLY",
+            },
+            "bbox": None,
+            "detections": [],
+            "coordinate": {
+                "status": "UNAVAILABLE",
+                "latitude": None,
+                "longitude": None,
+                "error_radius_m": None,
+            },
+        }
+        self._detection_file.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
     def _post_overlay(self, payload: dict[str, Any]) -> None:
         request = Request(
@@ -368,12 +436,25 @@ class SplitPipeline:
         self.first_pts_ns: int | None = None
         self.last_frame_id = -1
         self.worker: DetectionWorker | None = None
+        self.telemetry = MAVLinkTelemetryCollector()
+        self.telemetry_path = self.session_dir / "telemetry.jsonl"
+        self._telemetry_file = None
+        self._started_monotonic = time.monotonic()
+        self._telemetry_started = False
+        try:
+            self._telemetry_file = self.telemetry_path.open(
+                "a", encoding="utf-8", buffering=1
+            )
+        except Exception as exc:
+            self._write_metadata("FAILED", error=str(exc))
+            raise
         self._write_metadata("STARTING")
         try:
             # Validate all CLI/GStreamer properties before loading a model.
             build_pipeline_description(args, self.video_path)
             self.worker = DetectionWorker(args, self.session_dir, self.started_at)
         except Exception as exc:
+            self._close_telemetry_file()
             self._write_metadata("FAILED", error=str(exc))
             raise
 
@@ -387,6 +468,8 @@ class SplitPipeline:
 
     def run(self) -> int:
         try:
+            self.telemetry.start()
+            self._telemetry_started = True
             try:
                 import gi
 
@@ -428,6 +511,10 @@ class SplitPipeline:
             self._shutdown_pipeline()
             if self.worker is not None:
                 self.worker.close()
+            if self._telemetry_started:
+                self.telemetry.stop()
+                self._telemetry_started = False
+            self._close_telemetry_file()
             if self.failure_error:
                 self._write_metadata("FAILED", error=self.failure_error)
             elif self.pipeline is not None:
@@ -481,39 +568,87 @@ class SplitPipeline:
         caps = sample.get_caps().get_structure(0)
         width = caps.get_value("width")
         height = caps.get_value("height")
-        success, map_info = buffer.map(self.gst.MapFlags.READ)
-        if not success:
-            return self.gst.FlowReturn.ERROR
-        try:
-            import numpy as np
-
-            image = np.frombuffer(map_info.data, dtype=np.uint8).reshape((height, width, 3)).copy()
-        finally:
-            buffer.unmap(map_info)
 
         pts = None if buffer.pts == self.gst.CLOCK_TIME_NONE else int(buffer.pts)
         if pts is None:
-            frame_id = max(self.frame_counter, self.last_frame_id + 1)
             capture_timestamp = time.time()
         else:
             if self.first_pts_ns is None:
                 self.first_pts_ns = pts
             elapsed_seconds = max(0.0, (pts - self.first_pts_ns) / self.gst.SECOND)
-            frame_id = max(self.last_frame_id + 1, round(elapsed_seconds * self.args.high_fps))
             capture_timestamp = self.started_at + elapsed_seconds
-        self.frame_counter = max(self.frame_counter + 1, frame_id + 1)
+        if self.args.weights:
+            # Detector mode may intentionally drop appsink samples; retain a
+            # PTS-derived identity for the sampled frame in that mode.
+            elapsed_seconds = (
+                0.0
+                if pts is None or self.first_pts_ns is None
+                else max(0.0, (pts - self.first_pts_ns) / self.gst.SECOND)
+            )
+            frame_id = max(self.last_frame_id + 1, round(elapsed_seconds * self.args.high_fps))
+        else:
+            # Capture-only mode uses a lossless appsink branch, so this is the
+            # exact frame index used by video.mp4 and both sidecars.
+            frame_id = self.frame_counter
+        self.frame_counter += 1
         self.last_frame_id = frame_id
+        # Capture-only mode does not need to copy a 4K BGR frame into Python.
+        # The appsink still gives us the source PTS, so telemetry and the
+        # explicit empty detection record remain aligned with video.mp4.
+        image = None
+        if self.worker is not None and self.worker.runner.mode != "none":
+            success, map_info = buffer.map(self.gst.MapFlags.READ)
+            if not success:
+                return self.gst.FlowReturn.ERROR
+            try:
+                import numpy as np
+
+                image = np.frombuffer(map_info.data, dtype=np.uint8).reshape((height, width, 3)).copy()
+            finally:
+                buffer.unmap(map_info)
+
+        packet = FramePacket(frame_id, capture_timestamp, pts, image)
+        self._write_telemetry(packet)
         if self.worker is not None:
-            self.worker.submit(FramePacket(frame_id, capture_timestamp, pts, image))
+            self.worker.submit(packet)
         return self.gst.FlowReturn.OK
 
     def _shutdown_pipeline(self) -> None:
         if self.pipeline is not None:
             self.pipeline.set_state(self.gst.State.NULL)
 
+    def _close_telemetry_file(self) -> None:
+        if self._telemetry_file is not None:
+            self._telemetry_file.close()
+            self._telemetry_file = None
+
+    def _write_telemetry(self, packet: FramePacket) -> None:
+        if self._telemetry_file is None:
+            return
+        snapshot = self.telemetry.snapshot(packet.capture_timestamp)
+        row = {
+            "schema_version": "1.1",
+            "type": "frame.telemetry",
+            "session_id": self.session_dir.name,
+            "frame_id": packet.frame_id,
+            "pts_ns": packet.pts_ns,
+            "captured_at_unix": packet.capture_timestamp,
+            "captured_at_iso": utc_iso(packet.capture_timestamp),
+            "capture_timestamp_ns": int(packet.capture_timestamp * 1_000_000_000),
+            "elapsed_monotonic_seconds": time.monotonic() - self._started_monotonic,
+            "telemetry_source": snapshot["source"],
+            "telemetry_status": snapshot["status"],
+            "telemetry_available": snapshot["connected"],
+            "telemetry_received_at_unix": snapshot["received_at_unix"],
+            "telemetry_age_ms": snapshot["age_ms"],
+            "telemetry_source_error": snapshot["source_error"],
+            "telemetry": snapshot["telemetry"],
+        }
+        self._telemetry_file.write(json.dumps(row, ensure_ascii=False) + "\n")
+
     def _write_metadata(self, status: str, error: str | None = None) -> None:
         metadata = {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "session_id": self.session_dir.name,
             "label": self.args.label,
             "status": status,
@@ -524,7 +659,7 @@ class SplitPipeline:
                 "width": self.args.high_width,
                 "height": self.args.high_height,
                 "fps": self.args.high_fps,
-                "purpose": ["local_recording", "yolo_sahi"],
+                "purpose": ["local_recording", "offline_yolo", "coordinate_reconstruction"],
             },
             "network": {
                 "width": self.args.network_width,
@@ -537,19 +672,25 @@ class SplitPipeline:
             },
             "files": {
                 "video": "video.mp4",
+                "telemetry": "telemetry.jsonl",
                 "detections": "detections.jsonl",
             },
             "frame_identity": {
-                "source": "GStreamer PTS normalized from the first source sample before tee",
+                "source": "Sequential source callback index in capture-only mode; PTS is retained for timing",
                 "field": "frame_id",
                 "pts_field": "pts_ns",
-                "description": "frame_id follows the source PTS timeline; callback order is used only when PTS is unavailable",
+                "description": "capture-only frame_id is zero-based and lossless with video.mp4; detector mode may use a PTS-derived sampled identity",
             },
             "detector": {
+                "enabled": bool(self.args.weights),
+                "mode": self.worker.runner.mode if self.worker is not None else "none",
+                "status": "DISABLED" if not self.args.weights else "ACTIVE",
+                "reason": "YOLO_DISABLED_CAPTURE_ONLY" if not self.args.weights else None,
                 "weights": self.args.weights,
                 "sahi": self.args.sahi,
                 "confidence": self.args.conf,
             },
+            "telemetry": self.telemetry.metadata(),
             "error": error,
         }
         temporary = self.session_dir / "metadata.json.tmp"
