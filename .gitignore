@@ -30,6 +30,7 @@ env/
 !.env.example
 src-tauri/src-py/runtime/logs/
 src-tauri/src-py/runtime/map-tiles/
+src-tauri/src-py/runtime/*.sqlite3*
 src-tauri/src-py/recordings/
 recordings/
 

@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -13,6 +14,8 @@ from flasgger import Swagger
 
 from app.routes.api_v1 import api_v1_bp, init_api_v1_routes
 from app.routes.logs import init_log_routes, logs_bp
+from app.auth import BearerAuthenticator, TokenConfig
+from app.persistence import Database
 from app.services.mission_planner_adapter import MissionPlannerAdapter
 from app.utils.session_log import SessionLogStore
 
@@ -23,6 +26,11 @@ app = Flask(__name__)
 swagger = Swagger(app)
 CORS(app)
 sock = Sock(app)
+
+token_config = TokenConfig.from_env()
+authenticator = BearerAuthenticator(token_config)
+database_path = os.getenv("BUV_DATABASE_PATH", str(Path(__file__).resolve().parent / "runtime" / "buv.sqlite3"))
+database = Database(database_path)
 
 mission_planner_adapter = MissionPlannerAdapter()
 session_log_store = SessionLogStore(source_address=mission_planner_adapter.base_url)
@@ -51,6 +59,9 @@ _QUIET_REQUEST_PATHS = {
 
 @app.before_request
 def _log_http_request():
+    auth_response = authenticator.authenticate(request)
+    if auth_response is not None:
+        return auth_response
     if request.path in _QUIET_REQUEST_PATHS:
         return
     payload = request.get_json(silent=True) if request.method in {"POST", "PUT", "PATCH"} else None

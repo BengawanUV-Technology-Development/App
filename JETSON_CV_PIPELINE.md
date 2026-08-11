@@ -1,59 +1,29 @@
-# Jetson Computer Vision Pipeline (Phase 16 & 17)
-**Handover Document for CV Developer**
+# Jetson CV Pipeline v0.3
 
-Dokumen ini berisi panduan dan *contract* API untuk *developer* yang akan mengerjakan bagian Computer Vision (Object Detection) menggunakan perangkat *companion computer* seperti NVIDIA Jetson (atau Raspberry Pi).
+The only release camera is Arducam. Capture occurs once at 1920×1080@30 FPS and
+receives canonical schema v2.0 identity before splitting into three bounded
+branches:
 
-## 1. Arsitektur Komunikasi
-Jetson bertugas murni sebagai **Sensor (Mata)**.
-- Jetson TIDAK mengambil keputusan misi.
-- Jetson TIDAK langsung mengirim peringatan ke kru darat.
-- Tugas Jetson HANYALAH mendeteksi objek, menghitung koordinat (jika bisa), lalu **menembakkan HTTP POST Request** ke backend Flask (Ground Control Station).
-
-Otak pengambil keputusan (AI Agent / Gemini) berada di *backend* Flask (`main.py`), bukan di Jetson.
-
-## 2. API Endpoint Contract
-Setiap kali Jetson mendeteksi korban dengan tingkat keyakinan (confidence) yang valid, skrip Python di Jetson harus mengirimkan *payload* JSON ke *endpoint* berikut:
-
-**URL Endpoint:** `POST http://<IP_GROUND_CONTROL_STATION>:5001/api/v1/detection/ingest`
-*(Catatan: Ganti `<IP_GROUND_CONTROL_STATION>` dengan IP komputer GCS Anda atau `127.0.0.1` jika berjalan di mesin yang sama).*
-
-### Format JSON (Payload)
-Jetson harus mengirimkan *payload* JSON dengan struktur persis seperti ini:
-
-```json
-{
-  "detection_id": "DET-123456789",
-  "timestamp": "2026-07-30T10:00:00Z",
-  "drone_id": "BENGAWAN-UAV-01",
-  "detection_data": {
-    "class": "person",
-    "count": 1,
-    "confidence_avg": 0.85,
-    "image_snapshot_url": "https://url-ke-foto-hasil-crop.com/snapshot.jpg" 
-  },
-  "reconstructed_location": {
-    "latitude": -7.558412,
-    "longitude": 110.85621,
-    "estimated_margin_error_m": 1.2
-  }
-}
+```text
+Arducam capture + identity
+├── fragmented MP4 + frames/telemetry/detections sidecars on mounted SSD
+├── newest-frame inference queue → baseline s-YOLOv11
+└── 960×540@15 H.264/RTP/UDP preview with frame_id extension
 ```
 
-### Penjelasan Field:
-1. `detection_id`: String unik untuk deteksi ini (bisa menggunakan `uuid` atau UNIX timestamp).
-2. `timestamp`: Waktu saat objek terdeteksi (format ISO 8601).
-3. `detection_data.count`: Jumlah objek ("person") yang terdeteksi dalam satu *frame*.
-4. `detection_data.confidence_avg`: Rata-rata tingkat akurasi / *confidence score* dari model YOLO (0.0 sampai 1.0).
-5. `reconstructed_location`: (Tahap Lanjut/Fase 17). Ini adalah hasil konversi dari *Bounding Box* piksel ke koordinat GPS Dunia Nyata menggunakan data telemetri (Pitch, Roll, Yaw, Altitude, Gimbal Angle). Jika fitur perhitungan ini belum jadi, Anda bisa mengirimkan koordinat dummy atau `null` terlebih dahulu.
+Recording and sidecars are independent of ground-network availability. File I/O
+does not run in the capture callback. If the configured SSD is not the expected
+mount, is not writable, or lacks reserved capacity, recording is rejected and
+must never fall back to the root filesystem.
 
-## 3. Skrip Referensi (Mock)
-Sebagai referensi cara melakukan HTTP POST tanpa menginstal *library* berat, Anda bisa melihat file `src-tauri/src-py/mock_jetson.py`. Skrip tersebut adalah *stub/mock* murni yang menstimulasikan pengiriman data seperti format di atas.
+Every detection includes a UUID, exact canonical identity, normalized master
+XYXY bounding box, and:
 
-## 4. Langkah Pengembangan (To-Do list untuk CV Dev):
-- [ ] Buat skrip `jetson_cv.py` (bisa menggunakan OpenCV & PyTorch/Ultralytics YOLOv8).
-- [ ] Buka *stream* kamera RTSP atau webcam.
-- [ ] Lakukan inferensi `model.predict()`.
-- [ ] *Filter* hanya *bounding box* dengan kelas "person" (atau kelas relevan lainnya) dan *confidence* > 0.60.
-- [ ] Kumpulkan data jumlah orang, lalu bangun *dictionary* Python sesuai format JSON di atas.
-- [ ] Gunakan `urllib.request` atau `requests` untuk menembak ke *endpoint* Ingest.
-- [ ] *(Opsional)* Terapkan logika *debouncing* (misalnya: hanya kirim HTTP POST 1 kali setiap 3 detik jika mendeteksi objek yang sama, agar server tidak kebanjiran *request* (DDoS)).
+```json
+{"coordinate": {"status": "not_available"}}
+```
+
+Coordinate reconstruction is intentionally outside v0.3. The detector may not
+invent, simulate, or default latitude/longitude. Detector failure degrades only
+the detector; recording and preview continue. See `PROJECT_CONTEXT.md` for the
+wire contract and `PROJECT_STATUS.md` for measured qualification evidence.

@@ -2,8 +2,11 @@ import time
 import unittest
 
 import app.routes.api_v1 as api_v1_module
+from app.auth import BearerAuthenticator, TokenConfig
 from app.services.mission_planner_adapter import MissionPlannerAdapter, MissionPlannerBridgeError
-from main import app
+import main
+
+app = main.app
 
 
 VALID_TELEMETRY = {
@@ -137,11 +140,18 @@ class FakeApiAdapter:
 class ApiV1Tests(unittest.TestCase):
     def setUp(self):
         self.previous_adapter = api_v1_module._adapter
+        self.previous_authenticator = main.authenticator
         api_v1_module._adapter = FakeApiAdapter()
+        main.authenticator = BearerAuthenticator(TokenConfig("test-operator", "test-ingest", "test-agent"))
         self.client = app.test_client()
 
     def tearDown(self):
         api_v1_module._adapter = self.previous_adapter
+        main.authenticator = self.previous_authenticator
+
+    def post(self, path, **kwargs):
+        headers = {**kwargs.pop("headers", {}), "Authorization": "Bearer test-operator"}
+        return self.client.post(path, headers=headers, **kwargs)
 
     def test_health_and_telemetry_routes(self):
         health = self.client.get("/api/v1/health")
@@ -161,27 +171,27 @@ class ApiV1Tests(unittest.TestCase):
         self.assertEqual(payload["waypoints"][1]["command_name"], "TAKEOFF")
 
     def test_set_flight_mode_proxies_to_bridge(self):
-        response = self.client.post("/api/v1/commands/set-flight-mode", json={"mode": "Q_HOVER"})
+        response = self.post("/api/v1/commands/set-flight-mode", json={"mode": "Q_HOVER"})
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["ok"])
         self.assertEqual(response.get_json()["command"], "set-flight-mode")
 
     def test_arm_proxies_to_bridge(self):
-        response = self.client.post("/api/v1/commands/arm")
+        response = self.post("/api/v1/commands/arm")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["command"], "arm")
 
     def test_reboot_proxies_to_bridge(self):
-        response = self.client.post("/api/v1/commands/reboot")
+        response = self.post("/api/v1/commands/reboot")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["command"], "reboot")
 
     def test_bridge_command_rejection_keeps_status_and_message(self):
         api_v1_module._adapter.reject_reboot = True
-        response = self.client.post("/api/v1/commands/reboot")
+        response = self.post("/api/v1/commands/reboot")
         api_v1_module._adapter.reject_reboot = False
 
         self.assertEqual(response.status_code, 400)
