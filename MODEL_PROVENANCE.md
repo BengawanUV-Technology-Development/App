@@ -36,11 +36,55 @@ That 300-epoch checkpoint is not present anywhere in the current workspace.
 Therefore the available `best.pt` cannot be authenticated against the supplied
 production-run log and must not be selected as the v0.3 production model.
 
+## Additional candidate supplied for review
+
+The GhostV3 + DWConv candidate was also checked at:
+
+```text
+../s-yolov11-ablation/ghostv3_dwconv-seed0/weights/best.pt
+SHA-256 f84b7a5f7294edb4d06174c443c7be7455bc413e76233e6a486ec398b9eb8fbe
+```
+
+Its internal Ultralytics metadata is self-consistent with the adjacent
+`args.yaml` and `results.csv`, but describes a two-epoch ablation run:
+
+- Ultralytics: `8.3.0`
+- project: `runs/s-yolov11-ablation`
+- name: `ghostv3_dwconv-seed0`
+- epochs: 2
+- image size: 640
+- seed: 0
+- classes: 10 VisDrone classes
+- mAP50: 0.06098
+- mAP50-95: 0.02917
+- checkpoint date: `2026-07-29T06:12:38.159789`
+
+The supplied `ghostv3_dwconv.log` describes a different completed run:
+
+- environment: Python `3.11.15`, PyTorch `2.7.1+cu118`, CUDA on RTX A4000
+- project: `runs/s-yolov11-main`
+- name: `ghostv3_dwconv-seed0`
+- epochs completed: 300
+- final validation mAP50: 0.460
+- final validation mAP50-95: 0.280
+- output checkpoint path:
+  `runs/s-yolov11-main/ghostv3_dwconv-seed0/weights/best.pt`
+
+The log's 300-epoch checkpoint is also absent from the workspace. In addition,
+selecting GhostV3 + DWConv would change the frozen Batch 5 production-model
+choice from baseline s-YOLOv11 and therefore requires an explicit contract
+decision; the supplied path alone does not authorize that change.
+
 ## Evidence required to unblock
 
-Provide the exact checkpoint produced by the 300-epoch baseline log, or provide
-the complete training log that produced the existing two-epoch checkpoint.
-The selected artifact must have a recorded SHA-256 and internal metadata that
-matches its log, configuration, and validation metrics. Once verified, the
-Jetson path can be set in `JETSON_MODEL_WEIGHTS` and the hardware FPS/latency
-gate can begin.
+For the frozen baseline choice, provide the exact checkpoint produced by the
+300-epoch baseline log. If the production choice is intentionally being changed
+to GhostV3 + DWConv, first confirm that contract change and provide the exact
+checkpoint produced by the 300-epoch GhostV3 + DWConv log. Alternatively, a
+two-epoch artifact can only be evaluated as a non-production candidate when its
+matching complete training log is supplied.
+
+The selected production artifact must have a recorded SHA-256 and internal
+metadata that matches its log, configuration, and validation metrics. Once
+verified, the Jetson path can be set in `JETSON_MODEL_WEIGHTS` and the hardware
+FPS/latency gate can begin.
