@@ -15,7 +15,7 @@ function AppShell({ activeView, onNavigate, health, telemetry, children }) {
             </span>
           </div>
           <div className="connection-meta">
-            <span>Telemetry {health.stale ? "STALE" : "LIVE"}</span>
+            <span>Telemetry {health.stale ? "STALE" : health.status || "UNKNOWN"}</span>
             <span>Vehicle {health.connected ? "CONNECTED" : "STANDBY"}</span>
           </div>
         </div>

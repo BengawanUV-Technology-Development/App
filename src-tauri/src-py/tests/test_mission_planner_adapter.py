@@ -123,7 +123,7 @@ class FakeApiAdapter:
     reject_reboot = False
 
     def health(self):
-        return {"ok": True, "status": "ACTIVE", "connected": True, "stale": False}
+        return {"ok": True, "status": "RUNNING", "connected": True, "stale": False}
 
     def snapshot(self):
         return {"ok": True, "stale": False, "gps_valid": True, "telemetry": {"flight_mode": "QHOVER"}}

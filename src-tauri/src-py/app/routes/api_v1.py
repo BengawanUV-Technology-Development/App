@@ -41,9 +41,18 @@ def _get_vision_overlay_store():
     return _vision_overlay_store
 
 
+def get_vision_service():
+    return _get_flight_recorder().vision_service
+
+
 @api_v1_bp.route("/camera/status", methods=["GET"])
 def camera_status():
     return jsonify({"ok": True, **_get_flight_recorder().status()})
+
+
+@api_v1_bp.route("/session/verify", methods=["POST"])
+def verify_operator_session():
+    return jsonify({"ok": True, "role": "operator"})
 
 
 @api_v1_bp.route("/camera/start", methods=["POST"])

@@ -12,10 +12,11 @@ from flask_cors import CORS
 from flask_sock import Sock
 from flasgger import Swagger
 
-from app.routes.api_v1 import api_v1_bp, init_api_v1_routes
+from app.routes.api_v1 import api_v1_bp, get_vision_service, init_api_v1_routes
 from app.routes.logs import init_log_routes, logs_bp
 from app.auth import BearerAuthenticator, TokenConfig
 from app.persistence import Database
+from app.services.vision_envelope import encode_vision_envelope
 from app.services.mission_planner_adapter import MissionPlannerAdapter
 from app.utils.session_log import SessionLogStore
 
@@ -89,6 +90,30 @@ def api_v1_events(ws):
                 }))
                 last_version = snapshot["version"]
             time.sleep(0.1)
+    except Exception:
+        return
+
+
+@sock.route("/api/v1/vision/ws")
+def api_v1_vision(ws):
+    last_version = -1
+    service = get_vision_service()
+    try:
+        while True:
+            version, frame, state = service.wait_for_vision_frame(last_version)
+            if frame is None:
+                last_version = version
+                continue
+            if version == last_version:
+                continue
+            last_version = version
+            ws.send(encode_vision_envelope(
+                frame,
+                preview_width=service.width,
+                preview_height=service.height,
+                fps=float(state.get("fps") or service.expected_fps),
+                stream_state=str(state.get("camera_status") or "STOPPED"),
+            ))
     except Exception:
         return
 

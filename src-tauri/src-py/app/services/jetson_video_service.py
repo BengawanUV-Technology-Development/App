@@ -205,6 +205,15 @@ class JetsonVideoService:
         self._drain_ready()
         return accepted
 
+    def wait_for_vision_frame(self, last_version: int, timeout: float = 5.0):
+        with self._frame_ready:
+            self._frame_ready.wait_for(
+                lambda: self._preview_version != last_version
+                or self._camera_state["camera_status"] in {"FAILED", "STOPPED"},
+                timeout=timeout,
+            )
+            return self._preview_version, self._latest_matched, self.status()
+
     def preview_stream(self) -> Iterator[bytes]:
         self.start()
         last_version = -1

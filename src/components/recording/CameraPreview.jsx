@@ -1,34 +1,113 @@
-import { useCallback, useEffect, useState } from "react";
-import { API_BASE, apiGet, apiPost } from "../../services/api";
-
-const EMPTY_OVERLAY = { stale: true, detections: [] };
-
-function overlayBoxStyle(detection, width, height) {
-  const bbox = detection?.bbox_network;
-  if (!Array.isArray(bbox) || bbox.length !== 4 || width <= 0 || height <= 0) return null;
-
-  const [x1, y1, x2, y2] = bbox.map(Number);
-  if (![x1, y1, x2, y2].every(Number.isFinite) || x2 <= x1 || y2 <= y1) return null;
-
-  const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
-  const left = clamp((x1 / width) * 100, 0, 100);
-  const top = clamp((y1 / height) * 100, 0, 100);
-  const right = clamp((x2 / width) * 100, 0, 100);
-  const bottom = clamp((y2 / height) * 100, 0, 100);
-
-  return {
-    left: `${left}%`,
-    top: `${top}%`,
-    width: `${Math.max(0, right - left)}%`,
-    height: `${Math.max(0, bottom - top)}%`,
-  };
-}
+import { useCallback, useEffect, useRef, useState } from "react";
+import { apiGet, apiPost, webSocketUrl } from "../../services/api";
+import { containRect, normalizedBoxToCanvas, parseVisionEnvelope } from "../../services/visionPacket";
 
 function CameraPreview() {
+  const containerRef = useRef(null);
+  const canvasRef = useRef(null);
+  const bitmapRef = useRef(null);
+  const reconnectRef = useRef(null);
   const [camera, setCamera] = useState({ camera_status: "STARTING", camera_error: null });
-  const [overlay, setOverlay] = useState(EMPTY_OVERLAY);
-  const [streamKey, setStreamKey] = useState(0);
+  const [header, setHeader] = useState(null);
+  const [socketState, setSocketState] = useState("CONNECTING");
   const [isLoading, setIsLoading] = useState(false);
+  const [overlayEnabled, setOverlayEnabled] = useState(true);
+  const [minimumConfidence, setMinimumConfidence] = useState(0.45);
+  const [classFilter, setClassFilter] = useState("");
+  const [connectionNonce, setConnectionNonce] = useState(0);
+
+  const filteredDetections = useCallback(() => {
+    if (!overlayEnabled || !Array.isArray(header?.detections)) return [];
+    const wanted = classFilter.trim().toLowerCase();
+    return header.detections.filter((item) => (
+      Number(item.confidence || 0) >= minimumConfidence
+      && (!wanted || String(item.class || "").toLowerCase().includes(wanted))
+    ));
+  }, [classFilter, header, minimumConfidence, overlayEnabled]);
+
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    const bitmap = bitmapRef.current;
+    if (!canvas || !container) return;
+    const rect = container.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.round(rect.width * ratio));
+    canvas.height = Math.max(1, Math.round(rect.height * ratio));
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
+    const context = canvas.getContext("2d");
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.fillStyle = "#02070b";
+    context.fillRect(0, 0, rect.width, rect.height);
+    if (!bitmap) return;
+    const imageRect = containRect(rect.width, rect.height, bitmap.width, bitmap.height);
+    context.drawImage(bitmap, imageRect.x, imageRect.y, imageRect.width, imageRect.height);
+    context.lineWidth = 2;
+    context.font = "600 12px ui-monospace, monospace";
+    filteredDetections().forEach((detection) => {
+      const box = detection.bbox_normalized_xyxy;
+      if (!Array.isArray(box) || box.length !== 4) return;
+      const canvasBox = normalizedBoxToCanvas(box, imageRect);
+      if (!canvasBox) return;
+      const { left, top, width, height } = canvasBox;
+      context.strokeStyle = "#22d3ee";
+      context.strokeRect(left, top, width, height);
+      const label = `${detection.class || "object"} ${(Number(detection.confidence || 0) * 100).toFixed(0)}%`;
+      const labelWidth = context.measureText(label).width + 10;
+      context.fillStyle = "rgba(3, 105, 161, .9)";
+      context.fillRect(left, Math.max(imageRect.y, top - 20), labelWidth, 20);
+      context.fillStyle = "#fff";
+      context.fillText(label, left + 5, Math.max(imageRect.y + 14, top - 6));
+    });
+  }, [filteredDetections]);
+
+  useEffect(() => {
+    const observer = new ResizeObserver(draw);
+    if (containerRef.current) observer.observe(containerRef.current);
+    draw();
+    return () => observer.disconnect();
+  }, [draw]);
+
+  useEffect(() => {
+    let stopped = false;
+    let socket;
+    const connect = () => {
+      if (stopped) return;
+      setSocketState("CONNECTING");
+      socket = new WebSocket(webSocketUrl("/api/v1/vision/ws"));
+      socket.binaryType = "arraybuffer";
+      socket.onopen = () => setSocketState("CONNECTED");
+      socket.onmessage = async (event) => {
+        try {
+          const packet = parseVisionEnvelope(event.data);
+          const bitmap = await createImageBitmap(new Blob([packet.jpeg], { type: "image/jpeg" }));
+          if (stopped) { bitmap.close(); return; }
+          bitmapRef.current?.close();
+          bitmapRef.current = bitmap;
+          setHeader(packet.header);
+        } catch (error) {
+          setSocketState(`PACKET_ERROR: ${String(error)}`);
+        }
+      };
+      socket.onclose = () => {
+        if (stopped) return;
+        setSocketState("RECONNECTING");
+        reconnectRef.current = setTimeout(connect, 1500);
+      };
+      socket.onerror = () => socket.close();
+    };
+    connect();
+    return () => {
+      stopped = true;
+      clearTimeout(reconnectRef.current);
+      socket?.close();
+      bitmapRef.current?.close();
+      bitmapRef.current = null;
+    };
+  }, [connectionNonce]);
+
+  useEffect(draw, [draw, header]);
 
   const refresh = useCallback(async () => {
     const result = await apiGet("/api/v1/camera/status");
@@ -41,108 +120,43 @@ function CameraPreview() {
     return () => clearInterval(interval);
   }, [refresh]);
 
-  const refreshOverlay = useCallback(async () => {
-    const result = await apiGet("/api/v1/detection/overlay");
-    if (result.ok) {
-      setOverlay(result.data);
-    } else {
-      setOverlay((current) => ({ ...current, ...EMPTY_OVERLAY }));
-    }
-  }, []);
-
-  useEffect(() => {
-    let inFlight = false;
-    const poll = async () => {
-      if (inFlight) return;
-      inFlight = true;
-      try {
-        await refreshOverlay();
-      } finally {
-        inFlight = false;
-      }
-    };
-    poll();
-    const interval = setInterval(poll, 250);
-    return () => clearInterval(interval);
-  }, [refreshOverlay]);
-
   const restart = async () => {
     setIsLoading(true);
-    if (!camera.recording) {
-      await apiPost("/api/v1/camera/stop");
-    }
+    if (!camera.recording) await apiPost("/api/v1/camera/stop");
     await apiPost("/api/v1/camera/start");
-    setStreamKey((value) => value + 1);
+    setConnectionNonce((value) => value + 1);
     await refresh();
     setIsLoading(false);
   };
 
-  const stop = async () => {
-    setIsLoading(true);
-    await apiPost("/api/v1/camera/stop");
-    await refresh();
-    setIsLoading(false);
-  };
-
-  const overlayWidth = Number(overlay.network_width || camera.width || 0);
-  const overlayHeight = Number(overlay.network_height || camera.height || 0);
-  const detections = overlay.stale || camera.camera_status !== "LIVE"
-    ? []
-    : Array.isArray(overlay.detections)
-      ? overlay.detections
-      : [];
+  const detectionState = header?.detection_state || "WAITING_FOR_FRAME";
+  const streamState = header?.stream_state || camera.camera_status || socketState;
 
   return (
-    <div className="vision-frame live-camera-frame">
-      <img
-        key={streamKey}
-        className={camera.camera_status === "LIVE" ? "camera-preview-image is-live" : "camera-preview-image"}
-        src={`${API_BASE}/api/v1/camera/preview?stream=${streamKey}`}
-        alt="Live Jetson Arducam preview"
-      />
-      <div className="camera-detection-overlay" aria-label="Live object detections">
-        {detections.map((detection, index) => {
-          const style = overlayBoxStyle(detection, overlayWidth, overlayHeight);
-          if (!style) return null;
-          return (
-            <div
-              className="camera-detection-box"
-              key={`${overlay.frame_id ?? "frame"}-${index}`}
-              style={style}
-            >
-              <span>{detection.class || "object"}</span>
-              <strong>{`${(Number(detection.confidence || 0) * 100).toFixed(0)}%`}</strong>
-            </div>
-          );
-        })}
-      </div>
-      {camera.camera_status !== "LIVE" ? (
+    <div className="vision-frame live-camera-frame" ref={containerRef}>
+      <canvas ref={canvasRef} className="camera-preview-canvas" aria-label="Synchronized Arducam preview" />
+      {!bitmapRef.current ? (
         <div className="camera-preview-empty">
-          <strong>{camera.camera_status || "CONNECTING"}</strong>
-          <span>
-            {camera.camera_error ||
-              (camera.camera_source === "jetson_udp"
-                ? `Waiting for H.264/RTP on UDP :${camera.stream_port ?? "-"}`
-                : `Opening camera index ${camera.camera_index ?? "-"}`)}
-          </span>
+          <strong>{streamState}</strong>
+          <span>{camera.camera_error || `Vision WebSocket ${socketState.toLowerCase()}`}</span>
         </div>
       ) : null}
-      <div className="vision-reticle" />
+      <div className="vision-frame-metrics">
+        <span>CAM {header?.camera_id || "arducam"}</span>
+        <span>STREAM {streamState}</span>
+        <span>DETECTOR {header?.detector_state || "UNKNOWN"}</span>
+        <span>{detectionState}</span>
+        <span>{Number(header?.fps || 0).toFixed(1)} FPS</span>
+        <span>{Number(header?.ground_queue_latency_ms || 0).toFixed(0)} ms</span>
+      </div>
+      <div className="vision-filter-controls">
+        <label><input type="checkbox" checked={overlayEnabled} onChange={(event) => setOverlayEnabled(event.target.checked)} /> Overlay</label>
+        <label>Confidence <input type="range" min="0" max="1" step="0.05" value={minimumConfidence} onChange={(event) => setMinimumConfidence(Number(event.target.value))} /></label>
+        <input value={classFilter} onChange={(event) => setClassFilter(event.target.value)} placeholder="class filter" aria-label="Detection class filter" />
+      </div>
       <div className="camera-preview-controls">
-        <span className={camera.camera_status === "LIVE" ? "is-live" : ""}>
-          {camera.camera_status || "OFFLINE"}
-          {camera.width ? ` · ${camera.width}×${camera.height} @ ${Number(camera.fps || 0).toFixed(1)} FPS` : ""}
-        </span>
-        <div>
-          <button type="button" onClick={restart} disabled={isLoading}>RECONNECT</button>
-          <button
-            type="button"
-            onClick={stop}
-            disabled={isLoading || camera.recording === true || camera.status === "REMOTE_UNKNOWN"}
-          >
-            RELEASE
-          </button>
-        </div>
+        <span className={streamState === "RUNNING" ? "is-live" : ""}>FRAME {header?.frame_id ?? "-"} · EPOCH {header?.capture_epoch ?? "-"}</span>
+        <div><button type="button" onClick={restart} disabled={isLoading}>RECONNECT</button></div>
       </div>
     </div>
   );

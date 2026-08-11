@@ -174,6 +174,12 @@ class FlightRecorder:
             raise FlightRecorderError("Jetson receiver is unavailable")
         return self._jetson_video.ingest_metadata(payload)
 
+    @property
+    def vision_service(self) -> JetsonVideoService:
+        if self._jetson_video is None:
+            raise FlightRecorderError("Jetson receiver is unavailable")
+        return self._jetson_video
+
     def start_camera(self) -> dict:
         if self._jetson_video is not None:
             try:

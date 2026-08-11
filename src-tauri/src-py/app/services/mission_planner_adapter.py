@@ -115,7 +115,7 @@ class MissionPlannerAdapter:
 
         return {
             "connected": connected,
-            "status": "ACTIVE" if connected else "VEHICLE_STATE_UNAVAILABLE" if bridge_vehicle_connected else "VEHICLE_DISCONNECTED",
+            "status": "RUNNING" if connected else "VEHICLE_STATE_UNAVAILABLE" if bridge_vehicle_connected else "VEHICLE_DISCONNECTED",
             "state_valid": state_valid,
             "lat": position.get("lat"),
             "lng": position.get("lng"),

@@ -247,7 +247,7 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
         <div className="mission-progress-panel">
           <div className="mission-panel-heading">
             <span>Mission Progress</span>
-            <small className={missionReady ? "mission-ready-dot" : "mission-hold-dot"}>{missionReady ? "READY" : "HOLD"}</small>
+            <small className={missionReady ? "mission-ready-dot" : "mission-hold-dot"}>{missionReady ? "PASS" : "WAIT"}</small>
           </div>
           <div className="mission-distance-readout">
             <span>Distance to waypoint {activeWaypoint?.seq ?? activeWaypoint?.index ?? "-"}</span>
@@ -382,7 +382,7 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
             <div><dt>PITCH</dt><dd>{formatAttitude(telemetry.pitch_deg)}</dd></div>
             <div><dt>YAW</dt><dd>{formatAttitude(telemetry.yaw_deg)}</dd></div>
             <div><dt>HEADING</dt><dd>{formatAttitude(telemetry.heading_deg)}</dd></div>
-            <div><dt>LINK</dt><dd>{health.connected ? "ACTIVE" : "STANDBY"}</dd></div>
+            <div><dt>LINK</dt><dd>{health.status || "UNKNOWN"}</dd></div>
             <div><dt>RC</dt><dd>MONITORING</dd></div>
           </dl>
         </section>
@@ -392,12 +392,12 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
           <dl>
             <div><dt>DEVICE</dt><dd>JETSON ORIN</dd></div>
             <div><dt>MODEL</dt><dd>SAR DETECT</dd></div>
-            <div><dt>STREAM</dt><dd>VRX / EASYCAP</dd></div>
-            <div><dt>DETECTIONS</dt><dd>NOT CONNECTED</dd></div>
+            <div><dt>STREAM</dt><dd>H.264 / RTP / UDP</dd></div>
+            <div><dt>DETECTIONS</dt><dd>SEE FRAME STATE</dd></div>
           </dl>
           <div className="vision-detection-summary">
-            <span>Live preview <strong>ACTIVE</strong></span>
-            <span>Frame-aligned recording <strong>READY</strong></span>
+            <span>Preview <strong>WEBSOCKET CANVAS</strong></span>
+            <span>Identity <strong>SCHEMA 2.0</strong></span>
           </div>
         </section>
 
@@ -412,7 +412,7 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
             ))}
             <div className="alert-line info">
               <time>[--:--:--]</time>
-              <span>Camera/map placeholders ready</span>
+              <span>Vision state is reported by the synchronized frame stream</span>
             </div>
           </div>
         </section>

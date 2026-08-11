@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiGet, WS_BASE } from "../services/api";
+import { apiGet, webSocketUrl } from "../services/api";
 
 const initialHealth = {
   connected: false,
@@ -105,7 +105,7 @@ export function useTelemetry() {
     const connect = () => {
       if (stopped) return;
       updateWebSocketStatus("CONNECTING");
-      const socket = new WebSocket(`${WS_BASE}/api/v1/events`);
+      const socket = new WebSocket(webSocketUrl("/api/v1/events"));
       socketRef.current = socket;
 
       socket.onopen = () => {

@@ -445,7 +445,7 @@ function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchD
         type: "symbol",
         source: "mission-current-point",
         layout: {
-          "text-field": ["concat", "ACTIVE WP ", ["get", "label"]],
+          "text-field": ["concat", "WP ", ["get", "label"]],
           "text-size": 11,
           "text-font": ["Open Sans Bold"],
           "text-offset": [0, -2.4],
