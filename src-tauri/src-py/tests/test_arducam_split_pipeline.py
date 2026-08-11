@@ -82,7 +82,7 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertIn("width=1920,height=1080", description)
         self.assertIn("width=960,height=540", description)
         self.assertIn("framerate=30/1", description)
-        self.assertIn("framerate=15/1", description)
+        self.assertNotIn("videorate", description)
         self.assertIn("appsink name=highres_sink", description)
         self.assertIn("max-size-buffers=16", description)
         self.assertIn("drop=false", description)
@@ -146,18 +146,19 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertEqual(packet.capture_utc_ns, 456_000_000)
         pipeline.sidecars.submit.assert_called_once_with(packet)
 
-    def test_videorate_preview_pts_maps_to_nearest_canonical_frame(self):
+    def test_preview_rate_limit_preserves_exact_canonical_identity(self):
         pipeline = SplitPipeline.__new__(SplitPipeline)
-        pipeline.args = SimpleNamespace(high_fps=30.0)
+        pipeline.args = SimpleNamespace(high_fps=30.0, network_fps=15.0)
         pipeline.gst = SimpleNamespace(
             CLOCK_TIME_NONE=-1,
-            PadProbeReturn=SimpleNamespace(OK="ok"),
+            PadProbeReturn=SimpleNamespace(OK="ok", DROP="drop"),
         )
         pipeline._identity_condition = threading.Condition()
         pipeline._identity_by_pts = OrderedDict()
-        pipeline._preview_identity_by_pts = OrderedDict()
         pipeline._preview_identity_queue = deque(maxlen=512)
         pipeline._active_preview_packet = None
+        pipeline._preview_rate_accumulator = 15.0
+        pipeline._preview_rate_drop_count = 0
         pipeline._identity_miss_count = 0
         first = FramePacket(
             "mission-00000000-0000-0000-0000-000000000020",
@@ -170,17 +171,17 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         pipeline._identity_by_pts[first.pts_ns] = first
         pipeline._identity_by_pts[second.pts_ns] = second
         probe_info = MagicMock()
-        # A rounded 15 FPS PTS is deliberately not equal to either master PTS.
-        probe_info.get_buffer.return_value = SimpleNamespace(pts=334_000_000)
+        probe_info.get_buffer.return_value = SimpleNamespace(pts=first.pts_ns)
 
         result = pipeline._on_preview_buffer(None, probe_info)
 
         self.assertEqual(result, "ok")
-        self.assertIs(pipeline._preview_identity_by_pts[334_000_000], first)
-        self.assertIs(pipeline._wait_for_preview_identity(334_000_000), first)
         self.assertIs(pipeline._preview_identity_queue[0], first)
         self.assertEqual(pipeline._on_rtp_access_unit(None, None), "ok")
         self.assertIs(pipeline._active_preview_packet, first)
+        probe_info.get_buffer.return_value = SimpleNamespace(pts=second.pts_ns)
+        self.assertEqual(pipeline._on_preview_buffer(None, probe_info), "drop")
+        self.assertEqual(pipeline._preview_rate_drop_count, 1)
         self.assertEqual(pipeline._identity_miss_count, 0)
 
     def test_bbox_is_mapped_from_highres_to_network_coordinates(self):

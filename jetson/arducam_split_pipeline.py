@@ -193,7 +193,6 @@ def build_pipeline_description(
     key_int = max(1, round(high_fps))
     network_key_int = max(1, round(network_fps))
     high_fps_caps = fps_caps(high_fps)
-    network_fps_caps = fps_caps(network_fps)
     # This callback assigns canonical identity and must observe every master
     # frame. Inference dropping occurs later in its size-one worker queue.
     appsink_buffers = 16
@@ -214,7 +213,6 @@ videoconvert ! video/x-raw,format=BGR,width={high_width},height={high_height} !
 appsink name=highres_sink emit-signals=true max-buffers={appsink_buffers} {appsink_drop} sync=false
 capture. ! queue max-size-buffers=4 max-size-time=0 max-size-bytes=0 leaky=downstream !
 nvvidconv ! video/x-raw,format=I420,width={network_width},height={network_height} !
-videorate ! video/x-raw,format=I420,framerate={network_fps_caps} !
 identity name=preview_identity !
 x264enc bitrate={args.network_bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max={network_key_int} bframes=0 !
 h264parse ! rtph264pay name=preview_payloader pt={args.payload_type} ssrc={args.rtp_ssrc} config-interval=1 mtu=1200 !
@@ -855,9 +853,10 @@ class SplitPipeline:
         self.network_sender = RtpNetworkSender(args.host, args.port)
         self._identity_condition = threading.Condition()
         self._identity_by_pts: OrderedDict[int, FramePacket] = OrderedDict()
-        self._preview_identity_by_pts: OrderedDict[int, FramePacket] = OrderedDict()
         self._preview_identity_queue: deque[FramePacket] = deque(maxlen=512)
         self._active_preview_packet: FramePacket | None = None
+        self._preview_rate_accumulator = args.high_fps - args.network_fps
+        self._preview_rate_drop_count = 0
         self._identity_miss_count = 0
         self._first_capture_monotonic_ns: int | None = None
         self._last_capture_monotonic_ns: int | None = None
@@ -1093,28 +1092,22 @@ class SplitPipeline:
         return self.gst.PadProbeReturn.OK
 
     def _on_preview_buffer(self, _pad, probe_info):
-        """Bind each decimated preview PTS to the nearest master frame.
-
-        ``videorate`` creates the 15 FPS preview timeline and may round its PTS,
-        so it cannot be matched to the 30 FPS source with strict integer
-        equality.  The association is made before encoding, where there is
-        still exactly one buffer per preview frame; all RTP packets produced
-        from that buffer then reuse this exact preview-PTS mapping.
-        """
+        """Rate-limit preview while preserving the selected source frame PTS."""
 
         buffer = probe_info.get_buffer()
         if buffer is None or buffer.pts == self.gst.CLOCK_TIME_NONE:
             return self.gst.PadProbeReturn.OK
         preview_pts = int(buffer.pts)
-        source_packet = self._nearest_source_identity(preview_pts)
+        source_packet = self._wait_for_frame_identity(preview_pts)
         if source_packet is None:
             self._identity_miss_count += 1
             return self.gst.PadProbeReturn.OK
+        self._preview_rate_accumulator += self.args.network_fps
+        if self._preview_rate_accumulator + 1e-9 < self.args.high_fps:
+            self._preview_rate_drop_count += 1
+            return self.gst.PadProbeReturn.DROP
+        self._preview_rate_accumulator -= self.args.high_fps
         with self._identity_condition:
-            self._preview_identity_by_pts[preview_pts] = source_packet
-            self._preview_identity_by_pts.move_to_end(preview_pts)
-            while len(self._preview_identity_by_pts) > 512:
-                self._preview_identity_by_pts.popitem(last=False)
             self._preview_identity_queue.append(source_packet)
             self._identity_condition.notify_all()
         return self.gst.PadProbeReturn.OK
@@ -1221,32 +1214,6 @@ class SplitPipeline:
                     return None
                 self._identity_condition.wait(remaining)
             return self._identity_by_pts[pts]
-
-    def _wait_for_preview_identity(self, pts: int | None) -> FramePacket | None:
-        if pts is None:
-            return None
-        deadline = time.monotonic() + 0.05
-        with self._identity_condition:
-            while pts not in self._preview_identity_by_pts:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return None
-                self._identity_condition.wait(remaining)
-            return self._preview_identity_by_pts[pts]
-
-    def _nearest_source_identity(self, preview_pts: int) -> FramePacket | None:
-        frame_interval_ns = round(1_000_000_000 / self.args.high_fps)
-        tolerance_ns = max(1, frame_interval_ns // 2 + 1_000_000)
-        with self._identity_condition:
-            if not self._identity_by_pts:
-                return None
-            source_pts, packet = min(
-                self._identity_by_pts.items(),
-                key=lambda item: abs(item[0] - preview_pts),
-            )
-            if abs(source_pts - preview_pts) > tolerance_ns:
-                return None
-            return packet
 
     def _capture_fps(self) -> float:
         if (
@@ -1399,6 +1366,7 @@ class SplitPipeline:
                 "sidecar": self.sidecars.metadata(),
                 "inference": self.worker.metadata() if self.worker is not None else None,
                 "dropped_preview_packets": self.network_sender.packets_dropped,
+                "dropped_preview_rate_limit": self._preview_rate_drop_count,
                 "dropped_preview_identity_missing": self._identity_miss_count,
                 "storage_rate_bytes_per_second": video_size / max(0.001, time.time() - self.started_at),
                 **read_system_health(),
