@@ -5,7 +5,7 @@ import tempfile
 import threading
 import time
 import unittest
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -86,7 +86,7 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertIn("appsink name=highres_sink", description)
         self.assertIn("max-size-buffers=16", description)
         self.assertIn("drop=false", description)
-        self.assertIn("rtph264pay pt=96", description)
+        self.assertIn("rtph264pay name=preview_payloader pt=96", description)
         self.assertIn("identity name=preview_identity", description)
         self.assertIn("fragment-duration=1000", description)
         self.assertIn("fragment-mode=first-moov-then-finalise", description)
@@ -156,6 +156,8 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         pipeline._identity_condition = threading.Condition()
         pipeline._identity_by_pts = OrderedDict()
         pipeline._preview_identity_by_pts = OrderedDict()
+        pipeline._preview_identity_queue = deque(maxlen=512)
+        pipeline._active_preview_packet = None
         pipeline._identity_miss_count = 0
         first = FramePacket(
             "mission-00000000-0000-0000-0000-000000000020",
@@ -176,6 +178,9 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertEqual(result, "ok")
         self.assertIs(pipeline._preview_identity_by_pts[334_000_000], first)
         self.assertIs(pipeline._wait_for_preview_identity(334_000_000), first)
+        self.assertIs(pipeline._preview_identity_queue[0], first)
+        self.assertEqual(pipeline._on_rtp_access_unit(None, None), "ok")
+        self.assertIs(pipeline._active_preview_packet, first)
         self.assertEqual(pipeline._identity_miss_count, 0)
 
     def test_bbox_is_mapped_from_highres_to_network_coordinates(self):

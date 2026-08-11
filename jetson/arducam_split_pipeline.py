@@ -34,7 +34,7 @@ import threading
 import time
 import traceback
 import uuid
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from fractions import Fraction
@@ -217,7 +217,7 @@ nvvidconv ! video/x-raw,format=I420,width={network_width},height={network_height
 videorate ! video/x-raw,format=I420,framerate={network_fps_caps} !
 identity name=preview_identity !
 x264enc bitrate={args.network_bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max={network_key_int} bframes=0 !
-h264parse ! rtph264pay pt={args.payload_type} ssrc={args.rtp_ssrc} config-interval=1 mtu=1200 !
+h264parse ! rtph264pay name=preview_payloader pt={args.payload_type} ssrc={args.rtp_ssrc} config-interval=1 mtu=1200 !
 appsink name=network_sink emit-signals=true max-buffers=128 drop=true sync=false
 """.strip()
 
@@ -856,6 +856,8 @@ class SplitPipeline:
         self._identity_condition = threading.Condition()
         self._identity_by_pts: OrderedDict[int, FramePacket] = OrderedDict()
         self._preview_identity_by_pts: OrderedDict[int, FramePacket] = OrderedDict()
+        self._preview_identity_queue: deque[FramePacket] = deque(maxlen=512)
+        self._active_preview_packet: FramePacket | None = None
         self._identity_miss_count = 0
         self._first_capture_monotonic_ns: int | None = None
         self._last_capture_monotonic_ns: int | None = None
@@ -952,6 +954,15 @@ class SplitPipeline:
                 raise RuntimeError("GStreamer preview_identity did not expose a src pad")
             preview_identity_pad.add_probe(
                 Gst.PadProbeType.BUFFER, self._on_preview_buffer
+            )
+            preview_payloader = self.pipeline.get_by_name("preview_payloader")
+            if preview_payloader is None:
+                raise RuntimeError("GStreamer pipeline did not create preview_payloader")
+            preview_payloader_pad = preview_payloader.get_static_pad("sink")
+            if preview_payloader_pad is None:
+                raise RuntimeError("GStreamer preview_payloader did not expose a sink pad")
+            preview_payloader_pad.add_probe(
+                Gst.PadProbeType.BUFFER, self._on_rtp_access_unit
             )
             network_sink = self.pipeline.get_by_name("network_sink")
             if network_sink is None:
@@ -1104,7 +1115,25 @@ class SplitPipeline:
             self._preview_identity_by_pts.move_to_end(preview_pts)
             while len(self._preview_identity_by_pts) > 512:
                 self._preview_identity_by_pts.popitem(last=False)
+            self._preview_identity_queue.append(source_packet)
             self._identity_condition.notify_all()
+        return self.gst.PadProbeReturn.OK
+
+    def _on_rtp_access_unit(self, _pad, _probe_info):
+        """Select the identity for the access unit entering the RTP payloader.
+
+        With ``bframes=0`` and ``tune=zerolatency``, x264 emits access units in
+        the same order as preview input frames.  GStreamer pushes all packets
+        for this access unit downstream before accepting the next one, so the
+        active identity is stable for every packet sharing its RTP timestamp.
+        """
+
+        with self._identity_condition:
+            if not self._preview_identity_queue:
+                self._active_preview_packet = None
+                self._identity_miss_count += 1
+            else:
+                self._active_preview_packet = self._preview_identity_queue.popleft()
         return self.gst.PadProbeReturn.OK
 
     def _on_sample(self, sink):
@@ -1165,8 +1194,8 @@ class SplitPipeline:
             # operation occurs in the GStreamer streaming callback, so a
             # disconnected Tailscale/network path cannot block the local
             # recording branch.
-            pts = None if buffer.pts == self.gst.CLOCK_TIME_NONE else int(buffer.pts)
-            source_packet = self._wait_for_preview_identity(pts)
+            with self._identity_condition:
+                source_packet = self._active_preview_packet
             if source_packet is None:
                 self._identity_miss_count += 1
                 return self.gst.FlowReturn.OK
