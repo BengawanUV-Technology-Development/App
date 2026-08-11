@@ -152,6 +152,16 @@ class VisionOverlayStore:
         if pts_ns is not None:
             pts_ns = _non_negative_int(pts_ns, "pts_ns")
 
+        camera_id = payload.get("camera_id", "b0249")
+        if not isinstance(camera_id, str) or not camera_id.strip():
+            raise VisionOverlayError("camera_id must be a non-empty string")
+        preview_source = payload.get("preview_source_at_detection", "digital")
+        if preview_source not in {"digital", "analog"}:
+            raise VisionOverlayError("preview_source_at_detection must be digital or analog")
+        overlay_compatible = payload.get("overlay_compatible", preview_source == "digital")
+        if not isinstance(overlay_compatible, bool):
+            raise VisionOverlayError("overlay_compatible must be a boolean")
+
         return {
             "schema_version": str(payload.get("schema_version") or "1.0"),
             "type": "vision.overlay",
@@ -161,6 +171,9 @@ class VisionOverlayStore:
             "frame_id": frame_id,
             "frame_timestamp": frame_timestamp,
             "pts_ns": pts_ns,
+            "camera_id": camera_id.strip(),
+            "preview_source_at_detection": preview_source,
+            "overlay_compatible": overlay_compatible,
             "source_width": source_width,
             "source_height": source_height,
             "network_width": network_width,
@@ -177,6 +190,14 @@ class VisionOverlayStore:
             self._received_at_unix = received_at_unix
             self._received_monotonic = received_monotonic
         return self.latest()
+
+    def clear(self) -> None:
+        """Discard live correlation state after a preview-source transition."""
+
+        with self._lock:
+            self._latest = None
+            self._received_at_unix = None
+            self._received_monotonic = None
 
     def latest(self) -> dict[str, Any]:
         with self._lock:

@@ -128,6 +128,7 @@ GET  /api/v1/camera/status
 GET  /api/v1/camera/preview
 POST /api/v1/camera/start
 POST /api/v1/camera/stop
+POST /api/v1/camera/preview-source
 GET  /api/v1/detection/overlay
 POST /api/v1/detection/overlay
 POST /api/v1/detection/ingest
@@ -163,12 +164,18 @@ berada di Jetson:
 ```text
 /media/<user>/<ssd-label>/flight-recordings/flight-<timestamp>-<id>/
   video.mp4
+  video_analog.mkv
   telemetry.jsonl
   detections.jsonl
+  preview-events.jsonl
   metadata.json
 ```
 
-`video.mp4` adalah cabang high-res yang sama dengan input YOLO/SAHI;
+`video.mp4` adalah cabang high-res B0249 yang sama dengan input YOLO/SAHI.
+Jika ARKMICRO EasyCAP terhubung dan dikonfigurasi, `video_analog.mkv` merekam
+output switcher analog secara paralel sebagai MJPEG passthrough tanpa encoder
+tambahan; isi RGB/night/thermal mengikuti pilihan RC pilot.
+`preview-events.jsonl` mencatat pilihan preview web digital/analog;
 `telemetry.jsonl` berisi snapshot telemetry read-only yang dicocokkan ke
 `frame_id` dan PTS. Pada mode capture-only, `detections.jsonl` tetap berisi
 record per frame dengan `detections=[]` dan `bbox=null`; YOLO dapat dijalankan
@@ -200,6 +207,37 @@ Konfigurasi sender dan recording agent Jetson berada di `jetson/.env`. Salin
 konfigurasi GCS. Alamat GCS tidak perlu disimpan di Jetson: saat recording
 dimulai, agent otomatis memakai IPv4 pemanggil `/recording/start` sebagai
 tujuan RTP dan detection overlay.
+
+`JETSON_FLIP_METHOD=2` merotasi input kamera 180 derajat sebelum pipeline
+dipecah. Karena transform dilakukan sebelum `tee`, file recording, input
+inference, dan live preview mempunyai orientasi yang sama. Gunakan nilai `0`
+hanya untuk menonaktifkan rotasi saat pengujian bench.
+
+Preview web dapat dipilih secara global tanpa mengubah master recording atau
+inference. `source=digital` menampilkan cabang low-res B0249 dan mengizinkan
+overlay bbox. `source=analog` menampilkan EasyCAP yang saat itu dipilih pilot
+melalui switcher RC; overlay bbox B0249 disembunyikan karena field of view-nya
+berbeda. Jetson tetap mengirim satu RTP stream pada satu waktu.
+
+```text
+POST /api/v1/camera/preview-source
+Content-Type: application/json
+
+{"source":"digital"}
+{"source":"analog"}
+```
+
+EasyCAP bersifat opsional. Konfigurasi hardware project yang sudah diverifikasi
+adalah `/dev/v4l/by-id/usb-ARKMICRO_USB2.0_PC_CAMERA-video-index0`, MJPEG
+`640x480@30`. Node `video-index1` hanya membawa UVC metadata dan tidak boleh
+dipakai. Bila capture node tidak terhubung, pipeline digital tetap bekerja,
+recording analog dinonaktifkan, dan pilihan preview analog ditolak secara
+eksplisit.
+
+Pilihan preview disimpan oleh recording agent dan berlaku global untuk semua
+browser. Pada lifecycle saat ini sender Jetson hidup bersama flight-recording
+pipeline; pilihan yang dibuat ketika idle akan dipakai saat recording berikutnya
+dimulai, dan dapat diganti tanpa menghentikan recording ketika pipeline aktif.
 
 Dashboard mengambil live preview MJPEG dari service backend. Pada source Jetson,
 backend menerima H.264/RTP/UDP dengan GStreamer dan hanya menyediakan preview;

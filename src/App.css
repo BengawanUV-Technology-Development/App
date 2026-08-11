@@ -3353,3 +3353,31 @@ button:hover:not(:disabled) {
   cursor: not-allowed;
   opacity: 0.4;
 }
+
+.camera-preview-controls button.is-selected {
+  border-color: rgba(34, 197, 94, 0.9);
+  background: rgba(20, 83, 45, 0.9);
+  color: #dcfce7;
+  opacity: 1;
+}
+
+.camera-preview-source-error,
+.camera-preview-ai-status {
+  position: absolute;
+  z-index: 4;
+  top: 10px;
+  left: 10px;
+  max-width: calc(100% - 20px);
+  padding: 5px 8px;
+  border: 1px solid rgba(248, 113, 113, 0.65);
+  background: rgba(69, 10, 10, 0.86);
+  color: #fecaca;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+}
+
+.camera-preview-ai-status {
+  border-color: rgba(56, 189, 248, 0.55);
+  background: rgba(7, 36, 52, 0.84);
+  color: #bae6fd;
+}

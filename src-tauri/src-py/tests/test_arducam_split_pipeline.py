@@ -11,6 +11,7 @@ if str(APP_ROOT) not in sys.path:
 
 from jetson.arducam_split_pipeline import (  # noqa: E402
     RtpNetworkSender,
+    SplitPipeline,
     build_pipeline_description,
     parse_args,
     scale_bbox,
@@ -28,6 +29,7 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertIn("width=960,height=540", description)
         self.assertIn("framerate=30/1", description)
         self.assertIn("framerate=15/1", description)
+        self.assertIn("nvvidconv flip-method=2", description)
         self.assertIn("appsink name=highres_sink", description)
         self.assertIn("max-size-buffers=16", description)
         self.assertIn("drop=false", description)
@@ -36,8 +38,69 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertIn("fragment-mode=first-moov-then-finalise", description)
         self.assertIn("moov-recovery-file=\"/tmp/video.mp4.moov.recovery\"", description)
         self.assertIn("appsink name=network_sink", description)
+        self.assertIn("input-selector name=preview_selector", description)
+        self.assertIn("preview_selector.sink_0", description)
+        self.assertNotIn("v4l2src", description)
+        self.assertNotIn("preview_selector.sink_1", description)
         self.assertNotIn("udpsink", description)
         self.assertIn("filesink location=\"/tmp/video.mp4\"", description)
+
+    def test_pipeline_orientation_can_be_disabled_explicitly(self):
+        args = parse_args(["--host", "100.64.0.10", "--flip-method", "0"])
+
+        description = build_pipeline_description(args, Path("/tmp/video.mp4"))
+
+        self.assertIn("nvvidconv flip-method=0", description)
+
+    def test_invalid_flip_method_is_rejected(self):
+        args = parse_args(["--host", "100.64.0.10", "--flip-method", "8"])
+
+        with self.assertRaisesRegex(ValueError, "flip-method"):
+            build_pipeline_description(args, Path("/tmp/video.mp4"))
+
+    def test_easycap_is_only_added_to_the_preview_selector(self):
+        args = parse_args(
+            [
+                "--host",
+                "100.64.0.10",
+                "--easycap-device",
+                "/dev/v4l/by-id/easycap-test",
+            ]
+        )
+
+        description = build_pipeline_description(args, Path("/tmp/video.mp4"))
+
+        self.assertIn('v4l2src device="/dev/v4l/by-id/easycap-test"', description)
+        self.assertIn("image/jpeg,width=640,height=480,framerate=30/1", description)
+        self.assertIn("jpegparse ! tee name=analog_capture", description)
+        self.assertIn("matroskamux", description)
+        self.assertIn('filesink location="/tmp/video_analog.mkv"', description)
+        self.assertIn("jpegdec", description)
+        self.assertIn("videoflip method=rotate-180", description)
+        self.assertIn("videoscale add-borders=true", description)
+        self.assertIn("preview_selector.sink_1", description)
+        self.assertEqual(description.count("filesink location="), 2)
+        self.assertEqual(description.count("appsink name=highres_sink"), 1)
+
+    def test_easycap_device_must_be_an_absolute_path(self):
+        args = parse_args(["--host", "100.64.0.10", "--easycap-device", "video2"])
+
+        with self.assertRaisesRegex(ValueError, "absolute"):
+            build_pipeline_description(args, Path("/tmp/video.mp4"))
+
+    def test_analog_recording_validation_accepts_matroska_header(self):
+        pipeline = SplitPipeline.__new__(SplitPipeline)
+        pipeline.args = parse_args(
+            ["--host", "100.64.0.10", "--easycap-device", "/dev/video1"]
+        )
+        path = Path("/tmp/test-video-analog.mkv")
+        try:
+            path.write_bytes(b"\x1aE\xdf\xa3payload")
+            pipeline.analog_video_path = path
+
+            self.assertIsNone(pipeline._validate_analog_video_output())
+        finally:
+            path.unlink(missing_ok=True)
 
     def test_bbox_is_mapped_from_highres_to_network_coordinates(self):
         self.assertEqual(

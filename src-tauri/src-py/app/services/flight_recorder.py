@@ -205,6 +205,17 @@ class FlightRecorder:
             raise FlightRecorderError("Camera did not stop within 10 seconds")
         return self.status()
 
+    def set_preview_source(self, source: str) -> dict:
+        if self._jetson_recording is None:
+            raise FlightRecorderError(
+                "Preview source selection is only available for the Jetson pipeline"
+            )
+        try:
+            self._jetson_recording.set_preview_source(source)
+        except JetsonRecordingError as exc:
+            raise FlightRecorderError(str(exc)) from exc
+        return self.status()
+
     def preview_stream(self) -> Iterator[bytes]:
         if self._jetson_video is not None:
             yield from self._jetson_video.preview_stream()

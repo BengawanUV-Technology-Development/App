@@ -29,6 +29,7 @@ function CameraPreview() {
   const [overlay, setOverlay] = useState(EMPTY_OVERLAY);
   const [streamKey, setStreamKey] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
+  const [sourceError, setSourceError] = useState(null);
 
   const refresh = useCallback(async () => {
     const result = await apiGet("/api/v1/camera/status");
@@ -84,9 +85,26 @@ function CameraPreview() {
     setIsLoading(false);
   };
 
+  const switchPreview = async (source) => {
+    setIsLoading(true);
+    setSourceError(null);
+    const result = await apiPost("/api/v1/camera/preview-source", { source });
+    if (result.ok) {
+      setCamera(result.data);
+    } else {
+      setSourceError(result.error || "Preview source switch failed");
+      if (result.data) setCamera(result.data);
+    }
+    setIsLoading(false);
+  };
+
   const overlayWidth = Number(overlay.network_width || camera.width || 0);
   const overlayHeight = Number(overlay.network_height || camera.height || 0);
-  const detections = overlay.stale || camera.camera_status !== "LIVE"
+  const previewSource = camera.preview_source || camera.preview?.source || "digital";
+  const analogAvailable = Boolean(
+    camera.preview_analog_available ?? camera.preview?.analog_available
+  );
+  const detections = overlay.stale || camera.camera_status !== "LIVE" || previewSource !== "digital"
     ? []
     : Array.isArray(overlay.detections)
       ? overlay.detections
@@ -130,10 +148,27 @@ function CameraPreview() {
       <div className="vision-reticle" />
       <div className="camera-preview-controls">
         <span className={camera.camera_status === "LIVE" ? "is-live" : ""}>
-          {camera.camera_status || "OFFLINE"}
+          {(camera.camera_status || "OFFLINE") + ` · ${previewSource.toUpperCase()}`}
           {camera.width ? ` · ${camera.width}×${camera.height} @ ${Number(camera.fps || 0).toFixed(1)} FPS` : ""}
         </span>
-        <div>
+        <div className="camera-preview-source-controls" aria-label="Global preview source">
+          <button
+            type="button"
+            className={previewSource === "digital" ? "is-selected" : ""}
+            onClick={() => switchPreview("digital")}
+            disabled={isLoading || previewSource === "digital"}
+          >
+            DIGITAL
+          </button>
+          <button
+            type="button"
+            className={previewSource === "analog" ? "is-selected" : ""}
+            onClick={() => switchPreview("analog")}
+            disabled={isLoading || !analogAvailable || previewSource === "analog"}
+            title={analogAvailable ? "Show the EasyCAP feed selected by the pilot" : "EasyCAP is not configured on Jetson"}
+          >
+            ANALOG
+          </button>
           <button type="button" onClick={restart} disabled={isLoading}>RECONNECT</button>
           <button
             type="button"
@@ -144,6 +179,10 @@ function CameraPreview() {
           </button>
         </div>
       </div>
+      {sourceError ? <div className="camera-preview-source-error">{sourceError}</div> : null}
+      {previewSource === "analog" ? (
+        <div className="camera-preview-ai-status">AI: B0249 ACTIVE · OVERLAY HIDDEN ON ANALOG</div>
+      ) : null}
     </div>
   );
 }

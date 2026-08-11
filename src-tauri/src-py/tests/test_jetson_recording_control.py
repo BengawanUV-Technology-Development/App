@@ -193,6 +193,43 @@ class JetsonRecordingControlTests(unittest.TestCase):
             {"label": "survey", "api_port": 5002, "video_port": 5010},
         )
 
+    def test_gcs_client_switches_the_global_preview_source(self):
+        client = JetsonRecordingClient()
+        client.base_url = "http://jetson.test:5101"
+
+        with patch.object(client, "_request", return_value={"ok": True}) as request:
+            client.set_preview_source("analog")
+
+        request.assert_called_once_with(
+            "/preview/source",
+            "POST",
+            {"source": "analog"},
+        )
+
+    def test_agent_persists_preview_source_and_rejects_missing_easycap(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = SimpleNamespace(
+                record_dir=Path(temporary),
+                pipeline_script=Path(__file__),
+                easycap_device="",
+            )
+            controller = RecordingController(config)
+
+            self.assertEqual(controller.status()["preview_source"], "digital")
+            with self.assertRaisesRegex(RecordingAgentError, "JETSON_EASYCAP_DEVICE"):
+                controller.set_preview_source("analog")
+
+            easycap = Path(temporary) / "video2"
+            easycap.touch()
+            config.easycap_device = str(easycap)
+            state = controller.set_preview_source("analog")
+            self.assertEqual(state["preview_source"], "analog")
+            self.assertEqual(
+                (Path(temporary) / ".preview-source").read_text(encoding="utf-8").strip(),
+                "analog",
+            )
+            controller.shutdown()
+
     def test_jetson_flight_recorder_does_not_fall_back_to_gcs_video(self):
         with patch.dict(
             "os.environ",

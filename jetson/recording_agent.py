@@ -129,6 +129,10 @@ class AgentConfig:
         self.video_port = env_int("JETSON_VIDEO_PORT", 5000, 1, 65535)
         self.payload_type = env_int("JETSON_VIDEO_PAYLOAD_TYPE", 96, 0, 127)
         self.sensor_id = env_int("JETSON_SENSOR_ID", 0, 0, 16)
+        # nvvidconv flip-method=2 rotates the frame by 180 degrees. Apply it
+        # before the split so recording, inference, and the network preview
+        # always use the same physical orientation.
+        self.flip_method = env_int("JETSON_FLIP_METHOD", 2, 0, 7)
         self.high_width = env_int("JETSON_HIGH_WIDTH", 1920, 16, 7680)
         self.high_height = env_int("JETSON_HIGH_HEIGHT", 1080, 16, 7680)
         self.high_fps = env_float("JETSON_HIGH_FPS", 30.0, 0.1, 120.0)
@@ -137,6 +141,14 @@ class AgentConfig:
         self.network_fps = env_float("JETSON_NETWORK_FPS", 15.0, 0.1, 120.0)
         self.local_bitrate_kbps = env_int("JETSON_LOCAL_BITRATE_KBPS", 12000, 100, 100000)
         self.network_bitrate_kbps = env_int("JETSON_NETWORK_BITRATE_KBPS", 2000, 100, 100000)
+        self.easycap_device = os.getenv("JETSON_EASYCAP_DEVICE", "").strip()
+        if self.easycap_device and not Path(self.easycap_device).is_absolute():
+            raise RecordingAgentError("JETSON_EASYCAP_DEVICE must be an absolute /dev path")
+        self.easycap_width = env_int("JETSON_EASYCAP_WIDTH", 640, 16, 7680)
+        self.easycap_height = env_int("JETSON_EASYCAP_HEIGHT", 480, 16, 7680)
+        self.easycap_fps = env_float("JETSON_EASYCAP_FPS", 30.0, 0.1, 120.0)
+        self.analog_rotate_180 = env_bool("JETSON_EASYCAP_ROTATE_180", True)
+        self.preview_source_file = self.record_dir / ".preview-source"
         self.weights = os.getenv("JETSON_MODEL_WEIGHTS", "").strip()
         self.device = os.getenv("JETSON_MODEL_DEVICE", "cuda:0").strip()
         self.imgsz = env_int("JETSON_MODEL_IMGSZ", 640, 16, 7680)
@@ -167,6 +179,11 @@ class AgentConfig:
         ingest_url = self.ingest_url or (
             f"http://{target_host}:{target_api_port}/api/v1/detection/overlay"
         )
+        easycap_device = (
+            self.easycap_device
+            if self.easycap_device and Path(self.easycap_device).exists()
+            else ""
+        )
         command = [
             sys.executable,
             str(self.pipeline_script),
@@ -178,6 +195,8 @@ class AgentConfig:
             str(self.payload_type),
             "--sensor-id",
             str(self.sensor_id),
+            "--flip-method",
+            str(self.flip_method),
             "--high-width",
             str(self.high_width),
             "--high-height",
@@ -194,6 +213,16 @@ class AgentConfig:
             str(self.local_bitrate_kbps),
             "--network-bitrate-kbps",
             str(self.network_bitrate_kbps),
+            "--easycap-device",
+            easycap_device,
+            "--easycap-width",
+            str(self.easycap_width),
+            "--easycap-height",
+            str(self.easycap_height),
+            "--easycap-fps",
+            str(self.easycap_fps),
+            "--preview-source-file",
+            str(self.preview_source_file),
             "--record-dir",
             str(self.record_dir),
             "--min-free-bytes",
@@ -229,6 +258,7 @@ class AgentConfig:
             command.append("--sahi")
         if self.sahi_standard_pred:
             command.append("--sahi-standard-pred")
+        command.append("--analog-rotate-180" if self.analog_rotate_180 else "--no-analog-rotate-180")
         return command
 
 
@@ -251,6 +281,9 @@ class RecordingController:
         self._lock_file = None
         self._active_state_path = self.config.record_dir / ".recording-agent.active.json"
         self._lock_path = self.config.record_dir / ".recording-agent.lock"
+        self._preview_source_path = Path(
+            getattr(self.config, "preview_source_file", self.config.record_dir / ".preview-source")
+        )
         self._storage_guard_enabled = bool(getattr(config, "storage_guard", False))
         if self._storage_guard_enabled:
             try:
@@ -267,6 +300,10 @@ class RecordingController:
             except StorageGuardError as exc:
                 raise RecordingAgentError(str(exc)) from exc
         self._acquire_lock()
+        if not self._preview_source_path.exists():
+            self._write_preview_source("digital")
+        elif self._read_preview_source() == "analog" and not self._analog_available():
+            self._write_preview_source("digital")
         self._recover_active_state()
 
     def _acquire_lock(self) -> None:
@@ -431,6 +468,9 @@ class RecordingController:
         duration = 0
         if started_at:
             duration = max(0, (time.time() if recording else ended_at or time.time()) - started_at)
+        preview_metadata = metadata.get("preview") or {}
+        requested_preview_source = self._read_preview_source()
+        analog_available = self._analog_available()
         return {
             "ok": True,
             "recording": recording,
@@ -448,6 +488,25 @@ class RecordingController:
             "highres": metadata.get("highres"),
             "network": metadata.get("network"),
             "storage": metadata.get("storage"),
+            "analog_recording": metadata.get("analog_recording") or {
+                "enabled": analog_available,
+                "device": getattr(self.config, "easycap_device", None) or None,
+                "codec": "MJPEG passthrough" if analog_available else None,
+                "container": "Matroska" if analog_available else None,
+            },
+            "preview_source": requested_preview_source,
+            "preview_active_source": preview_metadata.get("source", requested_preview_source),
+            "preview_analog_available": analog_available,
+            "preview_analog_configured": bool(getattr(self.config, "easycap_device", "")),
+            "preview": {
+                "source": requested_preview_source,
+                "active_source": preview_metadata.get("source", requested_preview_source),
+                "analog_available": analog_available,
+                "analog_camera": preview_metadata.get("analog_camera"),
+                "recording_source": "b0249",
+                "inference_source": "b0249",
+                "bbox_overlay_compatible": requested_preview_source == "digital",
+            },
             "stream_target": {
                 "host": self._gcs_host,
                 "video_port": self._video_port,
@@ -457,6 +516,37 @@ class RecordingController:
 
     def status(self) -> dict[str, Any]:
         with self._lock:
+            return self._state_locked()
+
+    def _read_preview_source(self) -> str:
+        try:
+            source = self._preview_source_path.read_text(encoding="utf-8").strip().lower()
+        except OSError:
+            return "digital"
+        return source if source in {"digital", "analog"} else "digital"
+
+    def _analog_available(self) -> bool:
+        device = str(getattr(self.config, "easycap_device", "") or "").strip()
+        return bool(device and Path(device).exists())
+
+    def _write_preview_source(self, source: str) -> None:
+        self._preview_source_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self._preview_source_path.with_name(f"{self._preview_source_path.name}.tmp")
+        temporary.write_text(f"{source}\n", encoding="utf-8")
+        temporary.replace(self._preview_source_path)
+
+    def set_preview_source(self, source: Any) -> dict[str, Any]:
+        if not isinstance(source, str):
+            raise RecordingAgentError("preview source must be digital or analog")
+        normalized = source.strip().lower()
+        if normalized not in {"digital", "analog"}:
+            raise RecordingAgentError("preview source must be digital or analog")
+        if normalized == "analog" and not self._analog_available():
+            raise RecordingAgentError(
+                "analog preview is unavailable; configure JETSON_EASYCAP_DEVICE and connect EasyCAP"
+            )
+        with self._lock:
+            self._write_preview_source(normalized)
             return self._state_locked()
 
     @staticmethod
@@ -540,6 +630,8 @@ class RecordingController:
             self._started_at = time.time()
             self._ended_at = None
             self._stop_requested = False
+            if self._read_preview_source() == "analog" and not self._analog_available():
+                self._write_preview_source("digital")
             command = self.config.command(
                 session_id,
                 self._label,
@@ -674,10 +766,10 @@ class RecordingRequestHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             self._send_json(401, {"ok": False, "error": "Unauthorized"})
             return
-        if self.path != "/recording/status":
-            self._send_json(404, {"ok": False, "error": "Not found"})
+        if self.path == "/recording/status" or self.path == "/preview/source":
+            self._send_json(200, self.controller.status())
             return
-        self._send_json(200, self.controller.status())
+        self._send_json(404, {"ok": False, "error": "Not found"})
 
     def do_POST(self) -> None:
         if not self._authorized():
@@ -700,6 +792,9 @@ class RecordingRequestHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/recording/stop":
                 self._send_json(200, self.controller.stop())
+                return
+            if self.path == "/preview/source":
+                self._send_json(200, self.controller.set_preview_source(payload.get("source")))
                 return
             self._send_json(404, {"ok": False, "error": "Not found"})
         except RecordingAgentError as exc:

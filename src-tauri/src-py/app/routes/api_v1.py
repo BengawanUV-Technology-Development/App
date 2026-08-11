@@ -69,6 +69,20 @@ def camera_preview():
     )
 
 
+@api_v1_bp.route("/camera/preview-source", methods=["POST"])
+def set_camera_preview_source():
+    payload = request.get_json(silent=True) or {}
+    try:
+        state = _get_flight_recorder().set_preview_source(payload.get("source"))
+        # The newest B0249 overlay may belong to a frame from before the
+        # selector transition. Require a fresh detector payload before the UI
+        # draws boxes again after switching back to digital.
+        _get_vision_overlay_store().clear()
+        return jsonify({"ok": True, **state})
+    except FlightRecorderError as exc:
+        return jsonify({"ok": False, "error": str(exc), **_get_flight_recorder().status()}), 409
+
+
 @api_v1_bp.route("/detection/overlay", methods=["GET"])
 def latest_detection_overlay():
     """Return the latest short-lived bbox overlay for the low-res preview."""
