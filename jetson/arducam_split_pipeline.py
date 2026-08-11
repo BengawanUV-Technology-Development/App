@@ -88,7 +88,7 @@ def read_system_health() -> dict[str, Any]:
         try:
             value = float(path.read_text(encoding="utf-8").strip())
             temperatures.append(value / 1000 if value > 1000 else value)
-        except (OSError, ValueError):
+        except (OSError, TypeError, ValueError):
             continue
     if temperatures:
         health["temperature_c"] = max(temperatures)

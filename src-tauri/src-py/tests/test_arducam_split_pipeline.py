@@ -5,7 +5,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 APP_ROOT = Path(__file__).resolve().parents[3]
@@ -19,6 +19,7 @@ from jetson.arducam_split_pipeline import (  # noqa: E402
     SplitPipeline,
     build_pipeline_description,
     parse_args,
+    read_system_health,
     scale_bbox,
 )
 from jetson.model_provenance import (  # noqa: E402
@@ -89,6 +90,19 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertIn("appsink name=network_sink", description)
         self.assertNotIn("udpsink", description)
         self.assertIn("filesink location=\"/tmp/video.mp4\"", description)
+
+    def test_broken_thermal_sensor_does_not_stop_health_collection(self):
+        broken_sensor = MagicMock()
+        broken_sensor.read_text.side_effect = TypeError("sysfs returned no bytes")
+
+        with patch(
+            "jetson.arducam_split_pipeline.Path.glob",
+            return_value=[broken_sensor],
+        ):
+            health = read_system_health()
+
+        self.assertIsNone(health["temperature_c"])
+        self.assertIn("ram_total_bytes", health)
 
     def test_bbox_is_mapped_from_highres_to_network_coordinates(self):
         self.assertEqual(
