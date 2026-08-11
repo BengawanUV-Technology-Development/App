@@ -32,6 +32,7 @@ import shutil
 import socket
 import threading
 import time
+import traceback
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -1346,6 +1347,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         if pipeline is not None:
             pipeline._write_metadata("FAILED", error=str(exc))
+        traceback.print_exc()
         print(f"[pipeline] fatal: {exc}", flush=True)
         return 1
 
