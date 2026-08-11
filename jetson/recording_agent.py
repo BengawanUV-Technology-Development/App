@@ -490,7 +490,7 @@ class RecordingController:
                 "enabled": analog_available,
                 "device": getattr(self.config, "easycap_device", None) or None,
                 "codec": "MJPEG" if analog_available else None,
-                "container": "AVI" if analog_available else None,
+                "container": "Matroska" if analog_available else None,
             },
             "preview_source": requested_preview_source,
             "preview_active_source": preview_metadata.get("source", requested_preview_source),

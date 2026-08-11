@@ -164,7 +164,7 @@ berada di Jetson:
 ```text
 /media/<user>/<ssd-label>/flight-recordings/flight-<timestamp>-<id>/
   video.mp4
-  video_analog.avi
+  video_analog.mkv
   telemetry.jsonl
   detections.jsonl
   preview-events.jsonl
@@ -172,7 +172,7 @@ berada di Jetson:
 ```
 
 `video.mp4` adalah cabang high-res B0249 yang sama dengan input YOLO/SAHI.
-Jika ARKMICRO EasyCAP terhubung dan dikonfigurasi, `video_analog.avi` merekam
+Jika ARKMICRO EasyCAP terhubung dan dikonfigurasi, `video_analog.mkv` merekam
 output switcher analog secara paralel sebagai MJPEG dengan timestamp yang
 dinormalisasi; isi RGB/night/thermal mengikuti pilihan RC pilot.
 `preview-events.jsonl` mencatat pilihan preview web digital/analog;
