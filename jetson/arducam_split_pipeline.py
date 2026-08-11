@@ -169,16 +169,16 @@ def build_pipeline_description(
     )
     recovery_file = recovery_file or video_path.with_name(f"{video_path.name}.moov.recovery")
     analog_video_path = video_path.with_name("video_analog.mkv")
-    analog_flip = "videoflip method=rotate-180 !" if getattr(args, "analog_rotate_180", True) else ""
     analog_branch = (
         f"""
 v4l2src device={_gst_quote(easycap_device)} do-timestamp=true !
 image/jpeg,width={args.easycap_width},height={args.easycap_height},framerate={easycap_fps_caps} !
-jpegparse ! tee name=analog_capture
+jpegparse ! jpegdec ! videoconvert ! videorate !
+video/x-raw,format=I420,width={args.easycap_width},height={args.easycap_height},framerate={easycap_fps_caps} !
+tee name=analog_capture
 analog_capture. ! queue max-size-buffers=64 max-size-time=0 max-size-bytes=0 !
-matroskamux ! filesink location={_gst_quote(analog_video_path)}
+jpegenc quality=90 ! jpegparse ! matroskamux ! filesink location={_gst_quote(analog_video_path)}
 analog_capture. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream !
-jpegdec ! videoconvert ! {analog_flip}
 videoscale add-borders=true ! videorate !
 video/x-raw,format=I420,width={network_width},height={network_height},framerate={network_fps_caps} !
 queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! preview_selector.sink_1
@@ -928,7 +928,7 @@ class SplitPipeline:
         return None
 
     def _validate_analog_video_output(self) -> str | None:
-        """Validate the optional passthrough MJPEG Matroska recording."""
+        """Validate the optional timestamp-normalized MJPEG Matroska recording."""
 
         if not self.args.easycap_device:
             return None
@@ -1030,7 +1030,7 @@ class SplitPipeline:
                 "width": self.args.easycap_width if self.args.easycap_device else None,
                 "height": self.args.easycap_height if self.args.easycap_device else None,
                 "fps": self.args.easycap_fps if self.args.easycap_device else None,
-                "codec": "MJPEG passthrough" if self.args.easycap_device else None,
+                "codec": "MJPEG" if self.args.easycap_device else None,
                 "container": "Matroska" if self.args.easycap_device else None,
                 "camera": "selected_by_pilot" if self.args.easycap_device else None,
             },
@@ -1095,12 +1095,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--easycap-width", type=int, default=640)
     parser.add_argument("--easycap-height", type=int, default=480)
     parser.add_argument("--easycap-fps", type=float, default=30.0)
-    parser.add_argument(
-        "--analog-rotate-180",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Rotate the EasyCAP preview by 180 degrees",
-    )
     parser.add_argument(
         "--preview-source-file",
         type=Path,

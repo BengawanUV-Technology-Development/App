@@ -147,7 +147,6 @@ class AgentConfig:
         self.easycap_width = env_int("JETSON_EASYCAP_WIDTH", 640, 16, 7680)
         self.easycap_height = env_int("JETSON_EASYCAP_HEIGHT", 480, 16, 7680)
         self.easycap_fps = env_float("JETSON_EASYCAP_FPS", 30.0, 0.1, 120.0)
-        self.analog_rotate_180 = env_bool("JETSON_EASYCAP_ROTATE_180", True)
         self.preview_source_file = self.record_dir / ".preview-source"
         self.weights = os.getenv("JETSON_MODEL_WEIGHTS", "").strip()
         self.device = os.getenv("JETSON_MODEL_DEVICE", "cuda:0").strip()
@@ -258,7 +257,6 @@ class AgentConfig:
             command.append("--sahi")
         if self.sahi_standard_pred:
             command.append("--sahi-standard-pred")
-        command.append("--analog-rotate-180" if self.analog_rotate_180 else "--no-analog-rotate-180")
         return command
 
 
@@ -491,7 +489,7 @@ class RecordingController:
             "analog_recording": metadata.get("analog_recording") or {
                 "enabled": analog_available,
                 "device": getattr(self.config, "easycap_device", None) or None,
-                "codec": "MJPEG passthrough" if analog_available else None,
+                "codec": "MJPEG" if analog_available else None,
                 "container": "Matroska" if analog_available else None,
             },
             "preview_source": requested_preview_source,
