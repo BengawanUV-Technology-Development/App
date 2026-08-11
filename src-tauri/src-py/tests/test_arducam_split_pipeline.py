@@ -11,6 +11,7 @@ if str(APP_ROOT) not in sys.path:
 
 from jetson.arducam_split_pipeline import (  # noqa: E402
     RtpNetworkSender,
+    SplitPipeline,
     build_pipeline_description,
     parse_args,
     scale_bbox,
@@ -18,6 +19,27 @@ from jetson.arducam_split_pipeline import (  # noqa: E402
 
 
 class ArducamSplitPipelineTests(unittest.TestCase):
+    def test_v2_mission_epoch_layout_is_created_without_legacy_metadata(self):
+        import tempfile
+
+        mission_id = "mission-00000000-0000-0000-0000-000000000002"
+        with tempfile.TemporaryDirectory() as temporary:
+            args = parse_args([
+                "--host", "100.64.0.10", "--record-dir", temporary,
+                "--allow-root-record-dir", "--min-free-bytes", "0",
+                "--mission-id", mission_id, "--capture-epoch", "2",
+            ])
+            pipeline = SplitPipeline(args)
+            try:
+                epoch_dir = Path(temporary).resolve() / mission_id / "epochs" / "0002"
+                self.assertEqual(pipeline.session_dir, epoch_dir)
+                self.assertTrue((Path(temporary) / mission_id / "mission.json").is_file())
+                self.assertTrue((epoch_dir / "epoch.json").is_file())
+                self.assertFalse((epoch_dir / "metadata.json").exists())
+            finally:
+                pipeline.sidecars.close()
+                pipeline.worker.close()
+
     def test_default_pipeline_has_independent_highres_and_network_branches(self):
         args = parse_args(["--host", "100.64.0.10"])
 

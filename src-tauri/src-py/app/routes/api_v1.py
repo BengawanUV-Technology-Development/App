@@ -96,7 +96,10 @@ def recording_status():
 def start_recording():
     payload = request.get_json(silent=True) or {}
     try:
-        return jsonify({"ok": True, **_get_flight_recorder().start(payload.get("label"))}), 202
+        return jsonify({
+            "ok": True,
+            **_get_flight_recorder().start(payload.get("label"), payload.get("mission_id")),
+        }), 202
     except FlightRecorderError as exc:
         return jsonify({"ok": False, "error": str(exc), **_get_flight_recorder().status()}), 409
 

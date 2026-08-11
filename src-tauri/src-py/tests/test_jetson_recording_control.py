@@ -15,6 +15,7 @@ from jetson.recording_agent import (  # noqa: E402
     RecordingAgentError,
     RecordingController,
 )
+from jetson.mission_storage import MissionCatalog, MissionStorageError  # noqa: E402
 from app.services.jetson_recording_client import JetsonRecordingClient  # noqa: E402
 from app.services.flight_recorder import FlightRecorder, FlightRecorderError  # noqa: E402
 
@@ -44,10 +45,24 @@ class FakeProcess:
 
 
 class JetsonRecordingControlTests(unittest.TestCase):
+    def test_mission_epochs_are_durable_and_fail_after_three_capture_errors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            catalog = MissionCatalog(temporary)
+            mission_id, epoch, _ = catalog.allocate(label="survey")
+            self.assertEqual(epoch, 1)
+            catalog.finalize_epoch(mission_id, epoch, "FAILED", "capture error 1")
+            for expected in (2, 3):
+                same_id, epoch, _ = MissionCatalog(temporary).allocate(mission_id)
+                self.assertEqual((same_id, epoch), (mission_id, expected))
+                catalog.finalize_epoch(mission_id, epoch, "FAILED", f"capture error {expected}")
+            with self.assertRaisesRegex(MissionStorageError, "FAILED"):
+                catalog.allocate(mission_id)
+
     def test_agent_config_allows_runtime_gcs_without_env_host(self):
         with tempfile.TemporaryDirectory() as temporary:
             env = {
                 "JETSON_RECORDING_AGENT_TOKEN": "test-token",
+                "JETSON_INGEST_TOKEN": "test-ingest-token",
                 "JETSON_RECORDING_PIPELINE_SCRIPT": str(Path(__file__)),
                 "JETSON_RECORD_DIR": temporary,
             }
@@ -64,6 +79,8 @@ class JetsonRecordingControlTests(unittest.TestCase):
         self.assertIsNone(config.gcs_host)
         self.assertEqual(command[command.index("--host") + 1], "100.87.201.110")
         self.assertEqual(command[command.index("--port") + 1], "5010")
+        self.assertEqual(command[command.index("--capture-epoch") + 1], "1")
+        self.assertEqual(command[command.index("--ingest-token") + 1], "test-ingest-token")
         self.assertEqual(
             command[command.index("--ingest-url") + 1],
             "http://100.87.201.110:5002/api/v1/detection/overlay",

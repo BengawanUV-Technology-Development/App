@@ -23,8 +23,8 @@ class FlightRecorder:
 
     ``CAMERA_SOURCE=jetson_udp`` receives the Arducam stream at the GCS via
     GStreamer, while recording commands are proxied to the Jetson agent. The
-    GCS does not create a relay video for this source. ``CAMERA_SOURCE=easycap``
-    remains available for the legacy local capture setup.
+    GCS does not create a relay video for this source. The v0.3 release rejects
+    every non-Arducam source.
     """
 
     def __init__(self, telemetry_provider: Callable[[], dict], recordings_dir: str | Path | None = None):
@@ -39,12 +39,10 @@ class FlightRecorder:
             "jetson": "jetson_udp",
             "udp": "jetson_udp",
             "gstreamer": "jetson_udp",
-            "easycap": "easycap",
-            "opencv": "easycap",
         }.get(source, source)
-        if self.camera_source not in {"jetson_udp", "easycap"}:
+        if self.camera_source != "jetson_udp":
             raise FlightRecorderError(
-                f"Unsupported CAMERA_SOURCE={source!r}; use jetson_udp or easycap"
+                f"Unsupported CAMERA_SOURCE={source!r}; v0.3 only permits jetson_udp Arducam"
             )
 
         # Legacy EasyCAP settings. They are intentionally not used by the
@@ -235,9 +233,9 @@ class FlightRecorder:
             elif camera_status in {"FAILED", "STOPPED"}:
                 return
 
-    def start(self, label: str | None = None) -> dict:
+    def start(self, label: str | None = None, mission_id: str | None = None) -> dict:
         if self._jetson_recording is not None:
-            return self._start_jetson_recording(label)
+            return self._start_jetson_recording(label, mission_id)
 
         with self._lock:
             if self._state["recording"]:
@@ -292,7 +290,7 @@ class FlightRecorder:
             self._finish_recording(stop_error)
         return self.status()
 
-    def _start_jetson_recording(self, label: str | None = None) -> dict:
+    def _start_jetson_recording(self, label: str | None = None, mission_id: str | None = None) -> dict:
         current = self.status()
         if current.get("status") == "REMOTE_UNKNOWN":
             raise FlightRecorderError(
@@ -303,7 +301,9 @@ class FlightRecorder:
         try:
             # Keep the GCS receiver ready before asking Jetson to send frames.
             self.start_camera()
-            self._jetson_recording.start(label, video_port=self._jetson_video.port)
+            self._jetson_recording.start(
+                label, video_port=self._jetson_video.port, mission_id=mission_id
+            )
         except (FlightRecorderError, JetsonRecordingError) as exc:
             raise FlightRecorderError(str(exc)) from exc
         return self.status()
@@ -336,7 +336,7 @@ class FlightRecorder:
                 **self._capture_actual,
             }
         metadata = {
-            "schema_version": "1.1",
+            "schema_version": "2.0",
             "session_id": state["session_id"],
             "label": state.get("label"),
             "status": state["status"],

@@ -12,7 +12,7 @@ and branches it before encoding:
 
 The capture-only mode (no ``--weights``) still writes one explicit empty
 detection record per frame and one telemetry snapshot per frame. This makes
-the footage immediately usable for offline YOLO and coordinate reconstruction
+the footage immediately usable for offline YOLO
 without pretending that a detector or telemetry source was active.
 
 Orin Nano does not provide NVENC, so x264enc is used deliberately. Start with
@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import queue
 import re
 import signal
@@ -50,6 +51,42 @@ except ImportError:  # Script execution from the Jetson service directory.
 
 def utc_iso(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def read_system_health() -> dict[str, Any]:
+    """Best-effort Linux/Jetson resource snapshot without extra dependencies."""
+
+    health: dict[str, Any] = {
+        "cpu_load_1m": None,
+        "ram_used_bytes": None,
+        "ram_total_bytes": None,
+        "temperature_c": None,
+        "gpu": {"status": "not_available"},
+    }
+    try:
+        health["cpu_load_1m"] = os.getloadavg()[0]
+    except (AttributeError, OSError):
+        pass
+    try:
+        values = {}
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            key, raw = line.split(":", 1)
+            values[key] = int(raw.strip().split()[0]) * 1024
+        health["ram_total_bytes"] = values.get("MemTotal")
+        if values.get("MemTotal") is not None and values.get("MemAvailable") is not None:
+            health["ram_used_bytes"] = values["MemTotal"] - values["MemAvailable"]
+    except (OSError, ValueError, IndexError):
+        pass
+    temperatures = []
+    for path in Path("/sys/class/thermal").glob("thermal_zone*/temp"):
+        try:
+            value = float(path.read_text(encoding="utf-8").strip())
+            temperatures.append(value / 1000 if value > 1000 else value)
+        except (OSError, ValueError):
+            continue
+    if temperatures:
+        health["temperature_c"] = max(temperatures)
+    return health
 
 
 def validate_dimension(value: int, name: str) -> int:
@@ -137,6 +174,8 @@ def build_pipeline_description(
         raise ValueError("ingest-timeout must be greater than 0 and at most 30 seconds")
     if not 0 <= args.overlap < 1:
         raise ValueError("overlap must be between 0 (inclusive) and 1 (exclusive)")
+    if not 1 <= args.sidecar_queue_size <= 65_536:
+        raise ValueError("sidecar-queue-size must be between 1 and 65536")
     eos_timeout_seconds = float(getattr(args, "eos_timeout_seconds", 30.0))
     if not 1 <= eos_timeout_seconds <= 300:
         raise ValueError("eos-timeout-seconds must be between 1 and 300")
@@ -145,13 +184,11 @@ def build_pipeline_description(
     network_key_int = max(1, round(network_fps))
     high_fps_caps = fps_caps(high_fps)
     network_fps_caps = fps_caps(network_fps)
-    appsink_buffers = 1 if args.weights else 16
-    appsink_drop = "drop=true" if args.weights else "drop=false"
-    appsink_queue = (
-        "queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream"
-        if args.weights
-        else "queue max-size-buffers=16 max-size-time=0 max-size-bytes=0"
-    )
+    # This callback assigns canonical identity and must observe every master
+    # frame. Inference dropping occurs later in its size-one worker queue.
+    appsink_buffers = 16
+    appsink_drop = "drop=false"
+    appsink_queue = "queue max-size-buffers=16 max-size-time=0 max-size-bytes=0"
     recovery_file = recovery_file or video_path.with_name(f"{video_path.name}.moov.recovery")
     return f"""
 nvarguscamerasrc sensor-id={args.sensor_id} wbmode=1 !
@@ -176,10 +213,139 @@ appsink name=network_sink emit-signals=true max-buffers=128 drop=true sync=false
 
 @dataclass
 class FramePacket:
+    mission_id: str
+    capture_epoch: int
     frame_id: int
-    capture_timestamp: float
+    camera_id: str
+    capture_utc_ns: int
+    capture_monotonic_ns: int
     pts_ns: int | None
     image: Any
+
+    @property
+    def capture_timestamp(self) -> float:
+        return self.capture_utc_ns / 1_000_000_000
+
+    def identity(self) -> dict[str, Any]:
+        return {
+            "schema_version": "2.0",
+            "mission_id": self.mission_id,
+            "capture_epoch": self.capture_epoch,
+            "frame_id": self.frame_id,
+            "camera_id": self.camera_id,
+            "capture_utc_ns": self.capture_utc_ns,
+            "capture_monotonic_ns": self.capture_monotonic_ns,
+            "source_pts_ns": self.pts_ns or 0,
+        }
+
+
+class BoundedSidecarWriter:
+    """Move JSON serialization and disk writes off the capture callback."""
+
+    def __init__(
+        self,
+        args: argparse.Namespace,
+        epoch_dir: Path,
+        telemetry: MAVLinkTelemetryCollector,
+        queue_size: int = 4096,
+    ):
+        self.args = args
+        self.epoch_dir = epoch_dir
+        self.telemetry = telemetry
+        self.queue: queue.Queue[FramePacket | None] = queue.Queue(maxsize=queue_size)
+        self.thread: threading.Thread | None = None
+        self.frames_written = 0
+        self.telemetry_written = 0
+        self.placeholders_written = 0
+        self.dropped = 0
+        self.error: str | None = None
+        self._frames_file = (epoch_dir / "frames.jsonl").open("a", encoding="utf-8", buffering=1)
+        self._telemetry_file = (epoch_dir / "telemetry.jsonl").open("a", encoding="utf-8", buffering=1)
+        self._detection_file = (
+            (epoch_dir / "detections.jsonl").open("a", encoding="utf-8", buffering=1)
+            if not args.weights else None
+        )
+
+    def start(self) -> None:
+        self.thread = threading.Thread(target=self._run, daemon=True, name="jetson-sidecar-writer")
+        self.thread.start()
+
+    def submit(self, packet: FramePacket) -> bool:
+        try:
+            self.queue.put_nowait(packet)
+            return True
+        except queue.Full:
+            self.dropped += 1
+            self.error = "sidecar queue overflow; exact per-frame evidence cannot be guaranteed"
+            return False
+
+    def close(self) -> None:
+        try:
+            self.queue.put(None, timeout=5)
+        except queue.Full:
+            self.error = self.error or "sidecar writer did not drain during shutdown"
+        if self.thread:
+            self.thread.join(timeout=30)
+            if self.thread.is_alive():
+                self.error = self.error or "sidecar writer shutdown timeout"
+        self._frames_file.close()
+        self._telemetry_file.close()
+        if self._detection_file is not None:
+            self._detection_file.close()
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "queue_depth": self.queue.qsize(),
+            "queue_capacity": self.queue.maxsize,
+            "frames_written": self.frames_written,
+            "telemetry_written": self.telemetry_written,
+            "placeholders_written": self.placeholders_written,
+            "dropped": self.dropped,
+            "error": self.error,
+        }
+
+    def _run(self) -> None:
+        while True:
+            packet = self.queue.get()
+            if packet is None:
+                return
+            try:
+                identity = packet.identity()
+                frame = {
+                    **identity,
+                    "type": "frame.capture",
+                    "source_width": self.args.high_width,
+                    "source_height": self.args.high_height,
+                }
+                self._frames_file.write(json.dumps(frame, ensure_ascii=False) + "\n")
+                self.frames_written += 1
+                snapshot = self.telemetry.snapshot(packet.capture_timestamp)
+                telemetry = {
+                    **identity,
+                    "type": "frame.telemetry",
+                    "telemetry_source": snapshot["source"],
+                    "telemetry_status": snapshot["status"],
+                    "telemetry_available": snapshot["connected"],
+                    "telemetry_received_at_unix": snapshot["received_at_unix"],
+                    "telemetry_age_ms": snapshot["age_ms"],
+                    "telemetry_source_error": snapshot["source_error"],
+                    "telemetry": snapshot["telemetry"],
+                }
+                self._telemetry_file.write(json.dumps(telemetry, ensure_ascii=False) + "\n")
+                self.telemetry_written += 1
+                if self._detection_file is not None:
+                    placeholder = {
+                        **identity,
+                        "type": "vision.frame_result",
+                        "detector": {"status": "DISABLED", "reason": "YOLO_DISABLED_CAPTURE_ONLY"},
+                        "detections": [],
+                        "coordinate": {"status": "not_available"},
+                    }
+                    self._detection_file.write(json.dumps(placeholder, ensure_ascii=False) + "\n")
+                    self.placeholders_written += 1
+            except Exception as exc:
+                self.error = str(exc)
+                print(f"[sidecar] write failed: {exc}", flush=True)
 
 
 class RtpNetworkSender:
@@ -244,7 +410,7 @@ class RtpNetworkSender:
     def metadata(self) -> dict[str, Any]:
         with self._lock:
             return {
-                "status": "ACTIVE" if self._thread and self._thread.is_alive() else "STOPPED",
+                "status": "RUNNING" if self._thread and self._thread.is_alive() else "STOPPED",
                 "host": self.host,
                 "port": self.port,
                 "transport": "H264/RTP/UDP",
@@ -394,7 +560,10 @@ class DetectionWorker:
         self.thread: threading.Thread | None = None
         self.runner = DetectionRunner(args)
         self.detections_path = session_dir / "detections.jsonl"
-        self._detection_file = self.detections_path.open("a", encoding="utf-8", buffering=1)
+        self._detection_file = (
+            self.detections_path.open("a", encoding="utf-8", buffering=1)
+            if self.runner.mode != "none" else None
+        )
         self._last_post_error_at = 0.0
 
     def start(self) -> None:
@@ -403,11 +572,7 @@ class DetectionWorker:
 
     def submit(self, packet: FramePacket) -> None:
         if self.runner.mode == "none":
-            # The capture-only contract must have one sidecar row per frame.
-            # Write it synchronously instead of allowing a detector queue to
-            # drop rows under load. No overlay HTTP request is made in this
-            # mode because an empty detection is not a live detection event.
-            self._write_placeholder(packet)
+            # Capture-only placeholders are handled by BoundedSidecarWriter.
             return
         try:
             self.queue.put_nowait(packet)
@@ -436,7 +601,8 @@ class DetectionWorker:
                 pass
         if self.thread:
             self.thread.join(timeout=10)
-        self._detection_file.close()
+        if self._detection_file is not None:
+            self._detection_file.close()
 
     def _run(self) -> None:
         while True:
@@ -451,90 +617,43 @@ class DetectionWorker:
             try:
                 detections = self.runner.predict(packet.image)
                 for detection in detections:
-                    detection["bbox_network"] = scale_bbox(
-                        detection["bbox_highres"],
-                        self.args.high_width,
-                        self.args.high_height,
-                        self.args.network_width,
-                        self.args.network_height,
-                    )
-                    detection["bbox_norm_highres"] = [
+                    detection["detection_id"] = str(uuid.uuid4())
+                    detection["bbox_normalized_xyxy"] = [
                         detection["bbox_highres"][0] / self.args.high_width,
                         detection["bbox_highres"][1] / self.args.high_height,
                         detection["bbox_highres"][2] / self.args.high_width,
                         detection["bbox_highres"][3] / self.args.high_height,
                     ]
+                    detection.pop("bbox_highres", None)
 
                 payload = {
-                    "schema_version": "1.1",
-                    "type": "vision.overlay",
-                    "session_id": self.session_dir.name,
-                    "detection_id": f"FRAME-{packet.frame_id}-{uuid.uuid4().hex[:8]}",
-                    "timestamp": utc_iso(time.time()),
-                    "frame_id": packet.frame_id,
-                    "frame_timestamp": utc_iso(packet.capture_timestamp),
-                    "pts_ns": packet.pts_ns,
+                    **packet.identity(),
+                    "type": "vision.frame_result",
+                    "event_id": str(uuid.uuid4()),
                     "source_width": self.args.high_width,
                     "source_height": self.args.high_height,
-                    "network_width": self.args.network_width,
-                    "network_height": self.args.network_height,
                     "detector": {
-                        "enabled": self.runner.mode != "none",
                         "mode": self.runner.mode,
-                        "status": "DISABLED" if self.runner.mode == "none" else "ACTIVE",
-                        "reason": "YOLO_DISABLED_CAPTURE_ONLY" if self.runner.mode == "none" else None,
+                        "status": "RUNNING",
                     },
-                    "bbox": detections[0].get("bbox_highres") if len(detections) == 1 else None,
                     "detections": detections,
-                    "coordinate": {
-                        "status": "UNAVAILABLE",
-                        "latitude": None,
-                        "longitude": None,
-                        "error_radius_m": None,
-                    },
+                    "coordinate": {"status": "not_available"},
                 }
-                self._detection_file.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                if self._detection_file is not None:
+                    self._detection_file.write(json.dumps(payload, ensure_ascii=False) + "\n")
                 if self.args.ingest_url:
                     self._post_overlay(payload)
             except Exception as exc:
                 print(f"[detector] frame {packet.frame_id} failed: {exc}", flush=True)
 
-    def _write_placeholder(self, packet: FramePacket) -> None:
-        payload = {
-            "schema_version": "1.1",
-            "type": "vision.overlay",
-            "session_id": self.session_dir.name,
-            "detection_id": f"FRAME-{packet.frame_id}-{uuid.uuid4().hex[:8]}",
-            "timestamp": utc_iso(time.time()),
-            "frame_id": packet.frame_id,
-            "frame_timestamp": utc_iso(packet.capture_timestamp),
-            "pts_ns": packet.pts_ns,
-            "source_width": self.args.high_width,
-            "source_height": self.args.high_height,
-            "network_width": self.args.network_width,
-            "network_height": self.args.network_height,
-            "detector": {
-                "enabled": False,
-                "mode": "none",
-                "status": "DISABLED",
-                "reason": "YOLO_DISABLED_CAPTURE_ONLY",
-            },
-            "bbox": None,
-            "detections": [],
-            "coordinate": {
-                "status": "UNAVAILABLE",
-                "latitude": None,
-                "longitude": None,
-                "error_radius_m": None,
-            },
-        }
-        self._detection_file.write(json.dumps(payload, ensure_ascii=False) + "\n")
-
     def _post_overlay(self, payload: dict[str, Any]) -> None:
         request = Request(
             self.args.ingest_url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.args.ingest_token}",
+            },
             method="POST",
         )
         try:
@@ -557,7 +676,7 @@ class SplitPipeline:
             mountpoint=args.mountpoint,
             allow_root=args.allow_root_record_dir,
         )
-        self.session_dir = self._create_session_dir()
+        self.mission_dir, self.session_dir = self._create_session_dir()
         self.video_path = self.session_dir / "video.mp4"
         # Keep mp4mux's recovery index beside the recording on the validated
         # SSD. Fragmented MP4 grows continuously and does not stage the entire
@@ -571,39 +690,58 @@ class SplitPipeline:
         self.stopping = False
         self.failure_error: str | None = None
         self.frame_counter = 0
-        self.first_pts_ns: int | None = None
-        self.last_frame_id = -1
         self.worker: DetectionWorker | None = None
         self.network_sender = RtpNetworkSender(args.host, args.port)
         self.telemetry = MAVLinkTelemetryCollector()
-        self.telemetry_path = self.session_dir / "telemetry.jsonl"
-        self._telemetry_file = None
-        self._started_monotonic = time.monotonic()
+        self.sidecars = BoundedSidecarWriter(
+            args, self.session_dir, self.telemetry, queue_size=args.sidecar_queue_size
+        )
         self._telemetry_started = False
-        try:
-            self._telemetry_file = self.telemetry_path.open(
-                "a", encoding="utf-8", buffering=1
-            )
-        except Exception as exc:
-            self._write_metadata("FAILED", error=str(exc))
-            raise
         self._write_metadata("STARTING")
         try:
             # Validate all CLI/GStreamer properties before loading a model.
             build_pipeline_description(args, self.video_path, self.recovery_file)
             self.worker = DetectionWorker(args, self.session_dir, self.started_at)
         except Exception as exc:
-            self._close_telemetry_file()
+            self.sidecars.close()
             self._write_metadata("FAILED", error=str(exc))
             raise
 
-    def _create_session_dir(self) -> Path:
+    def _create_session_dir(self) -> tuple[Path, Path]:
         root = Path(self.args.record_dir).expanduser().resolve()
         root.mkdir(parents=True, exist_ok=True)
-        session_id = self.args.session_id or f"flight-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
-        path = root / session_id
-        path.mkdir(parents=True, exist_ok=False)
-        return path
+        mission_id = self.args.mission_id or f"mission-{uuid.uuid4()}"
+        if not re.fullmatch(r"mission-[0-9a-fA-F-]{36}", mission_id):
+            raise ValueError("mission-id must be mission-<uuid>")
+        try:
+            uuid.UUID(mission_id.removeprefix("mission-"))
+        except ValueError as exc:
+            raise ValueError("mission-id must be mission-<uuid>") from exc
+        if self.args.capture_epoch < 1:
+            raise ValueError("capture-epoch must be at least 1")
+        self.args.mission_id = mission_id
+        mission_dir = root / mission_id
+        mission_dir.mkdir(parents=True, exist_ok=True)
+        (mission_dir / "epochs").mkdir(exist_ok=True)
+        manifest_path = mission_dir / "mission.json"
+        if not manifest_path.exists():
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "2.0",
+                        "mission_id": mission_id,
+                        "camera_id": "arducam",
+                        "status": "RECORDING",
+                        "current_epoch": self.args.capture_epoch,
+                        "created_utc_ns": time.time_ns(),
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        epoch_dir = mission_dir / "epochs" / f"{self.args.capture_epoch:04d}"
+        epoch_dir.mkdir(parents=True, exist_ok=False)
+        return mission_dir, epoch_dir
 
     def run(self) -> int:
         try:
@@ -640,6 +778,7 @@ class SplitPipeline:
             bus.connect("message", self._on_message)
             if self.worker is None:
                 raise RuntimeError("Detection worker was not initialized")
+            self.sidecars.start()
             self.worker.start()
             self.network_sender.start()
             self.pipeline.set_state(Gst.State.PLAYING)
@@ -656,10 +795,12 @@ class SplitPipeline:
             self.network_sender.stop()
             if self.worker is not None:
                 self.worker.close()
+            self.sidecars.close()
+            if self.sidecars.error and not self.failure_error:
+                self.failure_error = self.sidecars.error
             if self._telemetry_started:
                 self.telemetry.stop()
                 self._telemetry_started = False
-            self._close_telemetry_file()
             if not self.failure_error:
                 self.failure_error = self._validate_video_output()
             if not self.failure_error:
@@ -727,28 +868,8 @@ class SplitPipeline:
         height = caps.get_value("height")
 
         pts = None if buffer.pts == self.gst.CLOCK_TIME_NONE else int(buffer.pts)
-        if pts is None:
-            capture_timestamp = time.time()
-        else:
-            if self.first_pts_ns is None:
-                self.first_pts_ns = pts
-            elapsed_seconds = max(0.0, (pts - self.first_pts_ns) / self.gst.SECOND)
-            capture_timestamp = self.started_at + elapsed_seconds
-        if self.args.weights:
-            # Detector mode may intentionally drop appsink samples; retain a
-            # PTS-derived identity for the sampled frame in that mode.
-            elapsed_seconds = (
-                0.0
-                if pts is None or self.first_pts_ns is None
-                else max(0.0, (pts - self.first_pts_ns) / self.gst.SECOND)
-            )
-            frame_id = max(self.last_frame_id + 1, round(elapsed_seconds * self.args.high_fps))
-        else:
-            # Capture-only mode uses a lossless appsink branch, so this is the
-            # exact frame index used by video.mp4 and both sidecars.
-            frame_id = self.frame_counter
+        frame_id = self.frame_counter
         self.frame_counter += 1
-        self.last_frame_id = frame_id
         # Capture-only mode does not need to copy a 4K BGR frame into Python.
         # The appsink still gives us the source PTS, so telemetry and the
         # explicit empty detection record remain aligned with video.mp4.
@@ -764,8 +885,20 @@ class SplitPipeline:
             finally:
                 buffer.unmap(map_info)
 
-        packet = FramePacket(frame_id, capture_timestamp, pts, image)
-        self._write_telemetry(packet)
+        packet = FramePacket(
+            mission_id=self.args.mission_id,
+            capture_epoch=self.args.capture_epoch,
+            frame_id=frame_id,
+            camera_id="arducam",
+            capture_utc_ns=time.time_ns(),
+            capture_monotonic_ns=time.monotonic_ns(),
+            pts_ns=pts,
+            image=image,
+        )
+        if not self.sidecars.submit(packet):
+            self.failure_error = self.sidecars.error
+            if self.loop and self.loop.is_running():
+                self.glib.idle_add(self.loop.quit)
         if self.worker is not None:
             self.worker.submit(packet)
         return self.gst.FlowReturn.OK
@@ -817,35 +950,6 @@ class SplitPipeline:
             return "video.mp4 is missing fragmented MP4 media atoms"
         return None
 
-    def _close_telemetry_file(self) -> None:
-        if self._telemetry_file is not None:
-            self._telemetry_file.close()
-            self._telemetry_file = None
-
-    def _write_telemetry(self, packet: FramePacket) -> None:
-        if self._telemetry_file is None:
-            return
-        snapshot = self.telemetry.snapshot(packet.capture_timestamp)
-        row = {
-            "schema_version": "1.1",
-            "type": "frame.telemetry",
-            "session_id": self.session_dir.name,
-            "frame_id": packet.frame_id,
-            "pts_ns": packet.pts_ns,
-            "captured_at_unix": packet.capture_timestamp,
-            "captured_at_iso": utc_iso(packet.capture_timestamp),
-            "capture_timestamp_ns": int(packet.capture_timestamp * 1_000_000_000),
-            "elapsed_monotonic_seconds": time.monotonic() - self._started_monotonic,
-            "telemetry_source": snapshot["source"],
-            "telemetry_status": snapshot["status"],
-            "telemetry_available": snapshot["connected"],
-            "telemetry_received_at_unix": snapshot["received_at_unix"],
-            "telemetry_age_ms": snapshot["age_ms"],
-            "telemetry_source_error": snapshot["source_error"],
-            "telemetry": snapshot["telemetry"],
-        }
-        self._telemetry_file.write(json.dumps(row, ensure_ascii=False) + "\n")
-
     def _write_metadata(self, status: str, error: str | None = None) -> None:
         try:
             usage = shutil.disk_usage(self.session_dir)
@@ -861,8 +965,10 @@ class SplitPipeline:
         except OSError as exc:
             storage = {**self.storage_info.as_dict(), "error": str(exc)}
         metadata = {
-            "schema_version": "1.1",
-            "session_id": self.session_dir.name,
+            "schema_version": "2.0",
+            "mission_id": self.args.mission_id,
+            "capture_epoch": self.args.capture_epoch,
+            "camera_id": "arducam",
             "label": self.args.label,
             "status": status,
             "frame_count": self.frame_counter,
@@ -872,7 +978,7 @@ class SplitPipeline:
                 "width": self.args.high_width,
                 "height": self.args.high_height,
                 "fps": self.args.high_fps,
-                "purpose": ["local_recording", "offline_yolo", "coordinate_reconstruction"],
+                "purpose": ["local_recording", "offline_yolo"],
             },
             "network": {
                 "width": self.args.network_width,
@@ -887,31 +993,38 @@ class SplitPipeline:
             "files": {
                 "video": "video.mp4",
                 "video_recovery_file": "video.mp4.moov.recovery",
+                "frames": "frames.jsonl",
                 "telemetry": "telemetry.jsonl",
                 "detections": "detections.jsonl",
             },
             "storage": storage,
             "frame_identity": {
-                "source": "Sequential source callback index in capture-only mode; PTS is retained for timing",
-                "field": "frame_id",
-                "pts_field": "pts_ns",
-                "description": "capture-only frame_id is zero-based and lossless with video.mp4; detector mode may use a PTS-derived sampled identity",
+                "key": ["mission_id", "capture_epoch", "frame_id", "camera_id"],
+                "source_pts_field": "source_pts_ns",
+                "description": "identity is assigned in the source callback before recording metadata, inference, and preview publication",
             },
             "detector": {
                 "enabled": bool(self.args.weights),
                 "mode": self.worker.runner.mode if self.worker is not None else "none",
-                "status": "DISABLED" if not self.args.weights else "ACTIVE",
+                "status": "DISABLED" if not self.args.weights else "RUNNING",
                 "reason": "YOLO_DISABLED_CAPTURE_ONLY" if not self.args.weights else None,
                 "weights": self.args.weights,
                 "sahi": self.args.sahi,
                 "confidence": self.args.conf,
             },
             "telemetry": self.telemetry.metadata(),
+            "health": {
+                "capture_fps": self.frame_counter / max(0.001, time.time() - self.started_at),
+                "sidecar": self.sidecars.metadata(),
+                "dropped_preview_packets": self.network_sender.packets_dropped,
+                "storage_rate_bytes_per_second": video_size / max(0.001, time.time() - self.started_at),
+                **read_system_health(),
+            },
             "error": error,
         }
-        temporary = self.session_dir / "metadata.json.tmp"
+        temporary = self.session_dir / "epoch.json.tmp"
         temporary.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(self.session_dir / "metadata.json")
+        temporary.replace(self.session_dir / "epoch.json")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -952,7 +1065,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=30.0,
         help="Maximum time to wait for MP4 EOS/finalization",
     )
-    parser.add_argument("--session-id")
+    parser.add_argument("--mission-id")
+    parser.add_argument("--capture-epoch", type=int, default=1)
+    parser.add_argument("--sidecar-queue-size", type=int, default=4096)
     parser.add_argument("--label")
     parser.add_argument("--weights", help="YOLO/SAHI model path; omit to run capture-only")
     parser.add_argument("--device", default="cuda:0")
@@ -964,6 +1079,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--slice-height", type=int, default=640)
     parser.add_argument("--overlap", type=float, default=0.2)
     parser.add_argument("--ingest-url", default="")
+    parser.add_argument("--ingest-token", default="")
     parser.add_argument("--ingest-timeout", type=float, default=0.5)
     return parser.parse_args(argv)
 

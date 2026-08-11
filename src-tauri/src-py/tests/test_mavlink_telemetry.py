@@ -11,7 +11,7 @@ APP_ROOT = Path(__file__).resolve().parents[3]
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 
-from jetson.arducam_split_pipeline import DetectionWorker, FramePacket, parse_args  # noqa: E402
+from jetson.arducam_split_pipeline import BoundedSidecarWriter, FramePacket, parse_args  # noqa: E402
 from jetson.mavlink_telemetry import (  # noqa: E402
     MAVLinkMessage,
     MAVLinkStreamParser,
@@ -74,7 +74,7 @@ class MAVLinkTelemetryTests(unittest.TestCase):
         snapshot = collector.snapshot()
         telemetry = snapshot["telemetry"]
 
-        self.assertEqual(snapshot["status"], "ACTIVE")
+        self.assertEqual(snapshot["status"], "RUNNING")
         self.assertTrue(telemetry["connected"])
         self.assertAlmostEqual(telemetry["lat"], -6.2)
         self.assertAlmostEqual(telemetry["lng"], 106.8)
@@ -90,21 +90,22 @@ class MAVLinkTelemetryTests(unittest.TestCase):
     def test_capture_only_writes_explicit_empty_bbox_record(self):
         args = parse_args(["--host", "100.64.0.10"])
         with tempfile.TemporaryDirectory() as temporary:
-            worker = DetectionWorker(args, Path(temporary), time.time())
+            collector = MAVLinkTelemetryCollector()
+            worker = BoundedSidecarWriter(args, Path(temporary), collector, queue_size=4)
             worker.start()
-            worker.submit(FramePacket(7, time.time(), 123, None))
-            path = Path(temporary) / "detections.jsonl"
-            deadline = time.time() + 2
-            while time.time() < deadline and path.stat().st_size == 0:
-                time.sleep(0.01)
+            now = time.time_ns()
+            worker.submit(FramePacket("mission-00000000-0000-0000-0000-000000000001", 1, 7, "arducam", now, time.monotonic_ns(), 123, None))
             worker.close()
 
+            path = Path(temporary) / "detections.jsonl"
             payload = json.loads(path.read_text(encoding="utf-8").strip())
             self.assertEqual(payload["frame_id"], 7)
             self.assertEqual(payload["detections"], [])
-            self.assertIsNone(payload["bbox"])
-            self.assertFalse(payload["detector"]["enabled"])
+            self.assertEqual(payload["schema_version"], "2.0")
+            self.assertEqual(payload["coordinate"], {"status": "not_available"})
             self.assertEqual(payload["detector"]["reason"], "YOLO_DISABLED_CAPTURE_ONLY")
+            self.assertEqual(len((Path(temporary) / "frames.jsonl").read_text().splitlines()), 1)
+            self.assertEqual(len((Path(temporary) / "telemetry.jsonl").read_text().splitlines()), 1)
 
 
 if __name__ == "__main__":

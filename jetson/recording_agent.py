@@ -18,8 +18,6 @@ import subprocess
 import sys
 import threading
 import time
-import uuid
-from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -30,8 +28,10 @@ except ImportError:  # pragma: no cover - Jetson/Linux provides fcntl.
     fcntl = None
 
 try:
+    from .mission_storage import MissionCatalog, MissionStorageError
     from .storage_guard import StorageGuardError, validate_record_storage
 except ImportError:  # Script execution from the Jetson service directory.
+    from mission_storage import MissionCatalog, MissionStorageError
     from storage_guard import StorageGuardError, validate_record_storage
 
 
@@ -137,6 +137,7 @@ class AgentConfig:
         self.network_fps = env_float("JETSON_NETWORK_FPS", 15.0, 0.1, 120.0)
         self.local_bitrate_kbps = env_int("JETSON_LOCAL_BITRATE_KBPS", 12000, 100, 100000)
         self.network_bitrate_kbps = env_int("JETSON_NETWORK_BITRATE_KBPS", 2000, 100, 100000)
+        self.sidecar_queue_size = env_int("JETSON_SIDECAR_QUEUE_SIZE", 4096, 1, 65536)
         self.weights = os.getenv("JETSON_MODEL_WEIGHTS", "").strip()
         self.device = os.getenv("JETSON_MODEL_DEVICE", "cuda:0").strip()
         self.imgsz = env_int("JETSON_MODEL_IMGSZ", 640, 16, 7680)
@@ -147,11 +148,15 @@ class AgentConfig:
         self.slice_height = env_int("JETSON_MODEL_SLICE_HEIGHT", 640, 16, 7680)
         self.overlap = env_float("JETSON_MODEL_OVERLAP", 0.2, 0, 0.99)
         self.ingest_url = os.getenv("JETSON_DETECTION_INGEST_URL", "").strip() or None
+        self.ingest_token = os.getenv("JETSON_INGEST_TOKEN", "").strip()
+        if not self.ingest_token:
+            raise RecordingAgentError("JETSON_INGEST_TOKEN must be configured")
 
     def command(
         self,
         session_id: str,
         label: str | None,
+        capture_epoch: int = 1,
         gcs_host: str | None = None,
         video_port: int | None = None,
         api_port: int | None = None,
@@ -200,8 +205,12 @@ class AgentConfig:
             str(self.record_min_free_bytes),
             "--eos-timeout-seconds",
             str(self.eos_timeout_seconds),
-            "--session-id",
+            "--mission-id",
             session_id,
+            "--capture-epoch",
+            str(capture_epoch),
+            "--sidecar-queue-size",
+            str(self.sidecar_queue_size),
             "--device",
             self.device,
             "--imgsz",
@@ -216,6 +225,8 @@ class AgentConfig:
             str(self.overlap),
             "--ingest-url",
             ingest_url,
+            "--ingest-token",
+            self.ingest_token,
         ]
         if self.record_mountpoint:
             command.extend(["--mountpoint", self.record_mountpoint])
@@ -239,6 +250,7 @@ class RecordingController:
         self._process: subprocess.Popen | None = None
         self._pid: int | None = None
         self._session_id: str | None = None
+        self._capture_epoch: int | None = None
         self._session_dir: Path | None = None
         self._label: str | None = None
         self._gcs_host: str | None = None
@@ -252,6 +264,8 @@ class RecordingController:
         self._active_state_path = self.config.record_dir / ".recording-agent.active.json"
         self._lock_path = self.config.record_dir / ".recording-agent.lock"
         self._storage_guard_enabled = bool(getattr(config, "storage_guard", False))
+        self._mission_catalog = MissionCatalog(self.config.record_dir)
+        self._catalog_finalized = False
         if self._storage_guard_enabled:
             try:
                 validate_record_storage(
@@ -323,6 +337,7 @@ class RecordingController:
         payload = {
             "pid": self._pid,
             "session_id": self._session_id,
+            "capture_epoch": self._capture_epoch,
             "session_dir": str(self._session_dir) if self._session_dir else None,
             "label": self._label,
             "gcs_host": self._gcs_host,
@@ -367,6 +382,7 @@ class RecordingController:
             return
         self._pid = pid
         self._session_id = payload.get("session_id")
+        self._capture_epoch = int(payload.get("capture_epoch") or 1)
         self._session_dir = Path(session_dir)
         self._label = payload.get("label")
         self._gcs_host = payload.get("gcs_host") or getattr(self.config, "gcs_host", None)
@@ -384,7 +400,9 @@ class RecordingController:
     def _metadata(self) -> dict[str, Any]:
         if not self._session_dir:
             return {}
-        path = self._session_dir / "metadata.json"
+        if self._capture_epoch is None:
+            return {}
+        path = self._session_dir / "epochs" / f"{self._capture_epoch:04d}" / "epoch.json"
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -409,6 +427,14 @@ class RecordingController:
                 None if returncode == 0 else f"pipeline exited with code {returncode}"
             )
             self._last = self._response_locked(status, False, metadata=metadata, error=error)
+            if self._session_id and self._capture_epoch and not self._catalog_finalized:
+                try:
+                    self._mission_catalog.finalize_epoch(
+                        self._session_id, self._capture_epoch, status, error
+                    )
+                except MissionStorageError as exc:
+                    self._last["error"] = self._last.get("error") or str(exc)
+                self._catalog_finalized = True
             self._process = None
             self._pid = None
             self._clear_active_state()
@@ -437,6 +463,8 @@ class RecordingController:
             "state_known": True,
             "status": status,
             "session_id": self._session_id,
+            "mission_id": self._session_id,
+            "capture_epoch": self._capture_epoch,
             "session_dir": str(self._session_dir) if self._session_dir else None,
             "started_at": started_at,
             "ended_at": ended_at,
@@ -501,6 +529,7 @@ class RecordingController:
         gcs_host: Any = None,
         video_port: Any = None,
         api_port: Any = None,
+        mission_id: Any = None,
     ) -> dict[str, Any]:
         with self._lock:
             current = self._state_locked()
@@ -527,12 +556,15 @@ class RecordingController:
                     raise RecordingAgentError(str(exc)) from exc
             else:
                 self.config.record_dir.mkdir(parents=True, exist_ok=True)
-            session_id = (
-                f"flight-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-"
-                f"{uuid.uuid4().hex[:8]}"
-            )
+            try:
+                session_id, capture_epoch, mission_dir = self._mission_catalog.allocate(
+                    mission_id, label
+                )
+            except MissionStorageError as exc:
+                raise RecordingAgentError(str(exc)) from exc
             self._session_id = session_id
-            self._session_dir = self.config.record_dir / session_id
+            self._capture_epoch = capture_epoch
+            self._session_dir = mission_dir
             self._label = (label or "").strip() or None
             self._gcs_host = target_host
             self._video_port = target_video_port
@@ -540,9 +572,11 @@ class RecordingController:
             self._started_at = time.time()
             self._ended_at = None
             self._stop_requested = False
+            self._catalog_finalized = False
             command = self.config.command(
                 session_id,
                 self._label,
+                capture_epoch=capture_epoch,
                 gcs_host=target_host,
                 video_port=target_video_port,
                 api_port=target_api_port,
@@ -563,6 +597,10 @@ class RecordingController:
                 self._pid = None
                 self._ended_at = time.time()
                 self._last = self._response_locked("FAILED", False, error=str(exc))
+                self._mission_catalog.finalize_epoch(
+                    session_id, capture_epoch, "FAILED", str(exc)
+                )
+                self._catalog_finalized = True
                 raise RecordingAgentError(f"cannot start Jetson pipeline: {exc}") from exc
             except Exception:
                 process = self._process
@@ -695,6 +733,7 @@ class RecordingRequestHandler(BaseHTTPRequestHandler):
                     gcs_host=payload.get("gcs_host"),
                     video_port=payload.get("video_port"),
                     api_port=payload.get("api_port"),
+                    mission_id=payload.get("mission_id"),
                 )
                 self._send_json(202, result)
                 return

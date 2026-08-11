@@ -519,7 +519,7 @@ class MAVLinkTelemetryCollector:
         age = max(0.0, now - self._last_received_at)
         if age > self.stale_after:
             return "STALE", age
-        return "ACTIVE", age
+        return "RUNNING", age
 
     def snapshot(self, captured_at: float | None = None) -> dict[str, Any]:
         now = captured_at if captured_at is not None else time.time()
@@ -527,15 +527,15 @@ class MAVLinkTelemetryCollector:
             status, age = self._status_locked(now)
             telemetry = deepcopy(self._state)
             telemetry["status"] = status
-            telemetry["connected"] = status == "ACTIVE"
+            telemetry["connected"] = status == "RUNNING"
             telemetry["source"] = self.source
             telemetry["received_at_unix"] = self._last_received_at
             telemetry["telemetry_age_ms"] = None if age is None else round(age * 1000.0, 3)
             return {
-                "schema_version": "1.0",
+                "schema_version": "2.0",
                 "source": self.source,
                 "status": status,
-                "connected": status == "ACTIVE",
+                "connected": status == "RUNNING",
                 "received_at_unix": self._last_received_at,
                 "age_ms": None if age is None else round(age * 1000.0, 3),
                 "source_error": self._source_error,

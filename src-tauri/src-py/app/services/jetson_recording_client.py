@@ -128,6 +128,7 @@ class JetsonRecordingClient:
         *,
         video_port: int | None = None,
         gcs_host: str | None = None,
+        mission_id: str | None = None,
     ) -> dict:
         payload: dict[str, Any] = {
             "label": label,
@@ -137,6 +138,8 @@ class JetsonRecordingClient:
             payload["video_port"] = video_port
         if gcs_host:
             payload["gcs_host"] = gcs_host
+        if mission_id:
+            payload["mission_id"] = mission_id
         return self._request("/recording/start", "POST", payload)
 
     def stop(self) -> dict:

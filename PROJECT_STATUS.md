@@ -5,7 +5,7 @@ Updated: 2026-08-11
 | Batch | Software implementation | Qualification evidence |
 | --- | --- | --- |
 | 1 Contract/persistence/auth | Implemented | 47 unit tests, Python compile, and Vite build pass; hardware baseline remains external |
-| 2 Canonical Jetson identity | Not started | Hardware capture required |
+| 2 Canonical Jetson identity | Implemented | Synthetic durable epoch/sidecar tests pass; 10-minute Arducam capture remains required |
 | 3 RTP-aware receiver | Not started | Synthetic and link recovery tests required |
 | 4 Browser synchronized overlay | Not started | Component/integration tests required |
 | 5 Production detector | Not started | Checkpoint provenance and Jetson benchmark required |
