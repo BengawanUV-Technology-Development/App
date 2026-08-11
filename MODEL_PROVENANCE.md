@@ -1,90 +1,51 @@
-# Production Model Provenance Gate
+# Production Model Provenance
 
-Checked: 2026-08-11
+Verified: 2026-08-11
 
-Batch 5 is blocked. The only baseline checkpoint in the workspace is:
+The v0.3 production detector is the 300-epoch baseline s-YOLOv11 checkpoint.
+The artifact was recovered from the Jetson deployment at:
 
 ```text
-../s-yolov11-ablation/baseline-seed0/weights/best.pt
-SHA-256 5fc9c64a1450051452519c181219425dcd3775929aee19f908e196e07df1b282
+/home/bengawan/yolo11-inference/weights/s-yolov11-baseline-best.pt
+SHA-256 dee4c2f026d9058a456f04b723ccc8f5bf5ccfa880f09e88e8dd7169c6120dc0
+Size    22858854 bytes
 ```
 
-Its internal Ultralytics checkpoint metadata matches the adjacent two-epoch
-`args.yaml` and `results.csv`:
+The checkpoint is not committed to Git. Its immutable identity and production
+runtime profile are frozen in `jetson/production_model.json`; the Recording
+Agent and detector pipeline verify the file size and SHA-256 before loading it.
 
-- project: `runs/s-yolov11-ablation`
+## Checkpoint evidence
+
+Internal Ultralytics metadata:
+
+- architecture: `s-yolov11.yaml`
+- project: `runs/s-yolov11-main`
 - name: `baseline-seed0`
-- epochs: 2
+- epochs: 300 (embedded result history contains epochs 1 through 300)
 - image size: 640
 - seed: 0
-- mAP50: 0.06172
-- mAP50-95: 0.02899
-- checkpoint date: `2026-07-29T05:47:01.802681`
-
-The only baseline log at
-`../s-yolov11-ablation/logs/ablation/seed0/baseline.log` describes a different
-run:
-
-- project: `runs/s-yolov11-main`
-- epochs: 300
-- mAP50: 0.478
-- mAP50-95: 0.295
-- output checkpoint path:
-  `runs/s-yolov11-main/baseline-seed0/weights/best.pt`
-
-That 300-epoch checkpoint is not present anywhere in the current workspace.
-Therefore the available `best.pt` cannot be authenticated against the supplied
-production-run log and must not be selected as the v0.3 production model.
-
-## Additional candidate supplied for review
-
-The GhostV3 + DWConv candidate was also checked at:
-
-```text
-../s-yolov11-ablation/ghostv3_dwconv-seed0/weights/best.pt
-SHA-256 f84b7a5f7294edb4d06174c443c7be7455bc413e76233e6a486ec398b9eb8fbe
-```
-
-Its internal Ultralytics metadata is self-consistent with the adjacent
-`args.yaml` and `results.csv`, but describes a two-epoch ablation run:
-
 - Ultralytics: `8.3.0`
-- project: `runs/s-yolov11-ablation`
-- name: `ghostv3_dwconv-seed0`
-- epochs: 2
-- image size: 640
-- seed: 0
+- checkpoint date: `2026-07-30T13:06:05.830366`
+- mAP50: 0.47768
+- mAP50-95: 0.29475
 - classes: 10 VisDrone classes
-- mAP50: 0.06098
-- mAP50-95: 0.02917
-- checkpoint date: `2026-07-29T06:12:38.159789`
 
-The supplied `ghostv3_dwconv.log` describes a different completed run:
+These values match
+`../s-yolov11-ablation/logs/ablation/seed0/baseline.log`. The production
+runtime is fixed to `imgsz=640`, confidence `0.45`, `cuda:0`, and SAHI disabled.
 
-- environment: Python `3.11.15`, PyTorch `2.7.1+cu118`, CUDA on RTX A4000
-- project: `runs/s-yolov11-main`
-- name: `ghostv3_dwconv-seed0`
-- epochs completed: 300
-- final validation mAP50: 0.460
-- final validation mAP50-95: 0.280
-- output checkpoint path:
-  `runs/s-yolov11-main/ghostv3_dwconv-seed0/weights/best.pt`
+## Rejected artifacts
 
-The log's 300-epoch checkpoint is also absent from the workspace. In addition,
-selecting GhostV3 + DWConv would change the frozen Batch 5 production-model
-choice from baseline s-YOLOv11 and therefore requires an explicit contract
-decision; the supplied path alone does not authorize that change.
+The checkpoints under `../s-yolov11-ablation/*-seed0/weights/` are two-epoch
+ablation/smoke artifacts. They do not match the 300-epoch logs and remain
+ineligible for production. The GhostV3 + DWConv 300-epoch checkpoint was lost
+with its expired training VPS and is not used by v0.3.
 
-## Evidence required to unblock
+## Remaining qualification
 
-For the frozen baseline choice, provide the exact checkpoint produced by the
-300-epoch baseline log. If the production choice is intentionally being changed
-to GhostV3 + DWConv, first confirm that contract change and provide the exact
-checkpoint produced by the 300-epoch GhostV3 + DWConv log. Alternatively, a
-two-epoch artifact can only be evaluated as a non-production candidate when its
-matching complete training log is supplied.
-
-The selected production artifact must have a recorded SHA-256 and internal
-metadata that matches its log, configuration, and validation metrics. Once
-verified, the Jetson path can be set in `JETSON_MODEL_WEIGHTS` and the hardware
-FPS/latency gate can begin.
+Provenance is verified and no longer blocks the Batch 5 software path. Hardware
+qualification still has to demonstrate, with this exact checksum, at least 29
+FPS recording, 14.5 FPS preview, 5 inference FPS, and preview latency p95 no
+greater than one second. Until those measurements are attached, Batch 5 is
+implemented but not hardware-qualified.

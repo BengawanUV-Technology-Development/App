@@ -8,6 +8,7 @@ from flask import Flask, jsonify
 from app.auth import BearerAuthenticator, TokenConfig
 from app.contracts import ContractError, FrameIdentity, validate_detection_event, validate_normalized_xyxy
 from app.persistence import Database
+from app.routes import api_v1 as api_routes
 
 
 def identity_payload():
@@ -41,7 +42,8 @@ class ContractTests(unittest.TestCase):
 
     def test_detection_forbids_fabricated_coordinates(self):
         payload = {
-            **identity_payload(), "detection_id": str(uuid.uuid4()), "class": "person", "confidence": 0.9,
+            **identity_payload(), "type": "vision.detection_event",
+            "detection_id": str(uuid.uuid4()), "class": "person", "confidence": 0.9,
             "bbox_normalized_xyxy": [0.1, 0.2, 0.8, 0.9], "coordinate": {"status": "not_available"},
         }
         self.assertEqual(validate_detection_event(payload)["coordinate"]["status"], "not_available")
@@ -61,6 +63,7 @@ class PersistenceTests(unittest.TestCase):
             self.assertEqual(Database(path).next_epoch(mission_id), 2)
             detection = {
                 **identity_payload(), "mission_id": mission_id, "capture_epoch": 2,
+                "type": "vision.detection_event",
                 "detection_id": str(uuid.uuid4()), "class": "person", "confidence": 0.9,
                 "bbox_normalized_xyxy": [0.1, 0.2, 0.8, 0.9], "coordinate": {"status": "not_available"},
             }
@@ -87,6 +90,38 @@ class AuthTests(unittest.TestCase):
         operator = self.client.post("/api/v1/commands/arm", headers={"Authorization": "Bearer operator-secret"})
         ingest = self.client.post("/api/v1/detection/ingest", headers={"Authorization": "Bearer ingest-secret"})
         self.assertEqual((operator.status_code, ingest.status_code, self.client.get("/api/v1/health").status_code), (200, 200, 200))
+
+
+class DetectionIngestRouteTests(unittest.TestCase):
+    def test_event_ingest_is_validated_persistent_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = Flask(__name__)
+            api_routes._database = Database(Path(directory) / "buv.sqlite3")
+            app.register_blueprint(api_routes.api_v1_bp)
+            client = app.test_client()
+            payload = {
+                **identity_payload(),
+                "type": "vision.detection_event",
+                "detection_id": str(uuid.uuid4()),
+                "class": "person",
+                "confidence": 0.9,
+                "bbox_normalized_xyxy": [0.1, 0.2, 0.8, 0.9],
+                "coordinate": {"status": "not_available"},
+            }
+
+            created = client.post("/api/v1/detection/ingest", json=payload)
+            duplicate = client.post("/api/v1/detection/ingest", json=payload)
+            invalid = client.post(
+                "/api/v1/detection/ingest",
+                json={**payload, "coordinate": {"status": "available", "latitude": 0}},
+            )
+
+            self.assertEqual(created.status_code, 202)
+            self.assertTrue(created.get_json()["accepted"])
+            self.assertEqual(duplicate.status_code, 200)
+            self.assertTrue(duplicate.get_json()["duplicate"])
+            self.assertEqual(invalid.status_code, 400)
+            self.assertNotIn("ai_decision", created.get_json())
 
 
 if __name__ == "__main__":

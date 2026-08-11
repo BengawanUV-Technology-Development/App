@@ -29,9 +29,11 @@ except ImportError:  # pragma: no cover - Jetson/Linux provides fcntl.
 
 try:
     from .mission_storage import MissionCatalog, MissionStorageError
+    from .model_provenance import DEFAULT_MANIFEST_PATH, ModelProvenanceError, ProductionModelManifest
     from .storage_guard import StorageGuardError, validate_record_storage
 except ImportError:  # Script execution from the Jetson service directory.
     from mission_storage import MissionCatalog, MissionStorageError
+    from model_provenance import DEFAULT_MANIFEST_PATH, ModelProvenanceError, ProductionModelManifest
     from storage_guard import StorageGuardError, validate_record_storage
 
 
@@ -147,7 +149,25 @@ class AgentConfig:
         self.slice_width = env_int("JETSON_MODEL_SLICE_WIDTH", 640, 16, 7680)
         self.slice_height = env_int("JETSON_MODEL_SLICE_HEIGHT", 640, 16, 7680)
         self.overlap = env_float("JETSON_MODEL_OVERLAP", 0.2, 0, 0.99)
-        self.ingest_url = os.getenv("JETSON_DETECTION_INGEST_URL", "").strip() or None
+        self.ingest_url = os.getenv("JETSON_DETECTION_OVERLAY_URL", "").strip() or None
+        self.event_ingest_url = os.getenv("JETSON_DETECTION_EVENT_URL", "").strip() or None
+        self.model_manifest_path = Path(
+            os.getenv("JETSON_MODEL_MANIFEST", str(DEFAULT_MANIFEST_PATH))
+        ).expanduser().resolve()
+        self.verified_model = None
+        if self.weights:
+            try:
+                manifest = ProductionModelManifest(self.model_manifest_path)
+                manifest.validate_runtime(
+                    device=self.device,
+                    imgsz=self.imgsz,
+                    confidence=self.conf,
+                    sahi=self.sahi,
+                )
+                self.verified_model = manifest.verify(self.weights)
+            except ModelProvenanceError as exc:
+                raise RecordingAgentError(str(exc)) from exc
+            self.weights = str(self.verified_model.path)
         self.ingest_token = os.getenv("JETSON_INGEST_TOKEN", "").strip()
         if not self.ingest_token:
             raise RecordingAgentError("JETSON_INGEST_TOKEN must be configured")
@@ -171,6 +191,9 @@ class AgentConfig:
         target_api_port = api_port or self.gcs_api_port
         ingest_url = self.ingest_url or (
             f"http://{target_host}:{target_api_port}/api/v1/detection/overlay"
+        )
+        event_ingest_url = self.event_ingest_url or (
+            f"http://{target_host}:{target_api_port}/api/v1/detection/ingest"
         )
         registration_url = f"http://{target_host}:{target_api_port}/api/v1/stream/register"
         command = [
@@ -226,6 +249,8 @@ class AgentConfig:
             str(self.overlap),
             "--ingest-url",
             ingest_url,
+            "--event-ingest-url",
+            event_ingest_url,
             "--ingest-token",
             self.ingest_token,
             "--registration-url",
@@ -238,7 +263,10 @@ class AgentConfig:
         if label:
             command.extend(["--label", label])
         if self.weights:
-            command.extend(["--weights", self.weights])
+            command.extend([
+                "--weights", self.weights,
+                "--model-manifest", str(self.model_manifest_path),
+            ])
         if self.sahi:
             command.append("--sahi")
         if self.sahi_standard_pred:
@@ -479,6 +507,8 @@ class RecordingController:
             "highres": metadata.get("highres"),
             "network": metadata.get("network"),
             "storage": metadata.get("storage"),
+            "detector": metadata.get("detector"),
+            "health": metadata.get("health"),
             "stream_target": {
                 "host": self._gcs_host,
                 "video_port": self._video_port,

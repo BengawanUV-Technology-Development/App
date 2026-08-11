@@ -36,7 +36,7 @@ database = Database(database_path)
 mission_planner_adapter = MissionPlannerAdapter()
 session_log_store = SessionLogStore(source_address=mission_planner_adapter.base_url)
 
-init_api_v1_routes(mission_planner_adapter)
+init_api_v1_routes(mission_planner_adapter, database)
 init_log_routes(session_log_store)
 app.register_blueprint(api_v1_bp)
 app.register_blueprint(logs_bp)

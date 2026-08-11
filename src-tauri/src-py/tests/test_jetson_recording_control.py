@@ -1,3 +1,5 @@
+import hashlib
+import json
 import sys
 import tempfile
 import unittest
@@ -89,6 +91,40 @@ class JetsonRecordingControlTests(unittest.TestCase):
             command[command.index("--registration-url") + 1],
             "http://100.87.201.110:5002/api/v1/stream/register",
         )
+        self.assertEqual(
+            command[command.index("--event-ingest-url") + 1],
+            "http://100.87.201.110:5002/api/v1/detection/ingest",
+        )
+
+    def test_agent_rejects_checkpoint_that_does_not_match_manifest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "best.pt"
+            checkpoint.write_bytes(b"known-checkpoint")
+            manifest = Path(temporary) / "model.json"
+            manifest.write_text(json.dumps({
+                "schema_version": "1",
+                "model_id": "test-model",
+                "architecture": "s-yolov11",
+                "variant": "baseline",
+                "checkpoint": {
+                    "sha256": hashlib.sha256(b"different-checkpoint").hexdigest(),
+                    "size_bytes": checkpoint.stat().st_size,
+                },
+                "runtime": {
+                    "device": "cuda:0", "imgsz": 640, "confidence": 0.45, "sahi": False,
+                },
+            }), encoding="utf-8")
+            env = {
+                "JETSON_RECORDING_AGENT_TOKEN": "test-token",
+                "JETSON_INGEST_TOKEN": "test-ingest-token",
+                "JETSON_RECORDING_PIPELINE_SCRIPT": str(Path(__file__)),
+                "JETSON_RECORD_DIR": temporary,
+                "JETSON_MODEL_WEIGHTS": str(checkpoint),
+                "JETSON_MODEL_MANIFEST": str(manifest),
+            }
+            with patch.dict("os.environ", env, clear=True):
+                with self.assertRaisesRegex(RecordingAgentError, "checksum mismatch"):
+                    AgentConfig()
 
     def test_agent_starts_one_pipeline_and_stops_it_gracefully(self):
         with tempfile.TemporaryDirectory() as temporary:

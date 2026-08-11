@@ -1,0 +1,39 @@
+{
+  "schema_version": "1",
+  "model_id": "s-yolov11-baseline-seed0-300ep",
+  "architecture": "s-yolov11",
+  "variant": "baseline",
+  "checkpoint": {
+    "sha256": "dee4c2f026d9058a456f04b723ccc8f5bf5ccfa880f09e88e8dd7169c6120dc0",
+    "size_bytes": 22858854,
+    "ultralytics_version": "8.3.0",
+    "checkpoint_date": "2026-07-30T13:06:05.830366"
+  },
+  "training": {
+    "project": "runs/s-yolov11-main",
+    "name": "baseline-seed0",
+    "epochs": 300,
+    "imgsz": 640,
+    "seed": 0,
+    "map50": 0.47768,
+    "map50_95": 0.29475
+  },
+  "runtime": {
+    "device": "cuda:0",
+    "imgsz": 640,
+    "confidence": 0.45,
+    "sahi": false
+  },
+  "classes": [
+    "pedestrian",
+    "people",
+    "bicycle",
+    "car",
+    "van",
+    "truck",
+    "tricycle",
+    "awning-tricycle",
+    "bus",
+    "motor"
+  ]
+}

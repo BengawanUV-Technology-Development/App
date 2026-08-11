@@ -97,6 +97,8 @@ def validate_normalized_xyxy(value: Any) -> tuple[float, float, float, float]:
 
 
 def validate_detection_event(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if payload.get("type") != "vision.detection_event":
+        raise ContractError("type must be vision.detection_event")
     identity = FrameIdentity.from_mapping(payload)
     try:
         detection_id = str(uuid.UUID(str(payload.get("detection_id"))))
@@ -113,6 +115,7 @@ def validate_detection_event(payload: Mapping[str, Any]) -> dict[str, Any]:
         raise ContractError("coordinate must be exactly {'status': 'not_available'}")
     return {
         **identity.as_dict(),
+        "type": "vision.detection_event",
         "detection_id": detection_id,
         "class": label.strip(),
         "confidence": float(confidence),

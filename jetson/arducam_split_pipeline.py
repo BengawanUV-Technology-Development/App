@@ -44,10 +44,12 @@ from urllib.request import Request, urlopen
 
 try:
     from .mavlink_telemetry import MAVLinkTelemetryCollector
+    from .model_provenance import DEFAULT_MANIFEST_PATH, ProductionModelManifest, VerifiedModel
     from .rtp_identity import RtpIdentityError, inject_frame_id
     from .storage_guard import StorageInfo, validate_record_storage
 except ImportError:  # Script execution from the Jetson service directory.
     from mavlink_telemetry import MAVLinkTelemetryCollector
+    from model_provenance import DEFAULT_MANIFEST_PATH, ProductionModelManifest, VerifiedModel
     from rtp_identity import RtpIdentityError, inject_frame_id
     from storage_guard import StorageInfo, validate_record_storage
 
@@ -177,6 +179,8 @@ def build_pipeline_description(
         raise ValueError("conf must be between 0 and 1")
     if not 0 < args.ingest_timeout <= 30:
         raise ValueError("ingest-timeout must be greater than 0 and at most 30 seconds")
+    if (args.ingest_url or args.event_ingest_url or args.registration_url) and not args.ingest_token:
+        raise ValueError("ingest-token is required when an ingest or registration URL is configured")
     if not 0 <= args.overlap < 1:
         raise ValueError("overlap must be between 0 (inclusive) and 1 (exclusive)")
     if not 1 <= args.sidecar_queue_size <= 65_536:
@@ -469,62 +473,123 @@ class RtpNetworkSender:
             self._last_error_at = now
 
 
-class DetectionRunner:
-    """Lazy YOLO/SAHI adapter so the capture pipeline can run without a model."""
+class MetadataPublisher:
+    """Bounded HTTP publisher isolated from capture and inference callbacks."""
 
-    def __init__(self, args: argparse.Namespace):
-        self.args = args
-        self.mode = "none"
-        self._model = None
-        self._sahi_model = None
-        if not args.weights:
+    def __init__(self, token: str, timeout: float, queue_size: int = 512):
+        self.token = token
+        self.timeout = timeout
+        self.queue: queue.Queue[tuple[str, str, dict[str, Any]] | None] = queue.Queue(
+            maxsize=queue_size
+        )
+        self.thread: threading.Thread | None = None
+        self.stop_event = threading.Event()
+        self.sent = 0
+        self.errors = 0
+        self.dropped = 0
+        self.last_error: str | None = None
+        self._last_error_at = 0.0
+        self._lock = threading.Lock()
+
+    def start(self) -> None:
+        if self.thread and self.thread.is_alive():
             return
+        self.stop_event.clear()
+        self.thread = threading.Thread(target=self._run, daemon=True, name="jetson-metadata-publisher")
+        self.thread.start()
 
-        if args.sahi:
+    def submit(self, kind: str, url: str, payload: dict[str, Any]) -> bool:
+        if not url:
+            return False
+        try:
+            self.queue.put_nowait((kind, url, payload))
+            return True
+        except queue.Full:
+            with self._lock:
+                self.dropped += 1
+            return False
+
+    def close(self) -> None:
+        thread = self.thread
+        if not thread:
+            return
+        self.stop_event.set()
+        try:
+            self.queue.put_nowait(None)
+        except queue.Full:
             try:
-                from sahi import AutoDetectionModel
-            except ImportError as exc:
-                raise RuntimeError("--sahi requires the SAHI package on the Jetson") from exc
-            self._sahi_model = AutoDetectionModel.from_pretrained(
-                model_type="ultralytics",
-                model_path=args.weights,
-                confidence_threshold=args.conf,
-                device=args.device,
+                self.queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self.queue.put_nowait(None)
+            except queue.Full:
+                pass
+        thread.join(timeout=max(3.0, self.timeout * 2))
+        self.thread = None
+
+    def metadata(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "queue_depth": self.queue.qsize(),
+                "queue_capacity": self.queue.maxsize,
+                "sent": self.sent,
+                "errors": self.errors,
+                "dropped": self.dropped,
+                "dropped_reason": "PUBLISH_QUEUE_FULL" if self.dropped else None,
+                "last_error": self.last_error,
+            }
+
+    def _run(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                item = self.queue.get(timeout=0.5)
+            except queue.Empty:
+                if self.stop_event.is_set():
+                    return
+                continue
+            if item is None:
+                return
+            kind, url, payload = item
+            request = Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.token}",
+                },
+                method="POST",
             )
-            self.mode = "sahi"
-        else:
             try:
-                from ultralytics import YOLO
-            except ImportError as exc:
-                raise RuntimeError("YOLO detection requires the Ultralytics package on the Jetson") from exc
-            self._model = YOLO(args.weights)
-            self.mode = "ultralytics"
+                with urlopen(request, timeout=self.timeout) as response:
+                    if response.status >= 300:
+                        raise RuntimeError(f"{kind} ingest HTTP {response.status}")
+                with self._lock:
+                    self.sent += 1
+            except (OSError, URLError, RuntimeError) as exc:
+                now = time.monotonic()
+                with self._lock:
+                    self.errors += 1
+                    self.last_error = str(exc)
+                if now - self._last_error_at >= 5:
+                    print(f"[detector] {kind} ingest unavailable: {exc}", flush=True)
+                    self._last_error_at = now
+
+
+class DetectionRunner:
+    """Ultralytics adapter for the frozen non-SAHI production profile."""
+
+    def __init__(self, args: argparse.Namespace, verified_model: VerifiedModel):
+        self.args = args
+        self.mode = "ultralytics"
+        self.verified_model = verified_model
+        try:
+            from ultralytics import YOLO
+        except ImportError as exc:
+            raise RuntimeError("YOLO detection requires the Ultralytics package on the Jetson") from exc
+        self._model = YOLO(str(verified_model.path))
 
     def predict(self, image) -> list[dict[str, Any]]:
-        if self.mode == "none":
-            return []
-        if self.mode == "sahi":
-            from sahi.predict import get_sliced_prediction
-
-            result = get_sliced_prediction(
-                image,
-                self._sahi_model,
-                slice_height=self.args.slice_height,
-                slice_width=self.args.slice_width,
-                overlap_height_ratio=self.args.overlap,
-                overlap_width_ratio=self.args.overlap,
-                perform_standard_pred=self.args.sahi_standard_pred,
-            )
-            detections = []
-            for prediction in result.object_prediction_list:
-                x1, y1, x2, y2 = prediction.bbox.to_xyxy()
-                detections.append({
-                    "class": prediction.category.name,
-                    "confidence": float(prediction.score.value),
-                    "bbox_highres": [float(x1), float(y1), float(x2), float(y2)],
-                })
-            return detections
-
         results = self._model.predict(
             source=image,
             imgsz=self.args.imgsz,
@@ -563,27 +628,68 @@ class DetectionWorker:
         self.queue: queue.Queue[FramePacket | None] = queue.Queue(maxsize=1)
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
-        self.runner = DetectionRunner(args)
+        self._lock = threading.RLock()
+        self.status = "DISABLED" if not args.weights else "STARTING"
+        self.failure_reason: str | None = (
+            "YOLO_DISABLED_CAPTURE_ONLY" if not args.weights else None
+        )
+        self.runner: DetectionRunner | None = None
+        self.verified_model: VerifiedModel | None = None
+        self.submitted_frames = 0
+        self.processed_frames = 0
+        self.dropped_oldest = 0
+        self.inference_failures = 0
+        self.last_inference_ms: float | None = None
+        self.failed_at_frame_id: int | None = None
+        self.started_monotonic = time.monotonic()
+        if args.weights:
+            manifest = ProductionModelManifest(args.model_manifest)
+            manifest.validate_runtime(
+                device=args.device,
+                imgsz=args.imgsz,
+                confidence=args.conf,
+                sahi=args.sahi,
+            )
+            self.verified_model = manifest.verify(args.weights)
+            try:
+                self.runner = DetectionRunner(args, self.verified_model)
+                self.status = "RUNNING"
+            except Exception as exc:
+                self.status = "FAILED"
+                self.failure_reason = f"DETECTOR_INITIALIZATION_FAILED: {exc}"
         self.detections_path = session_dir / "detections.jsonl"
         self._detection_file = (
             self.detections_path.open("a", encoding="utf-8", buffering=1)
-            if self.runner.mode != "none" else None
+            if args.weights else None
         )
-        self._last_post_error_at = 0.0
+        self.publisher = MetadataPublisher(args.ingest_token, args.ingest_timeout)
+
+    @property
+    def needs_image(self) -> bool:
+        with self._lock:
+            return self.status == "RUNNING" and self.runner is not None
 
     def start(self) -> None:
-        self.thread = threading.Thread(target=self._run, daemon=True, name="jetson-yolo-sahi")
+        if self.status == "DISABLED":
+            return
+        self.started_monotonic = time.monotonic()
+        self.publisher.start()
+        self.thread = threading.Thread(target=self._run, daemon=True, name="jetson-yolo")
         self.thread.start()
 
     def submit(self, packet: FramePacket) -> None:
-        if self.runner.mode == "none":
+        if self.status == "DISABLED":
             # Capture-only placeholders are handled by BoundedSidecarWriter.
             return
+        with self._lock:
+            self.submitted_frames += 1
         try:
             self.queue.put_nowait(packet)
         except queue.Full:
             try:
                 self.queue.get_nowait()
+                with self._lock:
+                    self.dropped_oldest += 1
             except queue.Empty:
                 pass
             try:
@@ -606,8 +712,35 @@ class DetectionWorker:
                 pass
         if self.thread:
             self.thread.join(timeout=10)
+        self.publisher.close()
         if self._detection_file is not None:
             self._detection_file.close()
+
+    def metadata(self) -> dict[str, Any]:
+        with self._lock:
+            elapsed = max(0.001, time.monotonic() - self.started_monotonic)
+            return {
+                "enabled": bool(self.args.weights),
+                "mode": self.runner.mode if self.runner is not None else "none",
+                "status": self.status,
+                "reason": self.failure_reason,
+                "model": self.verified_model.as_dict() if self.verified_model else None,
+                "device": self.args.device,
+                "imgsz": self.args.imgsz,
+                "confidence": self.args.conf,
+                "sahi": self.args.sahi,
+                "queue_depth": self.queue.qsize(),
+                "queue_capacity": self.queue.maxsize,
+                "submitted_frames": self.submitted_frames,
+                "processed_frames": self.processed_frames,
+                "dropped_oldest": self.dropped_oldest,
+                "dropped_reason": "INFERENCE_QUEUE_DROP_OLDEST" if self.dropped_oldest else None,
+                "inference_failures": self.inference_failures,
+                "inference_fps": self.processed_frames / elapsed,
+                "last_inference_ms": self.last_inference_ms,
+                "failed_at_frame_id": self.failed_at_frame_id,
+                "publisher": self.publisher.metadata(),
+            }
 
     def _run(self) -> None:
         while True:
@@ -619,18 +752,40 @@ class DetectionWorker:
                 continue
             if packet is None:
                 return
+            detections: list[dict[str, Any]] = []
+            inference_started = time.monotonic()
+            with self._lock:
+                running = self.status == "RUNNING" and self.runner is not None
+            if running:
+                try:
+                    detections = self.runner.predict(packet.image)
+                    inference_ms = (time.monotonic() - inference_started) * 1000
+                    with self._lock:
+                        self.processed_frames += 1
+                        self.last_inference_ms = inference_ms
+                except Exception as exc:
+                    with self._lock:
+                        self.status = "FAILED"
+                        self.failure_reason = f"INFERENCE_FAILED: {exc}"
+                        self.inference_failures += 1
+                        self.failed_at_frame_id = packet.frame_id
+                    print(f"[detector] frame {packet.frame_id} failed: {exc}", flush=True)
+
             try:
-                detections = self.runner.predict(packet.image)
                 for detection in detections:
                     detection["detection_id"] = str(uuid.uuid4())
+                    x1, y1, x2, y2 = detection["bbox_highres"]
                     detection["bbox_normalized_xyxy"] = [
-                        detection["bbox_highres"][0] / self.args.high_width,
-                        detection["bbox_highres"][1] / self.args.high_height,
-                        detection["bbox_highres"][2] / self.args.high_width,
-                        detection["bbox_highres"][3] / self.args.high_height,
+                        max(0.0, min(1.0, x1 / self.args.high_width)),
+                        max(0.0, min(1.0, y1 / self.args.high_height)),
+                        max(0.0, min(1.0, x2 / self.args.high_width)),
+                        max(0.0, min(1.0, y2 / self.args.high_height)),
                     ]
                     detection.pop("bbox_highres", None)
 
+                with self._lock:
+                    detector_status = self.status
+                    detector_reason = self.failure_reason
                 payload = {
                     **packet.identity(),
                     "type": "vision.frame_result",
@@ -638,8 +793,10 @@ class DetectionWorker:
                     "source_width": self.args.high_width,
                     "source_height": self.args.high_height,
                     "detector": {
-                        "mode": self.runner.mode,
-                        "status": "RUNNING",
+                        "model_id": self.verified_model.model_id if self.verified_model else None,
+                        "mode": self.runner.mode if self.runner is not None else "none",
+                        "status": detector_status,
+                        "reason": detector_reason,
                     },
                     "detections": detections,
                     "coordinate": {"status": "not_available"},
@@ -647,29 +804,26 @@ class DetectionWorker:
                 if self._detection_file is not None:
                     self._detection_file.write(json.dumps(payload, ensure_ascii=False) + "\n")
                 if self.args.ingest_url:
-                    self._post_overlay(payload)
+                    self.publisher.submit("overlay", self.args.ingest_url, payload)
+                if self.args.event_ingest_url:
+                    for detection in detections:
+                        event = {
+                            **packet.identity(),
+                            "type": "vision.detection_event",
+                            "detection_id": detection["detection_id"],
+                            "class": detection["class"],
+                            "confidence": detection["confidence"],
+                            "bbox_normalized_xyxy": detection["bbox_normalized_xyxy"],
+                            "coordinate": {"status": "not_available"},
+                        }
+                        self.publisher.submit("event", self.args.event_ingest_url, event)
             except Exception as exc:
-                print(f"[detector] frame {packet.frame_id} failed: {exc}", flush=True)
-
-    def _post_overlay(self, payload: dict[str, Any]) -> None:
-        request = Request(
-            self.args.ingest_url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.args.ingest_token}",
-            },
-            method="POST",
-        )
-        try:
-            with urlopen(request, timeout=self.args.ingest_timeout) as response:
-                if response.status >= 300:
-                    raise RuntimeError(f"overlay ingest HTTP {response.status}")
-        except (OSError, URLError, RuntimeError) as exc:
-            now = time.time()
-            if now - self._last_post_error_at >= 5:
-                print(f"[detector] overlay ingest unavailable: {exc}", flush=True)
-                self._last_post_error_at = now
+                with self._lock:
+                    self.status = "FAILED"
+                    self.failure_reason = f"DETECTION_METADATA_FAILED: {exc}"
+                    self.inference_failures += 1
+                    self.failed_at_frame_id = packet.frame_id
+                print(f"[detector] metadata for frame {packet.frame_id} failed: {exc}", flush=True)
 
 
 class SplitPipeline:
@@ -895,7 +1049,7 @@ class SplitPipeline:
         # The appsink still gives us the source PTS, so telemetry and the
         # explicit empty detection record remain aligned with video.mp4.
         image = None
-        if self.worker is not None and self.worker.runner.mode != "none":
+        if self.worker is not None and self.worker.needs_image:
             success, map_info = buffer.map(self.gst.MapFlags.READ)
             if not success:
                 return self.gst.FlowReturn.ERROR
@@ -1092,19 +1246,17 @@ class SplitPipeline:
                 "source_pts_field": "source_pts_ns",
                 "description": "identity is assigned in the source callback before recording metadata, inference, and preview publication",
             },
-            "detector": {
-                "enabled": bool(self.args.weights),
-                "mode": self.worker.runner.mode if self.worker is not None else "none",
-                "status": "DISABLED" if not self.args.weights else "RUNNING",
-                "reason": "YOLO_DISABLED_CAPTURE_ONLY" if not self.args.weights else None,
-                "weights": self.args.weights,
-                "sahi": self.args.sahi,
-                "confidence": self.args.conf,
+            "detector": self.worker.metadata() if self.worker is not None else {
+                "enabled": False,
+                "mode": "none",
+                "status": "DISABLED",
+                "reason": "YOLO_DISABLED_CAPTURE_ONLY",
             },
             "telemetry": self.telemetry.metadata(),
             "health": {
                 "capture_fps": self.frame_counter / max(0.001, time.time() - self.started_at),
                 "sidecar": self.sidecars.metadata(),
+                "inference": self.worker.metadata() if self.worker is not None else None,
                 "dropped_preview_packets": self.network_sender.packets_dropped,
                 "dropped_preview_identity_missing": self._identity_miss_count,
                 "storage_rate_bytes_per_second": video_size / max(0.001, time.time() - self.started_at),
@@ -1161,6 +1313,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sidecar-queue-size", type=int, default=4096)
     parser.add_argument("--label")
     parser.add_argument("--weights", help="YOLO/SAHI model path; omit to run capture-only")
+    parser.add_argument(
+        "--model-manifest",
+        type=Path,
+        default=DEFAULT_MANIFEST_PATH,
+        help="Frozen production checkpoint manifest",
+    )
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--conf", type=float, default=0.45)
@@ -1170,6 +1328,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--slice-height", type=int, default=640)
     parser.add_argument("--overlap", type=float, default=0.2)
     parser.add_argument("--ingest-url", default="")
+    parser.add_argument("--event-ingest-url", default="")
     parser.add_argument("--registration-url", default="")
     parser.add_argument("--ingest-token", default="")
     parser.add_argument("--ingest-timeout", type=float, default=0.5)

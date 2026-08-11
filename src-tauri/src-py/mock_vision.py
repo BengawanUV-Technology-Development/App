@@ -1,4 +1,4 @@
-"""Generate a deterministic dummy vision stream for local pipeline testing.
+"""Generate a deterministic synthetic vision stream for local pipeline testing.
 
 The script does not run an object-detection model. It draws a moving synthetic
 person box on an arbitrary input video, or on generated frames when no video is
@@ -7,8 +7,8 @@ available. It writes an annotated video and one JSON record per frame.
 Example:
     python mock_vision.py --video ../../../Coordinate-Estimator/input_rendered.mp4
 
-The optional --post-first flag sends only the first detection to the backend.
-This avoids accidentally triggering the AI ingestion route once per video frame.
+The optional --post-first flag sends only the first authenticated schema-v2
+event to the persistent ingest route. Coordinates remain ``not_available``.
 """
 
 from __future__ import annotations
@@ -16,10 +16,11 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from urllib import request
+import uuid
 
 try:
     import cv2
@@ -32,13 +33,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_VIDEO = REPO_ROOT / "Coordinate-Estimator" / "input_rendered.mp4"
 DEFAULT_OUTPUT = Path(__file__).resolve().parent / "runtime" / "mock_vision" / "output_annotated.mp4"
 DEFAULT_METADATA = Path(__file__).resolve().parent / "runtime" / "mock_vision" / "detections.jsonl"
-DEFAULT_LATITUDE = -7.558412
-DEFAULT_LONGITUDE = 110.856210
-DEFAULT_ERROR_RADIUS_M = 5.0
+MISSION_ID = "mission-00000000-0000-0000-0000-000000000098"
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Generate dummy bounding boxes and coordinates")
+    parser = argparse.ArgumentParser(description="Generate synthetic schema-v2 bounding boxes")
     parser.add_argument("--video", type=Path, default=DEFAULT_VIDEO, help="Input video; omitted/unavailable means synthetic frames")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Annotated output video")
     parser.add_argument("--metadata", type=Path, default=DEFAULT_METADATA, help="Per-frame detection JSONL")
@@ -47,6 +46,7 @@ def parse_args():
     parser.add_argument("--width", type=int, default=1280, help="Synthetic frame width")
     parser.add_argument("--height", type=int, default=720, help="Synthetic frame height")
     parser.add_argument("--post-first", metavar="URL", help="POST only the first dummy detection to this endpoint")
+    parser.add_argument("--ingest-token", default=os.getenv("JETSON_INGEST_TOKEN", ""))
     parser.add_argument("--show", action="store_true", help="Show the annotated stream in an OpenCV window")
     return parser.parse_args()
 
@@ -65,26 +65,13 @@ def dummy_detection(frame_id, width, height, fps):
     y1 = int(clamp(center_y - box_height / 2, 0, height - 1))
     x2 = int(clamp(x1 + box_width, x1 + 1, width - 1))
     y2 = int(clamp(y1 + box_height, y1 + 1, height - 1))
-    contact_x = (x1 + x2) / 2.0
-    contact_y = float(y2)
-
-    # These coordinates are intentionally simulated. They must never be treated as GPS truth.
-    latitude = DEFAULT_LATITUDE + ((contact_y / height) - 0.5) * 0.00002
-    longitude = DEFAULT_LONGITUDE + ((contact_x / width) - 0.5) * 0.00002
     return {
         "track_id": "sim-person-001",
         "class": "person",
         "confidence": 0.92,
         "bbox_px": [x1, y1, x2, y2],
         "bbox_norm": [x1 / width, y1 / height, x2 / width, y2 / height],
-        "ground_contact_px": [contact_x, contact_y],
-        "ground_contact_norm": [contact_x / width, contact_y / height],
-        "coordinate": {
-            "status": "SIMULATED",
-            "latitude": latitude,
-            "longitude": longitude,
-            "error_radius_m": DEFAULT_ERROR_RADIUS_M,
-        },
+        "coordinate": {"status": "not_available"},
         "frame_time_seconds": frame_id / fps if fps > 0 else 0.0,
     }
 
@@ -101,9 +88,12 @@ def synthetic_frame(frame_id, width, height):
     return frame
 
 
-def post_json(url, payload):
+def post_json(url, payload, token):
     encoded = json.dumps(payload).encode("utf-8")
-    req = request.Request(url, data=encoded, headers={"Content-Type": "application/json"})
+    req = request.Request(url, data=encoded, headers={
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}",
+    })
     with request.urlopen(req, timeout=10) as response:
         return response.status, response.read().decode("utf-8")
 
@@ -156,9 +146,7 @@ def main():
 
             detection = dummy_detection(processed, width, height, fps)
             x1, y1, x2, y2 = detection["bbox_px"]
-            contact_x, contact_y = map(int, detection["ground_contact_px"])
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 230, 170), 3)
-            cv2.circle(frame, (contact_x, contact_y), 6, (0, 255, 255), -1)
             cv2.putText(
                 frame,
                 "SIMULATED person 0.92 | track sim-person-001",
@@ -169,10 +157,9 @@ def main():
                 2,
                 cv2.LINE_AA,
             )
-            coordinate = detection["coordinate"]
             cv2.putText(
                 frame,
-                f"SIM LAT {coordinate['latitude']:.6f} LON {coordinate['longitude']:.6f}",
+                "COORDINATE NOT AVAILABLE",
                 (24, height - 28),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.65,
@@ -183,34 +170,28 @@ def main():
             writer.write(frame)
 
             payload = {
-                "detection_id": f"SIM-{processed:06d}",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "drone_id": "BENGAWAN-UAV-SIM",
-                "mission_id": "demo-mission-001",
-                "camera_id": "demo-camera-001",
+                "schema_version": "2.0",
+                "type": "vision.detection_event",
+                "mission_id": MISSION_ID,
+                "capture_epoch": 1,
                 "frame_id": processed,
-                "capture_timestamp_ns": int(processed * 1_000_000_000 / fps),
-                "source": "mock_vision",
-                "detection_data": {
-                    "class": detection["class"],
-                    "count": 1,
-                    "confidence_avg": detection["confidence"],
-                    "track_id": detection["track_id"],
-                    "bbox_px": detection["bbox_px"],
-                    "bbox_norm": detection["bbox_norm"],
-                    "ground_contact_norm": detection["ground_contact_norm"],
-                },
-                "reconstructed_location": {
-                    **coordinate,
-                },
-                "simulation": True,
-                "source_video": source_description,
+                "camera_id": "arducam",
+                "capture_utc_ns": time.time_ns(),
+                "capture_monotonic_ns": time.monotonic_ns(),
+                "source_pts_ns": int(processed * 1_000_000_000 / fps),
+                "detection_id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"buv-mock-vision-{processed}")),
+                "class": detection["class"],
+                "confidence": detection["confidence"],
+                "bbox_normalized_xyxy": detection["bbox_norm"],
+                "coordinate": {"status": "not_available"},
             }
             metadata_file.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
             if args.post_first and not posted:
                 try:
-                    status, response = post_json(args.post_first, payload)
+                    if not args.ingest_token:
+                        raise RuntimeError("--ingest-token or JETSON_INGEST_TOKEN is required")
+                    status, response = post_json(args.post_first, payload, args.ingest_token)
                     print(f"Posted first simulated detection: HTTP {status} {response[:200]}")
                 except Exception as exc:
                     print(f"Could not post simulated detection: {exc}")
