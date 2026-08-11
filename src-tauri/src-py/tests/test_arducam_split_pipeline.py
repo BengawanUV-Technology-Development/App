@@ -2,9 +2,12 @@ import hashlib
 import json
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from collections import OrderedDict
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 
@@ -103,6 +106,44 @@ class ArducamSplitPipelineTests(unittest.TestCase):
 
         self.assertIsNone(health["temperature_c"])
         self.assertIn("ram_total_bytes", health)
+
+    def test_source_probe_assigns_identity_before_pipeline_branches(self):
+        pipeline = SplitPipeline.__new__(SplitPipeline)
+        pipeline.args = SimpleNamespace(
+            mission_id="mission-00000000-0000-0000-0000-000000000020",
+            capture_epoch=3,
+        )
+        pipeline.gst = SimpleNamespace(
+            CLOCK_TIME_NONE=-1,
+            PadProbeReturn=SimpleNamespace(OK="ok"),
+        )
+        pipeline.frame_counter = 0
+        pipeline._identity_condition = threading.Condition()
+        pipeline._identity_by_pts = OrderedDict()
+        pipeline._first_capture_monotonic_ns = None
+        pipeline._last_capture_monotonic_ns = None
+        pipeline.failure_error = None
+        pipeline.loop = None
+        pipeline.sidecars = MagicMock()
+        pipeline.sidecars.submit.return_value = True
+        probe_info = MagicMock()
+        probe_info.get_buffer.return_value = SimpleNamespace(pts=123_000_000)
+
+        with patch(
+            "jetson.arducam_split_pipeline.time.time_ns",
+            return_value=456_000_000,
+        ), patch(
+            "jetson.arducam_split_pipeline.time.monotonic_ns",
+            return_value=789_000_000,
+        ):
+            result = pipeline._on_source_buffer(None, probe_info)
+
+        packet = pipeline._identity_by_pts[123_000_000]
+        self.assertEqual(result, "ok")
+        self.assertEqual(packet.frame_id, 0)
+        self.assertEqual(packet.capture_epoch, 3)
+        self.assertEqual(packet.capture_utc_ns, 456_000_000)
+        pipeline.sidecars.submit.assert_called_once_with(packet)
 
     def test_bbox_is_mapped_from_highres_to_network_coordinates(self):
         self.assertEqual(

@@ -853,8 +853,10 @@ class SplitPipeline:
         self.worker: DetectionWorker | None = None
         self.network_sender = RtpNetworkSender(args.host, args.port)
         self._identity_condition = threading.Condition()
-        self._identity_by_pts: OrderedDict[int, int] = OrderedDict()
+        self._identity_by_pts: OrderedDict[int, FramePacket] = OrderedDict()
         self._identity_miss_count = 0
+        self._first_capture_monotonic_ns: int | None = None
+        self._last_capture_monotonic_ns: int | None = None
         self._registration_stop = threading.Event()
         self._registration_thread: threading.Thread | None = None
         self.telemetry = MAVLinkTelemetryCollector()
@@ -929,6 +931,13 @@ class SplitPipeline:
             print(f"[pipeline] local={self.args.high_width}x{self.args.high_height}@{self.args.high_fps:g}", flush=True)
             print(f"[pipeline] network={self.args.network_width}x{self.args.network_height}@{self.args.network_fps:g} -> {self.args.host}:{self.args.port}", flush=True)
             self.pipeline = Gst.parse_launch(description)
+            capture = self.pipeline.get_by_name("capture")
+            if capture is None:
+                raise RuntimeError("GStreamer pipeline did not create capture tee")
+            capture_pad = capture.get_static_pad("sink")
+            if capture_pad is None:
+                raise RuntimeError("GStreamer capture tee did not expose a sink pad")
+            capture_pad.add_probe(Gst.PadProbeType.BUFFER, self._on_source_buffer)
             sink = self.pipeline.get_by_name("highres_sink")
             if sink is None:
                 raise RuntimeError("GStreamer pipeline did not create highres_sink")
@@ -1025,6 +1034,42 @@ class SplitPipeline:
             warning, debug = message.parse_warning()
             print(f"[pipeline] WARNING: {warning} ({debug or 'no debug'})", flush=True)
 
+    def _on_source_buffer(self, _pad, probe_info):
+        """Assign canonical identity once, before recording/inference/preview branch."""
+
+        buffer = probe_info.get_buffer()
+        if buffer is None:
+            return self.gst.PadProbeReturn.OK
+        pts = None if buffer.pts == self.gst.CLOCK_TIME_NONE else int(buffer.pts)
+        capture_utc_ns = time.time_ns()
+        capture_monotonic_ns = time.monotonic_ns()
+        packet = FramePacket(
+            mission_id=self.args.mission_id,
+            capture_epoch=self.args.capture_epoch,
+            frame_id=self.frame_counter,
+            camera_id="arducam",
+            capture_utc_ns=capture_utc_ns,
+            capture_monotonic_ns=capture_monotonic_ns,
+            pts_ns=pts,
+            image=None,
+        )
+        self.frame_counter += 1
+        if self._first_capture_monotonic_ns is None:
+            self._first_capture_monotonic_ns = capture_monotonic_ns
+        self._last_capture_monotonic_ns = capture_monotonic_ns
+        if pts is not None:
+            with self._identity_condition:
+                self._identity_by_pts[pts] = packet
+                self._identity_by_pts.move_to_end(pts)
+                while len(self._identity_by_pts) > 512:
+                    self._identity_by_pts.popitem(last=False)
+                self._identity_condition.notify_all()
+        if not self.sidecars.submit(packet):
+            self.failure_error = self.sidecars.error
+            if self.loop and self.loop.is_running():
+                self.glib.idle_add(self.loop.quit)
+        return self.gst.PadProbeReturn.OK
+
     def _on_sample(self, sink):
         sample = sink.emit("pull-sample")
         if sample is None:
@@ -1035,20 +1080,15 @@ class SplitPipeline:
         height = caps.get_value("height")
 
         pts = None if buffer.pts == self.gst.CLOCK_TIME_NONE else int(buffer.pts)
-        frame_id = self.frame_counter
-        self.frame_counter += 1
-        capture_utc_ns = time.time_ns()
-        capture_monotonic_ns = time.monotonic_ns()
-        if pts is not None:
-            with self._identity_condition:
-                self._identity_by_pts[pts] = frame_id
-                self._identity_by_pts.move_to_end(pts)
-                while len(self._identity_by_pts) > 512:
-                    self._identity_by_pts.popitem(last=False)
-                self._identity_condition.notify_all()
-        # Capture-only mode does not need to copy a 4K BGR frame into Python.
-        # The appsink still gives us the source PTS, so telemetry and the
-        # explicit empty detection record remain aligned with video.mp4.
+        source_packet = self._wait_for_frame_identity(pts)
+        if source_packet is None:
+            self.failure_error = "CAPTURE_IDENTITY_MISSING_ON_INFERENCE_BRANCH"
+            if self.loop and self.loop.is_running():
+                self.glib.idle_add(self.loop.quit)
+            return self.gst.FlowReturn.ERROR
+        # Capture-only mode does not need to copy a high-resolution BGR frame
+        # into Python. Canonical identity and sidecars were already assigned
+        # by the source-pad probe before this branch.
         image = None
         if self.worker is not None and self.worker.needs_image:
             success, map_info = buffer.map(self.gst.MapFlags.READ)
@@ -1061,22 +1101,18 @@ class SplitPipeline:
             finally:
                 buffer.unmap(map_info)
 
-        packet = FramePacket(
-            mission_id=self.args.mission_id,
-            capture_epoch=self.args.capture_epoch,
-            frame_id=frame_id,
-            camera_id="arducam",
-            capture_utc_ns=capture_utc_ns,
-            capture_monotonic_ns=capture_monotonic_ns,
-            pts_ns=pts,
+        inference_packet = FramePacket(
+            mission_id=source_packet.mission_id,
+            capture_epoch=source_packet.capture_epoch,
+            frame_id=source_packet.frame_id,
+            camera_id=source_packet.camera_id,
+            capture_utc_ns=source_packet.capture_utc_ns,
+            capture_monotonic_ns=source_packet.capture_monotonic_ns,
+            pts_ns=source_packet.pts_ns,
             image=image,
         )
-        if not self.sidecars.submit(packet):
-            self.failure_error = self.sidecars.error
-            if self.loop and self.loop.is_running():
-                self.glib.idle_add(self.loop.quit)
         if self.worker is not None:
-            self.worker.submit(packet)
+            self.worker.submit(inference_packet)
         return self.gst.FlowReturn.OK
 
     def _on_network_sample(self, sink):
@@ -1093,12 +1129,12 @@ class SplitPipeline:
             # disconnected Tailscale/network path cannot block the local
             # recording branch.
             pts = None if buffer.pts == self.gst.CLOCK_TIME_NONE else int(buffer.pts)
-            frame_id = self._wait_for_frame_id(pts)
-            if frame_id is None:
+            source_packet = self._wait_for_frame_identity(pts)
+            if source_packet is None:
                 self._identity_miss_count += 1
                 return self.gst.FlowReturn.OK
             try:
-                packet = inject_frame_id(bytes(map_info.data), frame_id)
+                packet = inject_frame_id(bytes(map_info.data), source_packet.frame_id)
             except RtpIdentityError as exc:
                 self._identity_miss_count += 1
                 print(f"[network] RTP identity injection failed: {exc}", flush=True)
@@ -1108,7 +1144,7 @@ class SplitPipeline:
             buffer.unmap(map_info)
         return self.gst.FlowReturn.OK
 
-    def _wait_for_frame_id(self, pts: int | None) -> int | None:
+    def _wait_for_frame_identity(self, pts: int | None) -> FramePacket | None:
         if pts is None:
             return None
         deadline = time.monotonic() + 0.05
@@ -1119,6 +1155,18 @@ class SplitPipeline:
                     return None
                 self._identity_condition.wait(remaining)
             return self._identity_by_pts[pts]
+
+    def _capture_fps(self) -> float:
+        if (
+            self.frame_counter < 2
+            or self._first_capture_monotonic_ns is None
+            or self._last_capture_monotonic_ns is None
+        ):
+            return 0.0
+        elapsed = (
+            self._last_capture_monotonic_ns - self._first_capture_monotonic_ns
+        ) / 1_000_000_000
+        return (self.frame_counter - 1) / max(0.001, elapsed)
 
     def _start_registration_publisher(self) -> None:
         if not self.args.registration_url:
@@ -1255,7 +1303,7 @@ class SplitPipeline:
             },
             "telemetry": self.telemetry.metadata(),
             "health": {
-                "capture_fps": self.frame_counter / max(0.001, time.time() - self.started_at),
+                "capture_fps": self._capture_fps(),
                 "sidecar": self.sidecars.metadata(),
                 "inference": self.worker.metadata() if self.worker is not None else None,
                 "dropped_preview_packets": self.network_sender.packets_dropped,
