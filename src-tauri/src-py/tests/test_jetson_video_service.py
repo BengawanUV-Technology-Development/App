@@ -31,42 +31,32 @@ class JetsonVideoServiceTests(unittest.TestCase):
             "JETSON_VIDEO_PREVIEW_WIDTH": "1280",
             "JETSON_VIDEO_PREVIEW_HEIGHT": "720",
         }
-        with patch.dict(os.environ, env, clear=False), patch(
-            "app.services.jetson_video_service.shutil.which",
-            return_value="/usr/bin/gst-launch-1.0",
-        ):
+        with patch.dict(os.environ, env, clear=False):
             service = JetsonVideoService()
             command = service.build_pipeline()
 
-        command_text = " ".join(command)
-        self.assertIn("udpsrc address=0.0.0.0 port=5000", command_text)
-        self.assertIn("payload=96", command_text)
-        self.assertIn("rtpjitterbuffer", command)
+        self.assertIn('udpsrc name=rtp_source address="0.0.0.0" port=5000', command)
+        self.assertIn("payload=96", command)
+        self.assertIn("rtpjitterbuffer name=rtp_jitter", command)
         self.assertIn("rtph264depay", command)
         self.assertIn("avdec_h264", command)
-        self.assertIn("fdsink", command)
+        self.assertIn("appsink name=jpeg_sink", command)
+        self.assertNotIn("fdsink", command)
 
     def test_initial_status_is_stopped_and_explicit(self):
-        with patch(
-            "app.services.jetson_video_service.shutil.which",
-            return_value="/usr/bin/gst-launch-1.0",
-        ):
-            service = JetsonVideoService()
-            state = service.status()
+        service = JetsonVideoService()
+        state = service.status()
 
         self.assertEqual(state["camera_source"], "jetson_udp")
         self.assertEqual(state["camera_status"], "STOPPED")
         self.assertEqual(state["stream_port"], None)
 
     def test_live_stream_becomes_stale_after_frame_timeout(self):
-        with patch.dict(os.environ, {"JETSON_VIDEO_FRAME_TIMEOUT_SECONDS": "0.5"}, clear=False), patch(
-            "app.services.jetson_video_service.shutil.which",
-            return_value="/usr/bin/gst-launch-1.0",
-        ):
+        with patch.dict(os.environ, {"JETSON_VIDEO_FRAME_TIMEOUT_SECONDS": "0.5"}, clear=False):
             service = JetsonVideoService()
             with service._lock:
                 service._camera_state.update(
-                    camera_status="LIVE",
+                    camera_status="RUNNING",
                     camera_running=True,
                     last_frame_at_unix=time.time() - 1,
                 )

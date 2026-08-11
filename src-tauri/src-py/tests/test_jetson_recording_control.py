@@ -85,6 +85,10 @@ class JetsonRecordingControlTests(unittest.TestCase):
             command[command.index("--ingest-url") + 1],
             "http://100.87.201.110:5002/api/v1/detection/overlay",
         )
+        self.assertEqual(
+            command[command.index("--registration-url") + 1],
+            "http://100.87.201.110:5002/api/v1/stream/register",
+        )
 
     def test_agent_starts_one_pipeline_and_stops_it_gracefully(self):
         with tempfile.TemporaryDirectory() as temporary:

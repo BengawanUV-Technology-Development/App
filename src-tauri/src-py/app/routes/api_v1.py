@@ -3,6 +3,7 @@ from flask import Blueprint, Response, jsonify, request
 from app.services.mission_planner_adapter import MissionPlannerAdapter, MissionPlannerBridgeError
 from app.services.flight_recorder import FlightRecorder, FlightRecorderError
 from app.services.vision_overlay import VisionOverlayError, VisionOverlayStore
+from app.services.frame_sync import FrameSyncError, FrameSynchronizer, StreamRegistry
 
 
 api_v1_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
@@ -14,7 +15,11 @@ _vision_overlay_store: VisionOverlayStore | None = None
 def init_api_v1_routes(adapter: MissionPlannerAdapter):
     global _adapter, _flight_recorder, _vision_overlay_store
     _adapter = adapter
-    _flight_recorder = FlightRecorder(adapter.snapshot)
+    _flight_recorder = FlightRecorder(
+        adapter.snapshot,
+        stream_registry=StreamRegistry(),
+        synchronizer=FrameSynchronizer(wait_ms=150),
+    )
     _vision_overlay_store = VisionOverlayStore()
 
 
@@ -78,12 +83,24 @@ def latest_detection_overlay():
 
 @api_v1_bp.route("/detection/overlay", methods=["POST"])
 def ingest_detection_overlay():
-    """Accept per-frame YOLO/SAHI boxes without invoking the priority agent."""
+    """Accept exact v2 frame metadata without invoking reporting."""
 
     payload = request.get_json(silent=True)
     try:
-        return jsonify(_get_vision_overlay_store().ingest(payload)), 202
-    except VisionOverlayError as exc:
+        if not isinstance(payload, dict) or payload.get("schema_version") != "2.0":
+            raise FrameSyncError("detection overlay must use schema_version 2.0")
+        accepted = _get_flight_recorder().ingest_frame_metadata(payload)
+        return jsonify({"ok": True, "accepted": accepted}), 202
+    except (FrameSyncError, FlightRecorderError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@api_v1_bp.route("/stream/register", methods=["POST"])
+def register_stream():
+    payload = request.get_json(silent=True)
+    try:
+        return jsonify({"ok": True, **_get_flight_recorder().register_stream(payload)}), 202
+    except (FrameSyncError, FlightRecorderError) as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
 

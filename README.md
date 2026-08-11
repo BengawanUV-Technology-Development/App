@@ -46,6 +46,10 @@ startup and retains it only in memory for that application session.
   and authenticated ingest client.
 - `mission-planner`: loopback-by-default SITL command/telemetry bridge.
 
+The production receiver requires the system PyGObject GStreamer 1.0 bindings;
+it does not invoke `gst-launch` or parse a JPEG byte stream. The backend Docker
+image installs the matching GI packages explicitly.
+
 Do not use the diagnostic MJPEG endpoint as the production preview. The
 production browser path is the binary vision WebSocket described by the
 canonical contract.

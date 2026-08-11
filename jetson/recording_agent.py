@@ -172,6 +172,7 @@ class AgentConfig:
         ingest_url = self.ingest_url or (
             f"http://{target_host}:{target_api_port}/api/v1/detection/overlay"
         )
+        registration_url = f"http://{target_host}:{target_api_port}/api/v1/stream/register"
         command = [
             sys.executable,
             str(self.pipeline_script),
@@ -227,6 +228,8 @@ class AgentConfig:
             ingest_url,
             "--ingest-token",
             self.ingest_token,
+            "--registration-url",
+            registration_url,
         ]
         if self.record_mountpoint:
             command.extend(["--mountpoint", self.record_mountpoint])

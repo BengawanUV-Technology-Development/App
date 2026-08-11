@@ -1,24 +1,25 @@
+"""Frame-aware PyGObject receiver for Jetson H.264/RTP/UDP preview."""
+
 from __future__ import annotations
 
-import os
 import ipaddress
+import os
 import re
-import signal
-import shutil
-import subprocess
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from datetime import datetime, timezone
 from typing import Callable, Iterator
 
+from .frame_sync import FrameSyncError, FrameSynchronizer, RtpIdentityTracker, StreamRegistry
+
 
 class JetsonVideoError(RuntimeError):
-    """Raised when the GStreamer Jetson video receiver cannot be started."""
+    pass
 
 
 class JpegFrameParser:
-    """Extract concatenated JPEG buffers from a byte stream."""
+    """Retained only for diagnostic byte-stream tooling; production uses appsink."""
 
     def __init__(self, max_frame_bytes: int = 32 * 1024 * 1024):
         self.max_frame_bytes = max_frame_bytes
@@ -27,53 +28,40 @@ class JpegFrameParser:
     def feed(self, data: bytes) -> list[bytes]:
         if data:
             self._buffer.extend(data)
-
-        frames: list[bytes] = []
+        frames = []
         while True:
             start = self._buffer.find(b"\xff\xd8")
             if start < 0:
-                # Keep a possible first byte of the next SOI marker.
-                if self._buffer and self._buffer[-1] == 0xFF:
-                    self._buffer[:] = self._buffer[-1:]
-                else:
-                    self._buffer.clear()
+                self._buffer[:] = self._buffer[-1:] if self._buffer and self._buffer[-1] == 0xFF else b""
                 break
-
             if start:
                 del self._buffer[:start]
-
             end = self._buffer.find(b"\xff\xd9", 2)
             if end < 0:
                 if len(self._buffer) > self.max_frame_bytes:
-                    # A broken pipeline must not make the backend retain an
-                    # unbounded amount of data while waiting for an EOI.
                     self._buffer.clear()
                 break
-
             end += 2
             frames.append(bytes(self._buffer[:end]))
             del self._buffer[:end]
-
         return frames
 
 
 class JetsonVideoService:
-    """Receive Jetson H.264/RTP/UDP and fan out decoded JPEG frames.
-
-    The GCS backend deliberately terminates the UDP stream. Browsers receive
-    the resulting frames through ``preview_stream`` rather than accessing RTP
-    directly. ``gst-launch-1.0`` is invoked without a shell so the pipeline
-    arguments remain explicit and validated.
-    """
+    """Parse RTP identity before decoding and publish only exact synchronized frames."""
 
     def __init__(
         self,
         frame_handler: Callable[[bytes, int, float, float, int, int, float], None] | None = None,
         error_handler: Callable[[str], None] | None = None,
+        stream_registry: StreamRegistry | None = None,
+        synchronizer: FrameSynchronizer | None = None,
     ):
         self.frame_handler = frame_handler
         self.error_handler = error_handler
-
+        self.stream_registry = stream_registry or StreamRegistry()
+        self.synchronizer = synchronizer or FrameSynchronizer()
+        self.identity_tracker = RtpIdentityTracker(self.stream_registry)
         self.bind_address = os.getenv("JETSON_VIDEO_BIND_ADDRESS", "0.0.0.0")
         try:
             ipaddress.ip_address(self.bind_address)
@@ -87,26 +75,27 @@ class JetsonVideoService:
         self.expected_fps = self._env_float("JETSON_VIDEO_FPS", 15.0, 0.1, 240.0)
         self.frame_timeout_seconds = self._env_float("JETSON_VIDEO_FRAME_TIMEOUT_SECONDS", 5.0, 0.5, 60.0)
         self.jpeg_quality = self._env_int("JETSON_VIDEO_PREVIEW_JPEG_QUALITY", 75, 1, 100)
-        self.gst_binary = os.getenv("JETSON_VIDEO_GST_LAUNCH", "gst-launch-1.0")
         self.decoder = os.getenv("JETSON_VIDEO_DECODER", "avdec_h264").strip() or "avdec_h264"
         if not re.fullmatch(r"[A-Za-z0-9_-]+", self.decoder):
-            raise JetsonVideoError("JETSON_VIDEO_DECODER must be a single GStreamer element name")
-
+            raise JetsonVideoError("JETSON_VIDEO_DECODER must be one GStreamer element name")
         self._lock = threading.RLock()
         self._frame_ready = threading.Condition(self._lock)
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self._process: subprocess.Popen[bytes] | None = None
+        self._pipeline = None
+        self._loop = None
+        self._gst = None
         self._latest_jpeg: bytes | None = None
+        self._latest_matched = None
         self._preview_version = 0
         self._fps_samples: deque[float] = deque(maxlen=60)
+        self._identity_by_pts: OrderedDict[int, tuple[object, int]] = OrderedDict()
         self._camera_state = self._empty_state()
 
     @staticmethod
-    def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
-        raw = os.getenv(name, str(default))
+    def _env_int(name, default, minimum, maximum):
         try:
-            value = int(raw)
+            value = int(os.getenv(name, str(default)))
         except ValueError as exc:
             raise JetsonVideoError(f"{name} must be an integer") from exc
         if not minimum <= value <= maximum:
@@ -114,10 +103,9 @@ class JetsonVideoService:
         return value
 
     @staticmethod
-    def _env_float(name: str, default: float, minimum: float, maximum: float) -> float:
-        raw = os.getenv(name, str(default))
+    def _env_float(name, default, minimum, maximum):
         try:
-            value = float(raw)
+            value = float(os.getenv(name, str(default)))
         except ValueError as exc:
             raise JetsonVideoError(f"{name} must be a number") from exc
         if not minimum <= value <= maximum:
@@ -125,124 +113,68 @@ class JetsonVideoService:
         return value
 
     @staticmethod
-    def _empty_state() -> dict:
+    def _empty_state():
         return {
-            "camera_source": "jetson_udp",
-            "camera_running": False,
-            "camera_status": "STOPPED",
-            "camera_error": None,
-            "camera_index": None,
-            "width": None,
-            "height": None,
-            "fps": 0.0,
-            "expected_fps": None,
-            "frame_count": 0,
-            "preview_frame_count": 0,
-            "last_frame_timestamp": None,
-            "last_frame_at_unix": None,
-            "packet_error_count": 0,
-            "decoder_error_count": 0,
-            "last_pipeline_message": None,
-            "pipeline_returncode": None,
-            "pipeline_pid": None,
-            "restart_count": 0,
-            "stream_port": None,
-            "payload_type": None,
-            "decoder": None,
+            "camera_source": "jetson_udp", "camera_running": False, "camera_status": "STOPPED",
+            "camera_error": None, "width": None, "height": None, "fps": 0.0,
+            "expected_fps": None, "frame_count": 0, "preview_frame_count": 0,
+            "last_frame_timestamp": None, "last_frame_at_unix": None,
+            "packet_error_count": 0, "decoder_error_count": 0,
+            "identity_error_count": 0, "metadata_timeout_count": 0,
+            "restart_count": 0, "stream_port": None, "payload_type": None,
+            "decoder": None, "stream_registration": None,
         }
 
-    def status(self) -> dict:
+    def build_pipeline(self) -> str:
+        caps = f"application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload={self.payload_type}"
+        return (
+            f'udpsrc name=rtp_source address="{self.bind_address}" port={self.port} caps="{caps}" ! '
+            f'rtpjitterbuffer name=rtp_jitter latency={self.jitter_latency_ms} drop-on-latency=true ! '
+            f'rtph264depay ! h264parse ! {self.decoder} ! videoconvert ! videoscale ! '
+            f'video/x-raw,format=I420,width={self.width},height={self.height} ! '
+            f'jpegenc quality={self.jpeg_quality} ! '
+            'appsink name=jpeg_sink emit-signals=true max-buffers=4 drop=true sync=false'
+        )
+
+    @staticmethod
+    def _load_gst():
+        try:
+            import gi
+            gi.require_version("Gst", "1.0")
+            gi.require_version("GLib", "2.0")
+            from gi.repository import GLib, Gst
+        except ImportError as exc:
+            raise JetsonVideoError("PyGObject with GStreamer 1.0 is required for the frame-aware receiver") from exc
+        Gst.init(None)
+        return Gst, GLib
+
+    def status(self):
         with self._lock:
             state = dict(self._camera_state)
-        if (
-            state["camera_status"] == "LIVE"
-            and state["last_frame_at_unix"] is not None
-            and time.time() - state["last_frame_at_unix"] > self.frame_timeout_seconds
-        ):
-            state["camera_status"] = "STALE"
-            state["camera_error"] = (
-                f"No decoded frame received for more than {self.frame_timeout_seconds:g} seconds"
-            )
+        state["stream_registration"] = self.stream_registry.latest()
+        if state["camera_status"] == "RUNNING" and state["last_frame_at_unix"] is not None and time.time() - state["last_frame_at_unix"] > self.frame_timeout_seconds:
+            state.update(camera_status="STALE", camera_error=f"No decoded frame received for more than {self.frame_timeout_seconds:g} seconds")
         return state
 
-    def build_pipeline(self) -> list[str]:
-        gst_path = shutil.which(self.gst_binary) or (
-            self.gst_binary if os.path.isabs(self.gst_binary) else None
-        )
-        if not gst_path:
-            raise JetsonVideoError(
-                f"{self.gst_binary} was not found; install GStreamer and verify JETSON_VIDEO_GST_LAUNCH"
-            )
-
-        caps = (
-            "application/x-rtp,media=video,clock-rate=90000,"
-            f"encoding-name=H264,payload={self.payload_type}"
-        )
-        raw_caps = f"video/x-raw,format=I420,width={self.width},height={self.height}"
-        return [
-            gst_path,
-            "-q",
-            "udpsrc",
-            f"address={self.bind_address}",
-            f"port={self.port}",
-            f"caps={caps}",
-            "!",
-            "rtpjitterbuffer",
-            f"latency={self.jitter_latency_ms}",
-            "drop-on-latency=true",
-            "!",
-            "rtph264depay",
-            "!",
-            "h264parse",
-            "!",
-            self.decoder,
-            "!",
-            "videoconvert",
-            "!",
-            "videoscale",
-            "!",
-            raw_caps,
-            "!",
-            "jpegenc",
-            f"quality={self.jpeg_quality}",
-            "!",
-            "fdsink",
-            "fd=1",
-            "sync=false",
-        ]
-
-    def start(self) -> dict:
+    def start(self):
         with self._lock:
             if self._thread and self._thread.is_alive():
                 return self.status()
-
-            # Validate the executable and all configured values before
-            # starting a background thread, so a bad configuration is visible
-            # to the /camera/start request immediately.
-            self.build_pipeline()
+            self._load_gst()
             self._stop_event.clear()
             self._latest_jpeg = None
             self._preview_version = 0
             self._fps_samples.clear()
             self._camera_state = {
-                **self._empty_state(),
-                "camera_status": "STARTING",
-                "expected_fps": self.expected_fps,
-                "width": self.width,
-                "height": self.height,
-                "stream_port": self.port,
-                "payload_type": self.payload_type,
-                "decoder": self.decoder,
+                **self._empty_state(), "camera_status": "STARTING", "expected_fps": self.expected_fps,
+                "width": self.width, "height": self.height, "stream_port": self.port,
+                "payload_type": self.payload_type, "decoder": self.decoder,
             }
-            self._thread = threading.Thread(
-                target=self._run,
-                daemon=True,
-                name="jetson-gstreamer-receiver",
-            )
+            self._thread = threading.Thread(target=self._run, daemon=True, name="jetson-pygobject-receiver")
             self._thread.start()
         return self.status()
 
-    def stop(self) -> dict:
+    def stop(self):
         with self._lock:
             thread = self._thread
             if not thread or not thread.is_alive():
@@ -250,263 +182,172 @@ class JetsonVideoService:
                 return self.status()
             self._camera_state["camera_status"] = "STOPPING"
             self._stop_event.set()
-            process = self._process
-
-        self._terminate_process(process)
-        thread.join(timeout=10)
-        if thread.is_alive():
-            with self._lock:
-                process = self._process
-            self._terminate_process(process, force=True)
-            thread.join(timeout=2)
+            loop = self._loop
+        if loop and loop.is_running():
+            loop.quit()
+        thread.join(timeout=12)
         if thread.is_alive():
             raise JetsonVideoError("GStreamer video receiver did not stop within 12 seconds")
         return self.status()
 
+    def reset_stream(self):
+        self.identity_tracker.reset()
+        self.synchronizer.reset()
+        with self._frame_ready:
+            self._identity_by_pts.clear()
+            self._latest_jpeg = None
+            self._latest_matched = None
+            self._camera_state["frame_count"] = 0
+            self._frame_ready.notify_all()
+
+    def ingest_metadata(self, payload: dict) -> bool:
+        accepted = self.synchronizer.push_metadata(payload)
+        self._drain_ready()
+        return accepted
+
     def preview_stream(self) -> Iterator[bytes]:
         self.start()
-        with self._lock:
-            last_version = self._preview_version - 1 if self._latest_jpeg is not None else self._preview_version
-
+        last_version = -1
         while True:
             with self._frame_ready:
-                self._frame_ready.wait_for(
-                    lambda: self._preview_version != last_version
-                    or self._camera_state["camera_status"] in {"FAILED", "STOPPED"},
-                    timeout=5,
-                )
-                jpeg = self._latest_jpeg
-                version = self._preview_version
-                camera_status = self._camera_state["camera_status"]
+                self._frame_ready.wait_for(lambda: self._preview_version != last_version or self._camera_state["camera_status"] in {"FAILED", "STOPPED"}, timeout=5)
+                jpeg, version, status = self._latest_jpeg, self._preview_version, self._camera_state["camera_status"]
             if jpeg is not None and version != last_version:
                 last_version = version
-                yield (
-                    b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
-                    + str(len(jpeg)).encode("ascii")
-                    + b"\r\n\r\n"
-                    + jpeg
-                    + b"\r\n"
-                )
-            elif camera_status in {"FAILED", "STOPPED"}:
+                yield b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(jpeg)).encode("ascii") + b"\r\n\r\n" + jpeg + b"\r\n"
+            elif status in {"FAILED", "STOPPED"}:
                 return
 
-    def _run(self) -> None:
-        """Keep the receiver process alive across packet/process failures."""
-
+    def _run(self):
         restart_delay = 1.0
         while not self._stop_event.is_set():
             failure = self._run_once()
             if self._stop_event.is_set():
                 break
-
             with self._frame_ready:
-                self._camera_state.update(
-                    camera_running=False,
-                    camera_status="RECONNECTING",
-                    camera_error=failure or "GStreamer receiver exited unexpectedly",
-                    restart_count=self._camera_state.get("restart_count", 0) + 1,
-                )
+                self._camera_state.update(camera_running=False, camera_status="DEGRADED", camera_error=failure, restart_count=self._camera_state["restart_count"] + 1)
                 self._frame_ready.notify_all()
-
-            # A temporary UDP loss must not turn the Jetson recording into a
-            # failed session. The receiver retries independently while the
-            # local writer remains authoritative on Jetson.
             self._stop_event.wait(restart_delay)
             restart_delay = min(10.0, restart_delay * 2)
-
         with self._frame_ready:
-            self._process = None
+            self._pipeline = None
+            self._loop = None
             self._thread = None
-            self._camera_state.update(
-                camera_running=False,
-                camera_status="STOPPED",
-                pipeline_pid=None,
-            )
+            self._camera_state.update(camera_running=False, camera_status="STOPPED")
             self._frame_ready.notify_all()
 
-    def _run_once(self) -> str | None:
-        process: subprocess.Popen[bytes] | None = None
-        stderr_thread: threading.Thread | None = None
-        stale_thread: threading.Thread | None = None
-        parser = JpegFrameParser()
-        received_frame = False
-        failure: str | None = None
-
+    def _run_once(self):
+        Gst, GLib = self._load_gst()
+        self._gst = Gst
+        failure = "GStreamer receiver stopped unexpectedly"
         try:
-            command = self.build_pipeline()
-            process = subprocess.Popen(
-                command,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=0,
-                start_new_session=os.name != "nt",
-            )
+            pipeline = Gst.parse_launch(self.build_pipeline())
+            jitter = pipeline.get_by_name("rtp_jitter")
+            sink = pipeline.get_by_name("jpeg_sink")
+            if jitter is None or sink is None:
+                raise JetsonVideoError("receiver pipeline is missing named identity/decode elements")
+            jitter.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, self._on_rtp_probe)
+            sink.connect("new-sample", self._on_decoded_sample)
+            loop = GLib.MainLoop()
+            bus = pipeline.get_bus()
+            bus.add_signal_watch()
+            bus.connect("message", self._on_bus_message, loop)
+            GLib.timeout_add(20, self._on_sync_tick)
             with self._lock:
-                self._process = process
-                self._camera_state["pipeline_pid"] = process.pid
-                self._camera_state["camera_running"] = True
-                self._camera_state["last_frame_at_unix"] = None
-                self._camera_state["last_frame_timestamp"] = None
-                if self._camera_state.get("restart_count", 0):
-                    self._camera_state["camera_status"] = "RECONNECTING"
-
-            stale_thread = threading.Thread(
-                target=self._watch_stale_stream,
-                args=(process,),
-                daemon=True,
-                name="jetson-gstreamer-watchdog",
-            )
-            stale_thread.start()
-            stderr_thread = threading.Thread(
-                target=self._read_pipeline_messages,
-                args=(process.stderr,),
-                daemon=True,
-                name="jetson-gstreamer-stderr",
-            )
-            stderr_thread.start()
-
-            assert process.stdout is not None
-            read_chunk = getattr(process.stdout, "read1", process.stdout.read)
-            while not self._stop_event.is_set():
-                chunk = read_chunk(64 * 1024)
-                if not chunk:
-                    break
-                for jpeg in parser.feed(chunk):
-                    received_frame = True
-                    self._publish_frame(jpeg)
-
-            returncode = process.poll()
-            if self._stop_event.is_set():
-                return None
-            if returncode not in (None, 0):
-                failure = self._pipeline_failure_message(returncode)
-            elif not received_frame:
-                failure = "GStreamer exited before receiving a decoded video frame"
-            else:
-                failure = "GStreamer video receiver exited unexpectedly"
-        except FileNotFoundError as exc:
-            failure = f"Cannot start GStreamer: {exc}"
+                self._pipeline, self._loop = pipeline, loop
+                self._camera_state.update(camera_running=True, camera_status="STARTING", camera_error=None)
+            pipeline.set_state(Gst.State.PLAYING)
+            loop.run()
+            failure = self._camera_state.get("camera_error") or failure
         except Exception as exc:
             failure = str(exc)
         finally:
-            if process is not None and process.poll() is None:
-                self._terminate_process(process)
-            if stale_thread and stale_thread.is_alive():
-                stale_thread.join(timeout=1)
-            if stderr_thread and stderr_thread.is_alive():
-                stderr_thread.join(timeout=1)
-            if process is not None:
-                if process.stdout:
-                    process.stdout.close()
-                if process.stderr:
-                    process.stderr.close()
-
-            with self._frame_ready:
-                if self._process is process:
-                    self._process = None
-                self._camera_state["pipeline_pid"] = None
-                self._camera_state["pipeline_returncode"] = process.poll() if process else None
-                self._frame_ready.notify_all()
-
+            if self._pipeline is not None:
+                self._pipeline.set_state(Gst.State.NULL)
+            with self._lock:
+                self._pipeline = None
+                self._loop = None
         return failure
 
-    def _watch_stale_stream(self, process: subprocess.Popen[bytes]) -> None:
-        """Restart a receiver whose UDP pipeline stopped delivering frames."""
-
-        while not self._stop_event.is_set() and process.poll() is None:
-            self._stop_event.wait(1.0)
-            if self._stop_event.is_set() or process.poll() is not None:
-                return
+    def _on_bus_message(self, _bus, message, loop):
+        if message.type == self._gst.MessageType.ERROR:
+            error, _debug = message.parse_error()
             with self._lock:
-                last_frame = self._camera_state.get("last_frame_at_unix")
-            # Before the first frame, keep listening: the sender may start
-            # later. Once the stream was live, reset the receiver after a
-            # timeout so the next sender path can be acquired cleanly.
-            if last_frame is not None and time.time() - last_frame > self.frame_timeout_seconds:
-                with self._lock:
-                    self._camera_state["last_pipeline_message"] = (
-                        f"receiver watchdog: no frame for more than {self.frame_timeout_seconds:g} seconds"
-                    )
-                self._terminate_process(process)
-                return
+                self._camera_state["camera_error"] = str(error)
+                self._camera_state["decoder_error_count"] += 1
+            loop.quit()
+        elif message.type == self._gst.MessageType.EOS:
+            loop.quit()
 
-    def _publish_frame(self, jpeg: bytes) -> None:
+    def _on_rtp_probe(self, _pad, info):
+        buffer = info.get_buffer()
+        if buffer is None:
+            return self._gst.PadProbeReturn.OK
+        success, mapped = buffer.map(self._gst.MapFlags.READ)
+        if not success:
+            return self._gst.PadProbeReturn.OK
+        try:
+            observed = self.identity_tracker.observe(bytes(mapped.data))
+            if observed is not None and buffer.pts != self._gst.CLOCK_TIME_NONE:
+                key, rtp_timestamp, _extended = observed
+                with self._lock:
+                    self._identity_by_pts[int(buffer.pts)] = (key, rtp_timestamp)
+                    while len(self._identity_by_pts) > 512:
+                        self._identity_by_pts.popitem(last=False)
+        except FrameSyncError:
+            with self._lock:
+                self._camera_state["identity_error_count"] += 1
+        finally:
+            buffer.unmap(mapped)
+        return self._gst.PadProbeReturn.OK
+
+    def _on_decoded_sample(self, sink):
+        sample = sink.emit("pull-sample")
+        if sample is None:
+            return self._gst.FlowReturn.ERROR
+        buffer = sample.get_buffer()
+        success, mapped = buffer.map(self._gst.MapFlags.READ)
+        if not success:
+            return self._gst.FlowReturn.OK
+        try:
+            with self._lock:
+                identity = self._identity_by_pts.get(int(buffer.pts)) if buffer.pts != self._gst.CLOCK_TIME_NONE else None
+            if identity is None:
+                with self._lock:
+                    self._camera_state["identity_error_count"] += 1
+                return self._gst.FlowReturn.OK
+            key, rtp_timestamp = identity
+            self.synchronizer.push_video(key, bytes(mapped.data), rtp_timestamp)
+            self._drain_ready()
+        finally:
+            buffer.unmap(mapped)
+        return self._gst.FlowReturn.OK
+
+    def _on_sync_tick(self):
+        self._drain_ready()
+        return bool(self._loop and self._loop.is_running() and not self._stop_event.is_set())
+
+    def _drain_ready(self):
+        for frame in self.synchronizer.pop_ready():
+            self._publish_frame(frame)
+
+    def _publish_frame(self, frame):
         now = time.time()
         monotonic_now = time.monotonic()
         with self._frame_ready:
-            frame_id = self._camera_state["frame_count"]
             self._camera_state["frame_count"] += 1
             self._camera_state["preview_frame_count"] += 1
             self._camera_state["last_frame_at_unix"] = now
-            self._camera_state["last_frame_timestamp"] = datetime.fromtimestamp(
-                now, timezone.utc
-            ).isoformat()
+            self._camera_state["last_frame_timestamp"] = datetime.now(timezone.utc).isoformat()
+            if frame.state == "METADATA_TIMEOUT":
+                self._camera_state["metadata_timeout_count"] += 1
             self._fps_samples.append(monotonic_now)
-            if len(self._fps_samples) >= 2:
-                elapsed = self._fps_samples[-1] - self._fps_samples[0]
-                if elapsed > 0:
-                    self._camera_state["fps"] = (len(self._fps_samples) - 1) / elapsed
-            if self._camera_state["camera_status"] in {"STARTING", "RECONNECTING", "STALE"}:
-                self._camera_state["camera_status"] = "LIVE"
-            self._latest_jpeg = jpeg
+            if len(self._fps_samples) >= 2 and self._fps_samples[-1] > self._fps_samples[0]:
+                self._camera_state["fps"] = (len(self._fps_samples) - 1) / (self._fps_samples[-1] - self._fps_samples[0])
+            self._camera_state.update(camera_status="RUNNING", camera_error=None)
+            self._latest_jpeg = frame.jpeg
+            self._latest_matched = frame
             self._preview_version += 1
             self._frame_ready.notify_all()
-
         if self.frame_handler:
-            self.frame_handler(
-                jpeg,
-                frame_id,
-                now,
-                monotonic_now,
-                self.width,
-                self.height,
-                float(self.status().get("fps") or self.expected_fps),
-            )
-
-    def _read_pipeline_messages(self, stream) -> None:
-        if stream is None:
-            return
-        for raw_line in iter(stream.readline, b""):
-            line = raw_line.decode("utf-8", errors="replace").strip()
-            if not line:
-                continue
-            lowered = line.lower()
-            with self._lock:
-                self._camera_state["last_pipeline_message"] = line[-1000:]
-                if any(token in lowered for token in ("error", "warning", "failed")):
-                    if any(token in lowered for token in ("udp", "rtp", "packet", "jitter", "depay")):
-                        self._camera_state["packet_error_count"] += 1
-                    if any(token in lowered for token in ("h264", "decoder", "decode", "avdec")):
-                        self._camera_state["decoder_error_count"] += 1
-
-    def _pipeline_failure_message(self, returncode: int) -> str:
-        with self._lock:
-            message = self._camera_state.get("last_pipeline_message")
-        if message:
-            return f"GStreamer exited with code {returncode}: {message}"
-        return f"GStreamer exited with code {returncode}"
-
-    @staticmethod
-    def _terminate_process(process: subprocess.Popen[bytes] | None, force: bool = False) -> None:
-        if process is None or process.poll() is not None:
-            return
-        try:
-            if os.name != "nt" and process.pid:
-                os.killpg(process.pid, signal.SIGKILL if force else signal.SIGTERM)
-            else:
-                if force:
-                    process.kill()
-                else:
-                    process.terminate()
-            process.wait(timeout=2)
-        except (OSError, ProcessLookupError, subprocess.TimeoutExpired):
-            if not force and process.poll() is None:
-                try:
-                    if os.name != "nt" and process.pid:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    else:
-                        process.kill()
-                    process.wait(timeout=2)
-                except (OSError, ProcessLookupError, subprocess.TimeoutExpired):
-                    pass
+            self.frame_handler(frame.jpeg, frame.key.frame_id, now, monotonic_now, self.width, self.height, float(self.status().get("fps") or self.expected_fps))

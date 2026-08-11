@@ -33,6 +33,7 @@ import socket
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from fractions import Fraction
@@ -43,9 +44,11 @@ from urllib.request import Request, urlopen
 
 try:
     from .mavlink_telemetry import MAVLinkTelemetryCollector
+    from .rtp_identity import RtpIdentityError, inject_frame_id
     from .storage_guard import StorageInfo, validate_record_storage
 except ImportError:  # Script execution from the Jetson service directory.
     from mavlink_telemetry import MAVLinkTelemetryCollector
+    from rtp_identity import RtpIdentityError, inject_frame_id
     from storage_guard import StorageInfo, validate_record_storage
 
 
@@ -161,6 +164,8 @@ def build_pipeline_description(
         raise ValueError("port must be between 1 and 65535")
     if args.payload_type < 0 or args.payload_type > 127:
         raise ValueError("payload-type must be between 0 and 127")
+    if not 0 <= args.rtp_ssrc <= 0xFFFFFFFF:
+        raise ValueError("rtp-ssrc must be an unsigned 32-bit integer")
     if not re.fullmatch(r"[A-Za-z0-9_.:-]+", host):
         raise ValueError("host must be a single hostname or IP address")
     validate_bitrate(args.local_bitrate_kbps, "local-bitrate-kbps")
@@ -206,7 +211,7 @@ capture. ! queue max-size-buffers=4 max-size-time=0 max-size-bytes=0 leaky=downs
 nvvidconv ! video/x-raw,format=I420,width={network_width},height={network_height} !
 videorate ! video/x-raw,format=I420,framerate={network_fps_caps} !
 x264enc bitrate={args.network_bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max={network_key_int} bframes=0 !
-h264parse ! rtph264pay pt={args.payload_type} config-interval=1 mtu=1200 !
+h264parse ! rtph264pay pt={args.payload_type} ssrc={args.rtp_ssrc} config-interval=1 mtu=1200 !
 appsink name=network_sink emit-signals=true max-buffers=128 drop=true sync=false
 """.strip()
 
@@ -692,6 +697,11 @@ class SplitPipeline:
         self.frame_counter = 0
         self.worker: DetectionWorker | None = None
         self.network_sender = RtpNetworkSender(args.host, args.port)
+        self._identity_condition = threading.Condition()
+        self._identity_by_pts: OrderedDict[int, int] = OrderedDict()
+        self._identity_miss_count = 0
+        self._registration_stop = threading.Event()
+        self._registration_thread: threading.Thread | None = None
         self.telemetry = MAVLinkTelemetryCollector()
         self.sidecars = BoundedSidecarWriter(
             args, self.session_dir, self.telemetry, queue_size=args.sidecar_queue_size
@@ -781,6 +791,7 @@ class SplitPipeline:
             self.sidecars.start()
             self.worker.start()
             self.network_sender.start()
+            self._start_registration_publisher()
             self.pipeline.set_state(Gst.State.PLAYING)
             self._write_metadata("RECORDING")
             self.loop = GLib.MainLoop()
@@ -792,6 +803,7 @@ class SplitPipeline:
             raise
         finally:
             self._shutdown_pipeline()
+            self._stop_registration_publisher()
             self.network_sender.stop()
             if self.worker is not None:
                 self.worker.close()
@@ -870,6 +882,15 @@ class SplitPipeline:
         pts = None if buffer.pts == self.gst.CLOCK_TIME_NONE else int(buffer.pts)
         frame_id = self.frame_counter
         self.frame_counter += 1
+        capture_utc_ns = time.time_ns()
+        capture_monotonic_ns = time.monotonic_ns()
+        if pts is not None:
+            with self._identity_condition:
+                self._identity_by_pts[pts] = frame_id
+                self._identity_by_pts.move_to_end(pts)
+                while len(self._identity_by_pts) > 512:
+                    self._identity_by_pts.popitem(last=False)
+                self._identity_condition.notify_all()
         # Capture-only mode does not need to copy a 4K BGR frame into Python.
         # The appsink still gives us the source PTS, so telemetry and the
         # explicit empty detection record remain aligned with video.mp4.
@@ -890,8 +911,8 @@ class SplitPipeline:
             capture_epoch=self.args.capture_epoch,
             frame_id=frame_id,
             camera_id="arducam",
-            capture_utc_ns=time.time_ns(),
-            capture_monotonic_ns=time.monotonic_ns(),
+            capture_utc_ns=capture_utc_ns,
+            capture_monotonic_ns=capture_monotonic_ns,
             pts_ns=pts,
             image=image,
         )
@@ -916,10 +937,78 @@ class SplitPipeline:
             # operation occurs in the GStreamer streaming callback, so a
             # disconnected Tailscale/network path cannot block the local
             # recording branch.
-            self.network_sender.submit(bytes(map_info.data))
+            pts = None if buffer.pts == self.gst.CLOCK_TIME_NONE else int(buffer.pts)
+            frame_id = self._wait_for_frame_id(pts)
+            if frame_id is None:
+                self._identity_miss_count += 1
+                return self.gst.FlowReturn.OK
+            try:
+                packet = inject_frame_id(bytes(map_info.data), frame_id)
+            except RtpIdentityError as exc:
+                self._identity_miss_count += 1
+                print(f"[network] RTP identity injection failed: {exc}", flush=True)
+                return self.gst.FlowReturn.OK
+            self.network_sender.submit(packet)
         finally:
             buffer.unmap(map_info)
         return self.gst.FlowReturn.OK
+
+    def _wait_for_frame_id(self, pts: int | None) -> int | None:
+        if pts is None:
+            return None
+        deadline = time.monotonic() + 0.05
+        with self._identity_condition:
+            while pts not in self._identity_by_pts:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._identity_condition.wait(remaining)
+            return self._identity_by_pts[pts]
+
+    def _start_registration_publisher(self) -> None:
+        if not self.args.registration_url:
+            return
+        self._registration_stop.clear()
+        self._registration_thread = threading.Thread(
+            target=self._registration_loop, daemon=True, name="jetson-stream-registration"
+        )
+        self._registration_thread.start()
+
+    def _stop_registration_publisher(self) -> None:
+        self._registration_stop.set()
+        if self._registration_thread:
+            self._registration_thread.join(timeout=2)
+            self._registration_thread = None
+
+    def _registration_loop(self) -> None:
+        payload = {
+            "schema_version": "2.0",
+            "mission_id": self.args.mission_id,
+            "capture_epoch": self.args.capture_epoch,
+            "camera_id": "arducam",
+            "ssrc": self.args.rtp_ssrc,
+            "width": self.args.network_width,
+            "height": self.args.network_height,
+            "fps": self.args.network_fps,
+            "rtp_clock_rate": 90_000,
+        }
+        while not self._registration_stop.is_set():
+            request = Request(
+                self.args.registration_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.args.ingest_token}",
+                },
+                method="POST",
+            )
+            try:
+                with urlopen(request, timeout=self.args.ingest_timeout) as response:
+                    if response.status >= 300:
+                        raise RuntimeError(f"registration HTTP {response.status}")
+            except (OSError, URLError, RuntimeError) as exc:
+                print(f"[network] stream registration unavailable: {exc}", flush=True)
+            self._registration_stop.wait(5)
 
     def _shutdown_pipeline(self) -> None:
         if self.pipeline is not None:
@@ -1017,6 +1106,7 @@ class SplitPipeline:
                 "capture_fps": self.frame_counter / max(0.001, time.time() - self.started_at),
                 "sidecar": self.sidecars.metadata(),
                 "dropped_preview_packets": self.network_sender.packets_dropped,
+                "dropped_preview_identity_missing": self._identity_miss_count,
                 "storage_rate_bytes_per_second": video_size / max(0.001, time.time() - self.started_at),
                 **read_system_health(),
             },
@@ -1032,6 +1122,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--host", required=True, help="GCS Tailscale IP or hostname")
     parser.add_argument("--port", type=int, default=5000)
     parser.add_argument("--payload-type", type=int, default=96)
+    parser.add_argument("--rtp-ssrc", type=int, default=uuid.uuid4().int & 0xFFFFFFFF)
     parser.add_argument("--sensor-id", type=int, default=0)
     parser.add_argument("--high-width", type=int, default=1920)
     parser.add_argument("--high-height", type=int, default=1080)
@@ -1079,6 +1170,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--slice-height", type=int, default=640)
     parser.add_argument("--overlap", type=float, default=0.2)
     parser.add_argument("--ingest-url", default="")
+    parser.add_argument("--registration-url", default="")
     parser.add_argument("--ingest-token", default="")
     parser.add_argument("--ingest-timeout", type=float, default=0.5)
     return parser.parse_args(argv)

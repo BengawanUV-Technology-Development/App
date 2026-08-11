@@ -12,6 +12,7 @@ from typing import Callable, Iterator
 
 from .jetson_video_service import JetsonVideoError, JetsonVideoService
 from .jetson_recording_client import JetsonRecordingClient, JetsonRecordingError
+from .frame_sync import FrameSynchronizer, StreamRegistry
 
 
 class FlightRecorderError(RuntimeError):
@@ -27,7 +28,13 @@ class FlightRecorder:
     every non-Arducam source.
     """
 
-    def __init__(self, telemetry_provider: Callable[[], dict], recordings_dir: str | Path | None = None):
+    def __init__(
+        self,
+        telemetry_provider: Callable[[], dict],
+        recordings_dir: str | Path | None = None,
+        stream_registry: StreamRegistry | None = None,
+        synchronizer: FrameSynchronizer | None = None,
+    ):
         self.telemetry_provider = telemetry_provider
         self.recordings_dir = Path(
             recordings_dir or os.getenv("FLIGHT_RECORDINGS_DIR") or Path.cwd() / "recordings"
@@ -79,6 +86,8 @@ class FlightRecorder:
                 self._jetson_video = JetsonVideoService(
                     frame_handler=self._handle_jetson_frame,
                     error_handler=self._handle_jetson_error,
+                    stream_registry=stream_registry,
+                    synchronizer=synchronizer,
                 )
                 autostart = os.getenv("JETSON_VIDEO_AUTOSTART", "true").strip().lower()
                 if autostart in {"1", "true", "yes", "on"} and self._jetson_recording.configured:
@@ -149,6 +158,21 @@ class FlightRecorder:
             start, end = state.get("started_at"), state.get("ended_at")
             state["duration_seconds"] = max(0, end - start) if start and end else 0
         return state
+
+    def register_stream(self, payload: dict) -> dict:
+        if self._jetson_video is None:
+            raise FlightRecorderError("Jetson receiver is unavailable")
+        previous = self._jetson_video.stream_registry.latest()
+        registration = self._jetson_video.stream_registry.register(payload)
+        identity_fields = ("mission_id", "capture_epoch", "camera_id", "ssrc")
+        if previous is None or any(previous.get(field) != registration.get(field) for field in identity_fields):
+            self._jetson_video.reset_stream()
+        return registration
+
+    def ingest_frame_metadata(self, payload: dict) -> bool:
+        if self._jetson_video is None:
+            raise FlightRecorderError("Jetson receiver is unavailable")
+        return self._jetson_video.ingest_metadata(payload)
 
     def start_camera(self) -> dict:
         if self._jetson_video is not None:
