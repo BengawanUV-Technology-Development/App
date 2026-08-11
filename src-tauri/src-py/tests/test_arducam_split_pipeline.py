@@ -87,6 +87,7 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertIn("max-size-buffers=16", description)
         self.assertIn("drop=false", description)
         self.assertIn("rtph264pay pt=96", description)
+        self.assertIn("identity name=preview_identity", description)
         self.assertIn("fragment-duration=1000", description)
         self.assertIn("fragment-mode=first-moov-then-finalise", description)
         self.assertIn("moov-recovery-file=\"/tmp/video.mp4.moov.recovery\"", description)
@@ -144,6 +145,38 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertEqual(packet.capture_epoch, 3)
         self.assertEqual(packet.capture_utc_ns, 456_000_000)
         pipeline.sidecars.submit.assert_called_once_with(packet)
+
+    def test_videorate_preview_pts_maps_to_nearest_canonical_frame(self):
+        pipeline = SplitPipeline.__new__(SplitPipeline)
+        pipeline.args = SimpleNamespace(high_fps=30.0)
+        pipeline.gst = SimpleNamespace(
+            CLOCK_TIME_NONE=-1,
+            PadProbeReturn=SimpleNamespace(OK="ok"),
+        )
+        pipeline._identity_condition = threading.Condition()
+        pipeline._identity_by_pts = OrderedDict()
+        pipeline._preview_identity_by_pts = OrderedDict()
+        pipeline._identity_miss_count = 0
+        first = FramePacket(
+            "mission-00000000-0000-0000-0000-000000000020",
+            1, 10, "arducam", 1, 1, 333_333_333, None,
+        )
+        second = FramePacket(
+            first.mission_id,
+            1, 11, "arducam", 2, 2, 366_666_666, None,
+        )
+        pipeline._identity_by_pts[first.pts_ns] = first
+        pipeline._identity_by_pts[second.pts_ns] = second
+        probe_info = MagicMock()
+        # A rounded 15 FPS PTS is deliberately not equal to either master PTS.
+        probe_info.get_buffer.return_value = SimpleNamespace(pts=334_000_000)
+
+        result = pipeline._on_preview_buffer(None, probe_info)
+
+        self.assertEqual(result, "ok")
+        self.assertIs(pipeline._preview_identity_by_pts[334_000_000], first)
+        self.assertIs(pipeline._wait_for_preview_identity(334_000_000), first)
+        self.assertEqual(pipeline._identity_miss_count, 0)
 
     def test_bbox_is_mapped_from_highres_to_network_coordinates(self):
         self.assertEqual(

@@ -215,6 +215,7 @@ appsink name=highres_sink emit-signals=true max-buffers={appsink_buffers} {appsi
 capture. ! queue max-size-buffers=4 max-size-time=0 max-size-bytes=0 leaky=downstream !
 nvvidconv ! video/x-raw,format=I420,width={network_width},height={network_height} !
 videorate ! video/x-raw,format=I420,framerate={network_fps_caps} !
+identity name=preview_identity !
 x264enc bitrate={args.network_bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max={network_key_int} bframes=0 !
 h264parse ! rtph264pay pt={args.payload_type} ssrc={args.rtp_ssrc} config-interval=1 mtu=1200 !
 appsink name=network_sink emit-signals=true max-buffers=128 drop=true sync=false
@@ -854,6 +855,7 @@ class SplitPipeline:
         self.network_sender = RtpNetworkSender(args.host, args.port)
         self._identity_condition = threading.Condition()
         self._identity_by_pts: OrderedDict[int, FramePacket] = OrderedDict()
+        self._preview_identity_by_pts: OrderedDict[int, FramePacket] = OrderedDict()
         self._identity_miss_count = 0
         self._first_capture_monotonic_ns: int | None = None
         self._last_capture_monotonic_ns: int | None = None
@@ -942,6 +944,15 @@ class SplitPipeline:
             if sink is None:
                 raise RuntimeError("GStreamer pipeline did not create highres_sink")
             sink.connect("new-sample", self._on_sample)
+            preview_identity = self.pipeline.get_by_name("preview_identity")
+            if preview_identity is None:
+                raise RuntimeError("GStreamer pipeline did not create preview_identity")
+            preview_identity_pad = preview_identity.get_static_pad("src")
+            if preview_identity_pad is None:
+                raise RuntimeError("GStreamer preview_identity did not expose a src pad")
+            preview_identity_pad.add_probe(
+                Gst.PadProbeType.BUFFER, self._on_preview_buffer
+            )
             network_sink = self.pipeline.get_by_name("network_sink")
             if network_sink is None:
                 raise RuntimeError("GStreamer pipeline did not create network_sink")
@@ -1070,6 +1081,32 @@ class SplitPipeline:
                 self.glib.idle_add(self.loop.quit)
         return self.gst.PadProbeReturn.OK
 
+    def _on_preview_buffer(self, _pad, probe_info):
+        """Bind each decimated preview PTS to the nearest master frame.
+
+        ``videorate`` creates the 15 FPS preview timeline and may round its PTS,
+        so it cannot be matched to the 30 FPS source with strict integer
+        equality.  The association is made before encoding, where there is
+        still exactly one buffer per preview frame; all RTP packets produced
+        from that buffer then reuse this exact preview-PTS mapping.
+        """
+
+        buffer = probe_info.get_buffer()
+        if buffer is None or buffer.pts == self.gst.CLOCK_TIME_NONE:
+            return self.gst.PadProbeReturn.OK
+        preview_pts = int(buffer.pts)
+        source_packet = self._nearest_source_identity(preview_pts)
+        if source_packet is None:
+            self._identity_miss_count += 1
+            return self.gst.PadProbeReturn.OK
+        with self._identity_condition:
+            self._preview_identity_by_pts[preview_pts] = source_packet
+            self._preview_identity_by_pts.move_to_end(preview_pts)
+            while len(self._preview_identity_by_pts) > 512:
+                self._preview_identity_by_pts.popitem(last=False)
+            self._identity_condition.notify_all()
+        return self.gst.PadProbeReturn.OK
+
     def _on_sample(self, sink):
         sample = sink.emit("pull-sample")
         if sample is None:
@@ -1129,7 +1166,7 @@ class SplitPipeline:
             # disconnected Tailscale/network path cannot block the local
             # recording branch.
             pts = None if buffer.pts == self.gst.CLOCK_TIME_NONE else int(buffer.pts)
-            source_packet = self._wait_for_frame_identity(pts)
+            source_packet = self._wait_for_preview_identity(pts)
             if source_packet is None:
                 self._identity_miss_count += 1
                 return self.gst.FlowReturn.OK
@@ -1155,6 +1192,32 @@ class SplitPipeline:
                     return None
                 self._identity_condition.wait(remaining)
             return self._identity_by_pts[pts]
+
+    def _wait_for_preview_identity(self, pts: int | None) -> FramePacket | None:
+        if pts is None:
+            return None
+        deadline = time.monotonic() + 0.05
+        with self._identity_condition:
+            while pts not in self._preview_identity_by_pts:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._identity_condition.wait(remaining)
+            return self._preview_identity_by_pts[pts]
+
+    def _nearest_source_identity(self, preview_pts: int) -> FramePacket | None:
+        frame_interval_ns = round(1_000_000_000 / self.args.high_fps)
+        tolerance_ns = max(1, frame_interval_ns // 2 + 1_000_000)
+        with self._identity_condition:
+            if not self._identity_by_pts:
+                return None
+            source_pts, packet = min(
+                self._identity_by_pts.items(),
+                key=lambda item: abs(item[0] - preview_pts),
+            )
+            if abs(source_pts - preview_pts) > tolerance_ns:
+                return None
+            return packet
 
     def _capture_fps(self) -> float:
         if (
