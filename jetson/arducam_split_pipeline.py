@@ -168,7 +168,7 @@ def build_pipeline_description(
         else "queue max-size-buffers=16 max-size-time=0 max-size-bytes=0"
     )
     recovery_file = recovery_file or video_path.with_name(f"{video_path.name}.moov.recovery")
-    analog_video_path = video_path.with_name("video_analog.mkv")
+    analog_video_path = video_path.with_name("video_analog.avi")
     analog_branch = (
         f"""
 v4l2src device={_gst_quote(easycap_device)} do-timestamp=true !
@@ -177,7 +177,7 @@ jpegparse ! jpegdec ! videoconvert ! videorate !
 video/x-raw,format=I420,width={args.easycap_width},height={args.easycap_height},framerate={easycap_fps_caps} !
 tee name=analog_capture
 analog_capture. ! queue max-size-buffers=64 max-size-time=0 max-size-bytes=0 !
-jpegenc quality=90 ! jpegparse ! matroskamux ! filesink location={_gst_quote(analog_video_path)}
+jpegenc quality=90 ! jpegparse ! avimux ! filesink location={_gst_quote(analog_video_path)}
 analog_capture. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream !
 videoscale add-borders=true ! videorate !
 video/x-raw,format=I420,width={network_width},height={network_height},framerate={network_fps_caps} !
@@ -613,7 +613,7 @@ class SplitPipeline:
         )
         self.session_dir = self._create_session_dir()
         self.video_path = self.session_dir / "video.mp4"
-        self.analog_video_path = self.session_dir / "video_analog.mkv"
+        self.analog_video_path = self.session_dir / "video_analog.avi"
         # Keep mp4mux's recovery index beside the recording on the validated
         # SSD. Fragmented MP4 grows continuously and does not stage the entire
         # recording in /tmp before writing the final moov atom.
@@ -928,20 +928,20 @@ class SplitPipeline:
         return None
 
     def _validate_analog_video_output(self) -> str | None:
-        """Validate the optional timestamp-normalized MJPEG Matroska recording."""
+        """Validate the optional timestamp-normalized MJPEG AVI recording."""
 
         if not self.args.easycap_device:
             return None
         try:
             size = self.analog_video_path.stat().st_size
             with self.analog_video_path.open("rb") as handle:
-                header = handle.read(4)
+                header = handle.read(12)
         except OSError as exc:
-            return f"cannot validate video_analog.mkv: {exc}"
+            return f"cannot validate video_analog.avi: {exc}"
         if size <= 0:
-            return "video_analog.mkv is empty after pipeline shutdown"
-        if header != b"\x1aE\xdf\xa3":
-            return "video_analog.mkv is missing the Matroska EBML header"
+            return "video_analog.avi is empty after pipeline shutdown"
+        if len(header) < 12 or header[:4] != b"RIFF" or header[8:12] != b"AVI ":
+            return "video_analog.avi is missing the RIFF/AVI header"
         return None
 
     def _close_telemetry_file(self) -> None:
@@ -1031,13 +1031,13 @@ class SplitPipeline:
                 "height": self.args.easycap_height if self.args.easycap_device else None,
                 "fps": self.args.easycap_fps if self.args.easycap_device else None,
                 "codec": "MJPEG" if self.args.easycap_device else None,
-                "container": "Matroska" if self.args.easycap_device else None,
+                "container": "AVI" if self.args.easycap_device else None,
                 "camera": "selected_by_pilot" if self.args.easycap_device else None,
             },
             "network_sender": self.network_sender.metadata(),
             "files": {
                 "video": "video.mp4",
-                "analog_video": "video_analog.mkv" if self.args.easycap_device else None,
+                "analog_video": "video_analog.avi" if self.args.easycap_device else None,
                 "video_recovery_file": "video.mp4.moov.recovery",
                 "telemetry": "telemetry.jsonl",
                 "detections": "detections.jsonl",

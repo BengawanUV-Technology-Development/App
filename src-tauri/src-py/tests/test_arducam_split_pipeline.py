@@ -74,9 +74,9 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertIn("image/jpeg,width=640,height=480,framerate=30/1", description)
         self.assertIn("jpegparse ! jpegdec ! videoconvert ! videorate", description)
         self.assertIn("tee name=analog_capture", description)
-        self.assertIn("jpegenc quality=90 ! jpegparse ! matroskamux", description)
-        self.assertIn("matroskamux", description)
-        self.assertIn('filesink location="/tmp/video_analog.mkv"', description)
+        self.assertIn("jpegenc quality=90 ! jpegparse ! avimux", description)
+        self.assertIn("avimux", description)
+        self.assertIn('filesink location="/tmp/video_analog.avi"', description)
         self.assertIn("jpegdec", description)
         self.assertNotIn("videoflip", description)
         self.assertIn("videoscale add-borders=true", description)
@@ -90,14 +90,14 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "absolute"):
             build_pipeline_description(args, Path("/tmp/video.mp4"))
 
-    def test_analog_recording_validation_accepts_matroska_header(self):
+    def test_analog_recording_validation_accepts_avi_header(self):
         pipeline = SplitPipeline.__new__(SplitPipeline)
         pipeline.args = parse_args(
             ["--host", "100.64.0.10", "--easycap-device", "/dev/video1"]
         )
-        path = Path("/tmp/test-video-analog.mkv")
+        path = Path("/tmp/test-video-analog.avi")
         try:
-            path.write_bytes(b"\x1aE\xdf\xa3payload")
+            path.write_bytes(b"RIFF\x10\x00\x00\x00AVI payload")
             pipeline.analog_video_path = path
 
             self.assertIsNone(pipeline._validate_analog_video_output())
