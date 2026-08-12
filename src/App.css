@@ -615,7 +615,9 @@ select:focus {
 
 .flight-data-strip {
   display: grid;
+  grid-template-columns: repeat(4, 1fr);
   gap: var(--space-2);
+  padding: var(--space-2);
 }
 
 .flight-data-strip div {
@@ -1269,7 +1271,8 @@ select {
 .tactical-left,
 .tactical-right {
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -2158,7 +2161,7 @@ select {
 
 .alerts-panel {
   grid-template-rows: auto minmax(0, 1fr);
-  min-height: 0;
+  min-height: 180px;
   flex: 1;
   overflow: hidden;
 }
@@ -2429,6 +2432,7 @@ button:hover {
 }
 
 .tactical-right {
+  overflow-y: auto;
   border-left: 1px solid var(--buv-border);
 }
 

@@ -1,8 +1,10 @@
 .draggable-modal {
   position: fixed;
   z-index: 9999;
-  background-color: var(--bg-surface-2);
-  border: 1px solid var(--border-color);
+  background-color: rgba(17, 24, 39, 0.65);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--color-border, rgba(148, 163, 184, 0.18));
   border-radius: 6px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   width: 350px;
@@ -13,13 +15,13 @@
 }
 
 .draggable-modal-header {
-  background-color: var(--bg-surface-3);
+  background-color: rgba(0, 0, 0, 0.4);
   padding: 8px 12px;
   display: flex;
   justify-content: space-between;
   align-items: center;
   cursor: grab;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--color-border, rgba(148, 163, 184, 0.18));
 }
 
 .draggable-modal-header:active {

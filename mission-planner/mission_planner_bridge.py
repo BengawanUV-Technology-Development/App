@@ -255,6 +255,12 @@ def _build_snapshot():
             "voltage_v": _read_number(state, "battery_voltage"),
             "current_a": _read_number(state, "current"),
         },
+        "battery2": {
+            "remaining_percent": _read_number(state, "battery_remaining2"),
+            "voltage_v": _read_number(state, "battery_voltage2"),
+            "current_a": _read_number(state, "current2"),
+        },
+        "throttle_percent": _read_number(state, "ch3percent"),
         "ekf": {
             "ok": bool(_read_state(state, "ekf_ok", True)),
             "flags": _read_integer(state, "ekfstatus"),

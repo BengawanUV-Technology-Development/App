@@ -19,7 +19,7 @@ function ProgressBar({ label, value, max, warningThreshold, dangerThreshold }) {
         <span>{label}</span>
         <strong>{format(value)}</strong>
       </div>
-      <div style={{ width: '100%', height: '10px', background: 'var(--bg-surface-3)', borderRadius: '5px', overflow: 'hidden' }}>
+      <div style={{ width: '100%', height: '10px', background: 'var(--color-surface, #111827)', borderRadius: '5px', overflow: 'hidden' }}>
         <div style={{ width: `${percentage}%`, height: '100%', backgroundColor: color, transition: 'width 0.3s' }} />
       </div>
     </div>
@@ -38,7 +38,7 @@ function EkfVibeModal({ telemetry, onClose }) {
   return (
     <DraggableModal title="EKF & Vibration Status" onClose={onClose} initialPosition={{ x: window.innerWidth / 2 - 175, y: 100 }}>
       <div>
-        <h4 style={{ fontSize: '0.85rem', marginBottom: '12px', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>
+        <h4 style={{ fontSize: '0.85rem', marginBottom: '12px', borderBottom: '1px solid var(--color-border, rgba(148, 163, 184, 0.18))', paddingBottom: '4px' }}>
           Extended Kalman Filter (EKF)
         </h4>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', fontSize: '0.85rem' }}>
@@ -53,7 +53,7 @@ function EkfVibeModal({ telemetry, onClose }) {
       </div>
 
       <div style={{ marginTop: '16px' }}>
-        <h4 style={{ fontSize: '0.85rem', marginBottom: '12px', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>
+        <h4 style={{ fontSize: '0.85rem', marginBottom: '12px', borderBottom: '1px solid var(--color-border, rgba(148, 163, 184, 0.18))', paddingBottom: '4px' }}>
           Vibration Levels
         </h4>
         <ProgressBar label="Vibe X" value={telemetry.vibration_x} max={vibeMax} warningThreshold={vibeWarn} dangerThreshold={vibeDanger} />

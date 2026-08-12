@@ -100,6 +100,7 @@ class MissionPlannerAdapter:
         attitude = raw.get("attitude") or {}
         velocity = raw.get("velocity") or {}
         battery = raw.get("battery") or {}
+        battery2 = raw.get("battery2") or {}
         ekf = raw.get("ekf") or {}
         vibration = raw.get("vibration") or {}
         status = raw.get("status") or {}
@@ -126,6 +127,10 @@ class MissionPlannerAdapter:
             "battery_percent": battery.get("remaining_percent"),
             "battery_voltage_v": battery.get("voltage_v"),
             "battery_current_a": battery.get("current_a"),
+            "battery2_percent": battery2.get("remaining_percent"),
+            "battery2_voltage_v": battery2.get("voltage_v"),
+            "battery2_current_a": battery2.get("current_a"),
+            "throttle_percent": raw.get("throttle_percent"),
             "roll_deg": attitude.get("roll_deg"),
             "pitch_deg": attitude.get("pitch_deg"),
             "yaw_deg": attitude.get("yaw_deg"),
