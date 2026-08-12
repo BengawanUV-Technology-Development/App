@@ -162,6 +162,25 @@ class ApiV1Tests(unittest.TestCase):
         self.assertEqual(telemetry.status_code, 200)
         self.assertTrue(telemetry.get_json()["gps_valid"])
 
+    def test_browser_render_metrics_requires_operator_and_deduplicates_identity(self):
+        payload = {
+            "schema_version": "2.0",
+            "mission_id": "mission-00000000-0000-0000-0000-000000000021",
+            "capture_epoch": 1,
+            "frame_id": 4,
+            "camera_id": "arducam",
+            "receive_to_render_ms": 12.5,
+        }
+        unauthorized = self.client.post("/api/v1/vision/metrics", json=payload)
+        accepted = self.post("/api/v1/vision/metrics", json=payload)
+        duplicate = self.post("/api/v1/vision/metrics", json=payload)
+
+        self.assertEqual(unauthorized.status_code, 401)
+        self.assertEqual(accepted.status_code, 202)
+        self.assertTrue(accepted.get_json()["accepted"])
+        self.assertEqual(duplicate.status_code, 202)
+        self.assertTrue(duplicate.get_json()["duplicate"])
+
     def test_mission_route_proxies_to_bridge(self):
         response = self.client.get("/api/v1/mission")
 

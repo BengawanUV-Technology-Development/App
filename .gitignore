@@ -45,6 +45,9 @@ docs
 docs/*
 !docs/2026-06-06-mission-planner-vision-refactor-plan.md
 !docs/CV_PIPELINE_TODOS.md
+!docs/qualification/
+docs/qualification/*
+!docs/qualification/BATCH_5_FILE_REPLAY_2026-08-12.md
 
 # Editor directories and files
 .vscode/*

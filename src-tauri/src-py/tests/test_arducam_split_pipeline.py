@@ -18,6 +18,7 @@ if str(APP_ROOT) not in sys.path:
 from jetson.arducam_split_pipeline import (  # noqa: E402
     DetectionWorker,
     FramePacket,
+    MetadataPublisher,
     RtpNetworkSender,
     SplitPipeline,
     build_pipeline_description,
@@ -84,6 +85,8 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertIn("framerate=30/1", description)
         self.assertNotIn("videorate", description)
         self.assertIn("appsink name=highres_sink", description)
+        self.assertIn("nvvidconv ! video/x-raw,format=BGRx ! videoconvert ! video/x-raw,format=BGR", description)
+        self.assertNotIn("nvvidconv ! video/x-raw,format=BGR,width=1920", description)
         self.assertIn("max-size-buffers=16", description)
         self.assertIn("drop=false", description)
         self.assertIn("rtph264pay name=preview_payloader pt=96", description)
@@ -94,6 +97,41 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertIn("appsink name=network_sink", description)
         self.assertNotIn("udpsink", description)
         self.assertIn("filesink location=\"/tmp/video.mp4\"", description)
+
+    def test_qualification_file_source_is_explicit_and_keeps_split_contract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            video = Path(temporary) / "qualification.mp4"
+            video.write_bytes(b"test fixture path only")
+            args = parse_args([
+                "--host", "100.64.0.10",
+                "--qualification-video", str(video),
+                "--allow-qualification-file-source",
+            ])
+
+            description = build_pipeline_description(args, Path("/tmp/video.mp4"))
+
+        self.assertIn(f'filesrc location="{video.resolve()}"', description)
+        self.assertIn("qtdemux ! h264parse ! avdec_h264", description)
+        self.assertIn("identity name=qualification_clock sync=true", description)
+        self.assertIn("tee name=capture", description)
+        self.assertIn("identity name=preview_identity", description)
+        self.assertIn("rtph264pay name=preview_payloader", description)
+        self.assertNotIn("nvarguscamerasrc", description)
+
+    def test_qualification_file_source_requires_explicit_guard(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            video = Path(temporary) / "qualification.mp4"
+            video.write_bytes(b"test fixture path only")
+            args = parse_args([
+                "--host", "100.64.0.10",
+                "--qualification-video", str(video),
+            ])
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "requires --allow-qualification-file-source",
+            ):
+                build_pipeline_description(args, Path("/tmp/video.mp4"))
 
     def test_broken_thermal_sensor_does_not_stop_health_collection(self):
         broken_sensor = MagicMock()
@@ -226,6 +264,33 @@ class ArducamSplitPipelineTests(unittest.TestCase):
             self.assertEqual(sender.packets_sent, 1)
         finally:
             sender.stop()
+
+    def test_metadata_overlay_drops_oldest_and_keeps_newest(self):
+        publisher = MetadataPublisher("token", 0.5, queue_size=2)
+
+        self.assertTrue(publisher.submit("overlay", "http://overlay", {"frame_id": 1}))
+        self.assertTrue(publisher.submit("overlay", "http://overlay", {"frame_id": 2}))
+
+        _url, payload = publisher.queues["overlay"].get_nowait()
+        metadata = publisher.metadata()
+        self.assertEqual(payload["frame_id"], 2)
+        self.assertEqual(metadata["channels"]["overlay"]["dropped"], 1)
+        self.assertEqual(
+            metadata["channels"]["overlay"]["dropped_reason"],
+            "OVERLAY_DROP_OLDEST_KEEP_NEWEST",
+        )
+
+    def test_metadata_event_backlog_cannot_block_overlay(self):
+        publisher = MetadataPublisher("token", 0.5, queue_size=1)
+
+        self.assertTrue(publisher.submit("event", "http://event", {"frame_id": 1}))
+        self.assertFalse(publisher.submit("event", "http://event", {"frame_id": 2}))
+        self.assertTrue(publisher.submit("overlay", "http://overlay", {"frame_id": 3}))
+
+        metadata = publisher.metadata()
+        self.assertEqual(metadata["channels"]["event"]["dropped"], 1)
+        self.assertEqual(metadata["channels"]["overlay"]["dropped"], 0)
+        self.assertEqual(publisher.queues["overlay"].qsize(), 1)
 
     def test_model_manifest_locks_checkpoint_and_runtime_profile(self):
         with tempfile.TemporaryDirectory() as temporary:

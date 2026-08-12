@@ -16,6 +16,9 @@ qualification evidence and remaining hardware gates are tracked in
 
 ## Local development
 
+The Python backend requires Python 3.10 or newer. The production test suite
+uses `dataclass(slots=True)` and is not supported by Python 3.9.
+
 ```bash
 npm install
 npm run build

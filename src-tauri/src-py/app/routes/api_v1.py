@@ -5,6 +5,7 @@ from app.persistence import Database
 from app.services.mission_planner_adapter import MissionPlannerAdapter, MissionPlannerBridgeError
 from app.services.flight_recorder import FlightRecorder, FlightRecorderError
 from app.services.vision_overlay import VisionOverlayError, VisionOverlayStore
+from app.services.browser_render_metrics import BrowserRenderMetrics, BrowserRenderMetricsError
 from app.services.frame_sync import FrameSyncError, FrameSynchronizer, StreamRegistry
 
 
@@ -13,10 +14,11 @@ _adapter: MissionPlannerAdapter | None = None
 _flight_recorder: FlightRecorder | None = None
 _vision_overlay_store: VisionOverlayStore | None = None
 _database: Database | None = None
+_browser_render_metrics: BrowserRenderMetrics | None = None
 
 
 def init_api_v1_routes(adapter: MissionPlannerAdapter, database: Database | None = None):
-    global _adapter, _flight_recorder, _vision_overlay_store, _database
+    global _adapter, _flight_recorder, _vision_overlay_store, _database, _browser_render_metrics
     _adapter = adapter
     _database = database
     _flight_recorder = FlightRecorder(
@@ -25,6 +27,7 @@ def init_api_v1_routes(adapter: MissionPlannerAdapter, database: Database | None
         synchronizer=FrameSynchronizer(wait_ms=150),
     )
     _vision_overlay_store = VisionOverlayStore()
+    _browser_render_metrics = BrowserRenderMetrics()
 
 
 def _get_adapter():
@@ -43,6 +46,12 @@ def _get_vision_overlay_store():
     if _vision_overlay_store is None:
         raise RuntimeError("Vision overlay store is not initialized")
     return _vision_overlay_store
+
+
+def _get_browser_render_metrics():
+    if _browser_render_metrics is None:
+        raise RuntimeError("Browser render metrics are not initialized")
+    return _browser_render_metrics
 
 
 def _get_database() -> Database:
@@ -111,6 +120,16 @@ def ingest_detection_overlay():
         accepted = _get_flight_recorder().ingest_frame_metadata(payload)
         return jsonify({"ok": True, "accepted": accepted}), 202
     except (FrameSyncError, FlightRecorderError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@api_v1_bp.route("/vision/metrics", methods=["GET", "POST"])
+def vision_metrics():
+    if request.method == "GET":
+        return jsonify({"ok": True, **_get_browser_render_metrics().snapshot()})
+    try:
+        return jsonify({"ok": True, **_get_browser_render_metrics().record(request.get_json(silent=True))}), 202
+    except BrowserRenderMetricsError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
 

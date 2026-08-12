@@ -79,6 +79,7 @@ function CameraPreview() {
       socket.binaryType = "arraybuffer";
       socket.onopen = () => setSocketState("CONNECTED");
       socket.onmessage = async (event) => {
+        const packetReceivedAt = performance.now();
         try {
           const packet = parseVisionEnvelope(event.data);
           const bitmap = await createImageBitmap(new Blob([packet.jpeg], { type: "image/jpeg" }));
@@ -86,6 +87,17 @@ function CameraPreview() {
           bitmapRef.current?.close();
           bitmapRef.current = bitmap;
           setHeader(packet.header);
+          const renderedFrame = packet.header;
+          requestAnimationFrame(() => {
+            apiPost("/api/v1/vision/metrics", {
+              schema_version: renderedFrame.schema_version,
+              mission_id: renderedFrame.mission_id,
+              capture_epoch: renderedFrame.capture_epoch,
+              frame_id: renderedFrame.frame_id,
+              camera_id: renderedFrame.camera_id,
+              receive_to_render_ms: Math.max(0, performance.now() - packetReceivedAt),
+            }).catch(() => {});
+          });
         } catch (error) {
           setSocketState(`PACKET_ERROR: ${String(error)}`);
         }
