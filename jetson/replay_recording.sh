@@ -142,11 +142,25 @@ read_env_value() {
   printf '%s' "$value"
 }
 
+PYTHON_BIN=${JETSON_REPLAY_PYTHON:-}
+if [[ -z "$PYTHON_BIN" ]]; then
+  if [[ -x /media/bengawan/nopal-ssd1/buv-runtime/v03/bin/python ]]; then
+    PYTHON_BIN=/media/bengawan/nopal-ssd1/buv-runtime/v03/bin/python
+  else
+    PYTHON_BIN=$(command -v python3)
+  fi
+fi
+[[ -x "$PYTHON_BIN" ]] || die "Python runtime not found: $PYTHON_BIN"
+
 # systemd receives secrets from a root-only EnvironmentFile. Load only the
 # values needed here and never print them or write them to a log.
 JETSON_INGEST_TOKEN=$(read_env_value JETSON_INGEST_TOKEN)
 export JETSON_INGEST_TOKEN
 [[ -n "$JETSON_INGEST_TOKEN" ]] || die "JETSON_INGEST_TOKEN is empty"
+if [[ -z "${LD_LIBRARY_PATH:-}" ]]; then
+  LD_LIBRARY_PATH=$(read_env_value LD_LIBRARY_PATH)
+  export LD_LIBRARY_PATH
+fi
 if [[ "$RUN_INFERENCE" == true ]]; then
   MODEL_WEIGHTS=$(read_env_value JETSON_MODEL_WEIGHTS)
   MODEL_MANIFEST=$(read_env_value JETSON_MODEL_MANIFEST)
@@ -178,7 +192,7 @@ if [[ -n "$HIGH_WIDTH_OVERRIDE" || -n "$HIGH_HEIGHT_OVERRIDE" ]]; then
   HIGH_HEIGHT=$HIGH_HEIGHT_OVERRIDE
 fi
 
-MISSION_ID="mission-$(python3 -c 'import uuid; print(uuid.uuid4())')"
+MISSION_ID="mission-$("$PYTHON_BIN" -c 'import uuid; print(uuid.uuid4())')"
 REPLAY_DIR="$RECORD_DIR/$MISSION_ID"
 mkdir -p "$RECORD_DIR"
 PIPELINE_LOG="$REPLAY_DIR.pipeline.log"
@@ -207,7 +221,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 PIPELINE_ARGS=(
-  python3 jetson/arducam_split_pipeline.py \
+  "$PYTHON_BIN" jetson/arducam_split_pipeline.py \
   --host "$GROUND_HOST" \
   --port 5000 \
   --qualification-video "$VIDEO" \
@@ -257,7 +271,7 @@ if [[ "$RUN_INFERENCE" == true ]]; then
   echo "[replay] completed; pipeline log=$PIPELINE_LOG"
   exit 0
 elif [[ -n "$METADATA_EPOCH" ]]; then
-  python3 jetson/replay_vision.py \
+  "$PYTHON_BIN" jetson/replay_vision.py \
     "$METADATA_EPOCH" \
     --overlay-url "http://${GROUND_HOST}:5001/api/v1/detection/overlay" \
     --token "$JETSON_INGEST_TOKEN" \
