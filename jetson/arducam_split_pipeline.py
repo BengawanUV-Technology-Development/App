@@ -190,6 +190,21 @@ def build_pipeline_description(
     if not 1 <= eos_timeout_seconds <= 300:
         raise ValueError("eos-timeout-seconds must be between 1 and 300")
 
+    qualification_video = getattr(args, "qualification_video", None)
+    allow_qualification = bool(getattr(args, "allow_qualification_file_source", False))
+    if qualification_video is not None and not allow_qualification:
+        raise ValueError(
+            "--qualification-video requires --allow-qualification-file-source"
+        )
+    if allow_qualification and qualification_video is None:
+        raise ValueError(
+            "--allow-qualification-file-source requires --qualification-video"
+        )
+    if qualification_video is not None:
+        qualification_video = Path(qualification_video).expanduser().resolve()
+        if not qualification_video.is_file():
+            raise ValueError(f"qualification video does not exist: {qualification_video}")
+
     key_int = max(1, round(high_fps))
     network_key_int = max(1, round(network_fps))
     high_fps_caps = fps_caps(high_fps)
@@ -199,20 +214,33 @@ def build_pipeline_description(
     appsink_drop = "drop=false"
     appsink_queue = "queue max-size-buffers=16 max-size-time=0 max-size-bytes=0"
     recovery_file = recovery_file or video_path.with_name(f"{video_path.name}.moov.recovery")
-    return f"""
-nvarguscamerasrc sensor-id={args.sensor_id} wbmode=1 !
+    if qualification_video is None:
+        source = f"""nvarguscamerasrc sensor-id={args.sensor_id} wbmode=1 !
 video/x-raw(memory:NVMM),width={high_width},height={high_height},format=NV12,framerate={high_fps_caps} !
-tee name=capture
+tee name=capture"""
+        record_converter = "nvvidconv"
+        inference_converter = "nvvidconv"
+        preview_converter = "nvvidconv"
+    else:
+        source = f"""filesrc location={_gst_quote(qualification_video)} !
+qtdemux ! h264parse ! avdec_h264 ! videoconvert ! videoscale ! videorate !
+video/x-raw,format=I420,width={high_width},height={high_height},framerate={high_fps_caps} !
+identity name=qualification_clock sync=true !
+tee name=capture"""
+        record_converter = "videoconvert ! videoscale"
+        inference_converter = "videoconvert ! videoscale"
+        preview_converter = "videoconvert ! videoscale"
+    return f"""
+{source}
 capture. ! queue max-size-buffers=8 max-size-time=0 max-size-bytes=0 !
-nvvidconv ! video/x-raw,format=I420,width={high_width},height={high_height} !
+{record_converter} ! video/x-raw,format=I420,width={high_width},height={high_height} !
 x264enc bitrate={args.local_bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max={key_int} bframes=0 !
 h264parse ! mp4mux fragment-duration=1000 fragment-mode=first-moov-then-finalise moov-recovery-file={_gst_quote(recovery_file)} ! filesink location={_gst_quote(video_path)}
 capture. ! {appsink_queue} !
-nvvidconv ! video/x-raw,format=BGRx,width={high_width},height={high_height} !
-videoconvert ! video/x-raw,format=BGR,width={high_width},height={high_height} !
+{inference_converter} ! video/x-raw,format=BGR,width={high_width},height={high_height} !
 appsink name=highres_sink emit-signals=true max-buffers={appsink_buffers} {appsink_drop} sync=false
 capture. ! queue max-size-buffers=4 max-size-time=0 max-size-bytes=0 leaky=downstream !
-nvvidconv ! video/x-raw,format=I420,width={network_width},height={network_height} !
+{preview_converter} ! video/x-raw,format=I420,width={network_width},height={network_height} !
 identity name=preview_identity !
 x264enc bitrate={args.network_bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max={network_key_int} bframes=0 !
 h264parse ! rtph264pay name=preview_payloader pt={args.payload_type} ssrc={args.rtp_ssrc} config-interval=1 mtu=1200 !
@@ -474,83 +502,135 @@ class RtpNetworkSender:
 
 
 class MetadataPublisher:
-    """Bounded HTTP publisher isolated from capture and inference callbacks."""
+    """Independent live-overlay and persistent-event HTTP publishers.
+
+    Live overlay is latency-sensitive and therefore keeps only the newest
+    frame. Persistent detection events use a separate bounded FIFO so a burst
+    of detections can never delay or evict the live overlay.
+    """
 
     def __init__(self, token: str, timeout: float, queue_size: int = 512):
         self.token = token
         self.timeout = timeout
-        self.queue: queue.Queue[tuple[str, str, dict[str, Any]] | None] = queue.Queue(
-            maxsize=queue_size
-        )
-        self.thread: threading.Thread | None = None
-        self.stop_event = threading.Event()
-        self.sent = 0
-        self.errors = 0
-        self.dropped = 0
-        self.last_error: str | None = None
+        self.queues: dict[str, queue.Queue[tuple[str, dict[str, Any]] | None]] = {
+            "overlay": queue.Queue(maxsize=1),
+            "event": queue.Queue(maxsize=queue_size),
+        }
+        self.threads: dict[str, threading.Thread] = {}
+        self.stats: dict[str, dict[str, Any]] = {
+            "overlay": {"sent": 0, "errors": 0, "dropped": 0, "last_error": None},
+            "event": {"sent": 0, "errors": 0, "dropped": 0, "last_error": None},
+        }
         self._last_error_at = 0.0
         self._lock = threading.Lock()
 
     def start(self) -> None:
-        if self.thread and self.thread.is_alive():
+        if any(thread.is_alive() for thread in self.threads.values()):
             return
-        self.stop_event.clear()
-        self.thread = threading.Thread(target=self._run, daemon=True, name="jetson-metadata-publisher")
-        self.thread.start()
+        self.threads = {}
+        for kind, channel in self.queues.items():
+            thread = threading.Thread(
+                target=self._run,
+                args=(kind, channel),
+                daemon=True,
+                name=f"jetson-metadata-{kind}-publisher",
+            )
+            self.threads[kind] = thread
+            thread.start()
 
     def submit(self, kind: str, url: str, payload: dict[str, Any]) -> bool:
         if not url:
             return False
+        if kind not in self.queues:
+            raise ValueError(f"unsupported metadata publisher kind: {kind}")
+        channel = self.queues[kind]
+        if kind == "overlay" and channel.full():
+            try:
+                channel.get_nowait()
+                with self._lock:
+                    self.stats[kind]["dropped"] += 1
+            except queue.Empty:
+                pass
         try:
-            self.queue.put_nowait((kind, url, payload))
+            channel.put_nowait((url, payload))
             return True
         except queue.Full:
             with self._lock:
-                self.dropped += 1
+                self.stats[kind]["dropped"] += 1
             return False
 
     def close(self) -> None:
-        thread = self.thread
-        if not thread:
+        if not self.threads:
             return
-        self.stop_event.set()
-        try:
-            self.queue.put_nowait(None)
-        except queue.Full:
+        # Overlay may discard its stale final item so shutdown is immediate.
+        overlay = self.queues["overlay"]
+        if overlay.full():
             try:
-                self.queue.get_nowait()
+                overlay.get_nowait()
             except queue.Empty:
                 pass
+        overlay.put_nowait(None)
+        # Give the event worker a bounded opportunity to drain. If still full,
+        # evict exactly one event to make room for the shutdown sentinel.
+        events = self.queues["event"]
+        try:
+            events.put(None, timeout=max(1.0, self.timeout * 2))
+        except queue.Full:
             try:
-                self.queue.put_nowait(None)
-            except queue.Full:
+                events.get_nowait()
+                with self._lock:
+                    self.stats["event"]["dropped"] += 1
+                events.put_nowait(None)
+            except (queue.Empty, queue.Full):
                 pass
-        thread.join(timeout=max(3.0, self.timeout * 2))
-        self.thread = None
+        for thread in self.threads.values():
+            thread.join(timeout=max(3.0, self.timeout * 2))
+        self.threads = {}
 
     def metadata(self) -> dict[str, Any]:
         with self._lock:
+            channels = {
+                kind: {
+                    "queue_depth": channel.qsize(),
+                    "queue_capacity": channel.maxsize,
+                    **self.stats[kind],
+                    "dropped_reason": (
+                        "OVERLAY_DROP_OLDEST_KEEP_NEWEST"
+                        if kind == "overlay" and self.stats[kind]["dropped"]
+                        else "EVENT_QUEUE_FULL"
+                        if kind == "event" and self.stats[kind]["dropped"]
+                        else None
+                    ),
+                }
+                for kind, channel in self.queues.items()
+            }
+            sent = sum(channel["sent"] for channel in channels.values())
+            errors = sum(channel["errors"] for channel in channels.values())
+            dropped = sum(channel["dropped"] for channel in channels.values())
             return {
-                "queue_depth": self.queue.qsize(),
-                "queue_capacity": self.queue.maxsize,
-                "sent": self.sent,
-                "errors": self.errors,
-                "dropped": self.dropped,
-                "dropped_reason": "PUBLISH_QUEUE_FULL" if self.dropped else None,
-                "last_error": self.last_error,
+                "queue_depth": sum(channel["queue_depth"] for channel in channels.values()),
+                "queue_capacity": sum(channel["queue_capacity"] for channel in channels.values()),
+                "sent": sent,
+                "errors": errors,
+                "dropped": dropped,
+                "dropped_reason": "CHANNEL_QUEUE_PRESSURE" if dropped else None,
+                "last_error": next(
+                    (channel["last_error"] for channel in channels.values() if channel["last_error"]),
+                    None,
+                ),
+                "channels": channels,
             }
 
-    def _run(self) -> None:
-        while not self.stop_event.is_set():
-            try:
-                item = self.queue.get(timeout=0.5)
-            except queue.Empty:
-                if self.stop_event.is_set():
-                    return
-                continue
+    def _run(
+        self,
+        kind: str,
+        channel: queue.Queue[tuple[str, dict[str, Any]] | None],
+    ) -> None:
+        while True:
+            item = channel.get()
             if item is None:
                 return
-            kind, url, payload = item
+            url, payload = item
             request = Request(
                 url,
                 data=json.dumps(payload).encode("utf-8"),
@@ -565,12 +645,12 @@ class MetadataPublisher:
                     if response.status >= 300:
                         raise RuntimeError(f"{kind} ingest HTTP {response.status}")
                 with self._lock:
-                    self.sent += 1
+                    self.stats[kind]["sent"] += 1
             except (OSError, URLError, RuntimeError) as exc:
                 now = time.monotonic()
                 with self._lock:
-                    self.errors += 1
-                    self.last_error = str(exc)
+                    self.stats[kind]["errors"] += 1
+                    self.stats[kind]["last_error"] = str(exc)
                 if now - self._last_error_at >= 5:
                     print(f"[detector] {kind} ingest unavailable: {exc}", flush=True)
                     self._last_error_at = now
@@ -931,6 +1011,11 @@ class SplitPipeline:
             Gst.init(None)
             description = build_pipeline_description(self.args, self.video_path, self.recovery_file)
             print("[pipeline] high-res recording and low-res RTP branches enabled", flush=True)
+            if self.args.qualification_video is not None:
+                print(
+                    f"[pipeline] qualification file source={self.args.qualification_video}",
+                    flush=True,
+                )
             print(f"[pipeline] local={self.args.high_width}x{self.args.high_height}@{self.args.high_fps:g}", flush=True)
             print(f"[pipeline] network={self.args.network_width}x{self.args.network_height}@{self.args.network_fps:g} -> {self.args.host}:{self.args.port}", flush=True)
             self.pipeline = Gst.parse_launch(description)
@@ -1322,6 +1407,15 @@ class SplitPipeline:
             "camera_id": "arducam",
             "label": self.args.label,
             "status": status,
+            "source": {
+                "kind": "qualification_file"
+                if self.args.qualification_video is not None
+                else "arducam",
+                "path": str(self.args.qualification_video)
+                if self.args.qualification_video is not None
+                else None,
+                "hardware_evidence": self.args.qualification_video is None,
+            },
             "frame_count": self.frame_counter,
             "started_at": utc_iso(self.started_at),
             "ended_at": utc_iso(time.time()) if status in {"COMPLETED", "FAILED"} else None,
@@ -1385,6 +1479,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--payload-type", type=int, default=96)
     parser.add_argument("--rtp-ssrc", type=int, default=uuid.uuid4().int & 0xFFFFFFFF)
     parser.add_argument("--sensor-id", type=int, default=0)
+    parser.add_argument(
+        "--qualification-video",
+        type=Path,
+        default=None,
+        help="Pre-recorded video used only for deterministic synthetic qualification",
+    )
+    parser.add_argument(
+        "--allow-qualification-file-source",
+        action="store_true",
+        help="Explicitly allow non-Arducam input; never valid as hardware evidence",
+    )
     parser.add_argument("--high-width", type=int, default=1920)
     parser.add_argument("--high-height", type=int, default=1080)
     parser.add_argument("--high-fps", type=float, default=30.0)

@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Callable, Iterator
 
 from .frame_sync import FrameSyncError, FrameSynchronizer, RtpIdentityTracker, StreamRegistry
+from .latency_metrics import LatencyMetrics
 
 
 class JetsonVideoError(RuntimeError):
@@ -89,6 +90,7 @@ class JetsonVideoService:
         self._latest_matched = None
         self._preview_version = 0
         self._fps_samples: deque[float] = deque(maxlen=60)
+        self._decode_publish_latency = LatencyMetrics()
         self._identity_by_pts: OrderedDict[int, tuple[object, int]] = OrderedDict()
         self._camera_state = self._empty_state()
 
@@ -123,6 +125,7 @@ class JetsonVideoService:
             "identity_error_count": 0, "metadata_timeout_count": 0,
             "restart_count": 0, "stream_port": None, "payload_type": None,
             "decoder": None, "stream_registration": None,
+            "latency": {"decode_to_ground_publish": LatencyMetrics().snapshot()},
         }
 
     def build_pipeline(self) -> str:
@@ -152,6 +155,9 @@ class JetsonVideoService:
         with self._lock:
             state = dict(self._camera_state)
         state["stream_registration"] = self.stream_registry.latest()
+        state["latency"] = {
+            "decode_to_ground_publish": self._decode_publish_latency.snapshot(),
+        }
         if state["camera_status"] == "RUNNING" and state["last_frame_at_unix"] is not None and time.time() - state["last_frame_at_unix"] > self.frame_timeout_seconds:
             state.update(camera_status="STALE", camera_error=f"No decoded frame received for more than {self.frame_timeout_seconds:g} seconds")
         return state
@@ -165,6 +171,7 @@ class JetsonVideoService:
             self._latest_jpeg = None
             self._preview_version = 0
             self._fps_samples.clear()
+            self._decode_publish_latency.clear()
             self._camera_state = {
                 **self._empty_state(), "camera_status": "STARTING", "expected_fps": self.expected_fps,
                 "width": self.width, "height": self.height, "stream_port": self.port,
@@ -357,6 +364,9 @@ class JetsonVideoService:
             self._latest_jpeg = frame.jpeg
             self._latest_matched = frame
             self._preview_version += 1
+            self._decode_publish_latency.observe(
+                max(0, time.monotonic_ns() - frame.decoded_monotonic_ns) / 1_000_000
+            )
             self._frame_ready.notify_all()
         if self.frame_handler:
             self.frame_handler(frame.jpeg, frame.key.frame_id, now, monotonic_now, self.width, self.height, float(self.status().get("fps") or self.expected_fps))

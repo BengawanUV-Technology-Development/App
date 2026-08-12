@@ -43,7 +43,12 @@ app.register_blueprint(logs_bp)
 
 
 class _WerkzeugPollingFilter(logging.Filter):
-    _QUIET_FRAGMENTS = ("/api/v1/health", "/api/v1/telemetry", "/api/v1/detection/overlay")
+    _QUIET_FRAGMENTS = (
+        "/api/v1/health",
+        "/api/v1/telemetry",
+        "/api/v1/detection/overlay",
+        "/api/v1/vision/metrics",
+    )
 
     def filter(self, record: logging.LogRecord) -> bool:
         return not any(fragment in record.getMessage() for fragment in self._QUIET_FRAGMENTS)
@@ -55,6 +60,7 @@ _QUIET_REQUEST_PATHS = {
     "/api/v1/health",
     "/api/v1/telemetry",
     "/api/v1/detection/overlay",
+    "/api/v1/vision/metrics",
 }
 
 
