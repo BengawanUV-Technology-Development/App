@@ -141,6 +141,52 @@ Results: `COMPLETED`, 559 MP4 frames at 1280×720/30 FPS, 559 rows in each of
 identity misses. The detector is explicitly `DISABLED` in this run, so the
 earlier Epoch 3 remains the inference evidence.
 
+## Fresh automated inference replay — 2026-08-12
+
+The current pipeline was then run with the verified production checkpoint and
+the Jetson CUDA runtime library path enabled. Command profile:
+
+```text
+Ultralytics 8.3.0
+checkpoint: /home/bengawan/yolo11-inference/weights/s-yolov11-baseline-best.pt
+checkpoint SHA-256: dee4c2f026d9058a456f04b723ccc8f5bf5ccfa880f09e88e8dd7169c6120dc0
+device: cuda:0
+imgsz: 640
+confidence: 0.45
+SAHI: disabled
+```
+
+Output:
+
+```text
+/media/bengawan/nopal-ssd1/qualification-recordings/
+  mission-57b9455a-ff14-4f7d-8791-8970a39e2394/epochs/0001/
+```
+
+Automated checks passed:
+
+| Check | Result |
+| --- | ---: |
+| Epoch status | `COMPLETED` |
+| MP4 / frame sidecar rows | 618 / 618 |
+| Detection rows | 190 |
+| Frame IDs | unique and monotonic |
+| Capture FPS | 30.0904 |
+| Inference FPS | 9.1847 |
+| Processed frames / failures | 190 / 0 |
+| RTP packets / drops | 3,630 / 0 |
+| Preview identity misses | 0 |
+| Verified checkpoint | yes |
+
+The command was intentionally stopped after a short run; it is a smoke and
+regression replay, not the 60-minute endurance gate. The queue-one/drop-oldest
+policy is active (`428` frames dropped before inference), while recording and
+RTP remained healthy.
+
+Runtime note: the Jetson Ultralytics import requires the CUDA library path
+containing `libcusparseLt.so.0`. Without that runtime setup, the detector
+fails initialization while capture/recording remains isolated and continues.
+
 Epoch 3 output:
 
 ```text
@@ -187,8 +233,10 @@ distinction preserves the meaning of the decimated inference schedule.
 
 ## Automated checks
 
-- 15 `test_arducam_split_pipeline.py` tests pass on Jetson.
-- The same 15 tests pass on the Ground laptop with Python 3.12.
+- 73 Python tests pass on Jetson Python 3.10.
+- Python compilation and `git diff --check` pass on the canonical laptop
+  checkout as well; its default Python 3.9 cannot import the Python 3.10-only
+  `dataclass(slots=True)` modules.
 - Python compilation and `git diff --check` pass.
 
 Tests cover the file-source guard, preservation of the split/RTP contract,
