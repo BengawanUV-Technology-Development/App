@@ -121,6 +121,26 @@ The temporary Ground backend smoke test also confirmed that `/api/v1/vision/metr
 rejects an unauthenticated POST (`401`), accepts a valid operator metric (`202`),
 and rejects a duplicate canonical identity while preserving the original sample.
 
+## Fresh automated capture-only replay — 2026-08-12
+
+The current pipeline source was also exercised directly for a short, standalone
+file replay using both qualification guard flags. This run intentionally omitted
+`--weights`; it validates capture, recording, sidecars, RTP sender, and identity,
+not YOLO performance.
+
+Output:
+
+```text
+/media/bengawan/nopal-ssd1/qualification-recordings/
+  mission-010b1783-f910-4489-9be8-18d5b40fa9da/epochs/0001/
+```
+
+Results: `COMPLETED`, 559 MP4 frames at 1280×720/30 FPS, 559 rows in each of
+`frames.jsonl`, `telemetry.jsonl`, and `detections.jsonl`, monotonic frame IDs,
+30.1262 capture FPS, 3,351 RTP packets with zero drops, and zero preview
+identity misses. The detector is explicitly `DISABLED` in this run, so the
+earlier Epoch 3 remains the inference evidence.
+
 Epoch 3 output:
 
 ```text
