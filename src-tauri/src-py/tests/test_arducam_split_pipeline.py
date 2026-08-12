@@ -85,6 +85,8 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertIn("framerate=30/1", description)
         self.assertNotIn("videorate", description)
         self.assertIn("appsink name=highres_sink", description)
+        self.assertIn("nvvidconv ! video/x-raw,format=BGRx ! videoconvert ! video/x-raw,format=BGR", description)
+        self.assertNotIn("nvvidconv ! video/x-raw,format=BGR,width=1920", description)
         self.assertIn("max-size-buffers=16", description)
         self.assertIn("drop=false", description)
         self.assertIn("rtph264pay name=preview_payloader pt=96", description)

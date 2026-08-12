@@ -219,7 +219,10 @@ def build_pipeline_description(
 video/x-raw(memory:NVMM),width={high_width},height={high_height},format=NV12,framerate={high_fps_caps} !
 tee name=capture"""
         record_converter = "nvvidconv"
-        inference_converter = "nvvidconv"
+        # Jetson nvvidconv cannot output packed BGR directly. Convert to the
+        # supported BGRx surface first, then use videoconvert for the Python
+        # appsink's packed BGR contract.
+        inference_converter = "nvvidconv ! video/x-raw,format=BGRx ! videoconvert"
         preview_converter = "nvvidconv"
     else:
         source = f"""filesrc location={_gst_quote(qualification_video)} !
