@@ -100,6 +100,27 @@ browser receive-to-render stage and exact identity coverage. Capture-to-render
 qualification still requires a target run that records the resulting metrics
 alongside the Ground and Jetson evidence.
 
+## Automated replay artifact validation — 2026-08-12
+
+The stored Epoch 3 artifacts were checked by an automated validator without
+rerunning the detector:
+
+| Check | Result |
+| --- | ---: |
+| Epoch status | `COMPLETED` |
+| MP4 frames / sidecar frames | 1,881 / 1,881 |
+| Frame identity sequence | unique, monotonic `0..1880` |
+| Detection rows | 678, all refer to captured frames |
+| Detection IDs | unique |
+| Capture FPS | 30.0285 |
+| Inference FPS / failures | 10.2968 / 0 |
+| RTP packets / drops | 10,820 / 0 |
+| Preview identity misses | 0 |
+
+The temporary Ground backend smoke test also confirmed that `/api/v1/vision/metrics`
+rejects an unauthenticated POST (`401`), accepts a valid operator metric (`202`),
+and rejects a duplicate canonical identity while preserving the original sample.
+
 Epoch 3 output:
 
 ```text
