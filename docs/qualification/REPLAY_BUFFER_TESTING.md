@@ -46,17 +46,26 @@ the laptop target `100.114.81.87` by default. Override it with
 
 For a standalone video without an inference sidecar, such as
 `/home/bengawan/Documents/object_detection_footage_dari_om_buana/video_tf_09082026.mp4`,
-run video-only replay:
+run YOLO inference directly from the video and publish the live overlay:
 
 ```bash
 jetson/replay_recording.sh \
-  /home/bengawan/Documents/object_detection_footage_dari_om_buana/video_tf_09082026.mp4
+  /home/bengawan/Documents/object_detection_footage_dari_om_buana/video_tf_09082026.mp4 \
+  --inference \
+  --high-width 1920 \
+  --high-height 1080
 ```
 
-This sends the video/RTP preview but does not publish bbox metadata. To test
-the buffer with metadata from another recording, add
+The launcher loads the configured verified model from the Jetson systemd
+environment, runs inference on the video, and sends each exact frame result to
+the live Ground overlay endpoint. To test the buffer with metadata from
+another recording instead of rerunning YOLO, add
 `--metadata-epoch /path/to/epoch-0001`; the metadata is remapped to the fresh
 mission identity generated for the video replay.
+
+The source is 3840×2160. The example downsizes the inference branch to
+1920×1080 to reduce Jetson memory and conversion load; omit the two override
+options if native 4K inference is specifically being tested.
 
 The explicit two-terminal form below remains useful for debugging:
 
