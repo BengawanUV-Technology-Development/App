@@ -4,17 +4,22 @@ set -Eeuo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  jetson/replay_recording.sh EPOCH_DIR [options]
+  jetson/replay_recording.sh SOURCE [options]
+
+SOURCE may be an epoch directory or a standalone video file. A standalone
+video runs video-only unless --metadata-epoch is supplied.
 
 Options:
   --delay-ms N       Artificial metadata delay; default 0
   --speed N          Replay speed multiplier; default 1
   --ground-host IP   Ground laptop Tailscale IP; default 100.114.81.87
+  --metadata-epoch DIR
+                     Optional epoch directory containing detections.jsonl
   --record-dir DIR   Temporary output directory; default /tmp/buv-replay
   --env-file FILE    Root environment file; default /etc/buv/jetson-recording-v03.env
   -h, --help         Show this help
 
-EPOCH_DIR must contain video.mp4 and detections.jsonl.
+An epoch directory must contain video.mp4 and detections.jsonl.
 EOF
 }
 
@@ -27,12 +32,8 @@ if [[ $# -eq 0 ]]; then
   usage >&2
   exit 2
 fi
-if [[ "$1" == "-h" || "$1" == "--help" ]]; then
-  usage
-  exit 0
-fi
-EPOCH_DIR=$(realpath "$1")
-shift
+SOURCE=""
+METADATA_EPOCH=""
 DELAY_MS=0
 SPEED=1
 GROUND_HOST=${REPLAY_GROUND_HOST:-100.114.81.87}
@@ -41,6 +42,16 @@ ENV_FILE=${JETSON_REPLAY_ENV_FILE:-/etc/buv/jetson-recording-v03.env}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --video)
+      [[ $# -ge 2 ]] || die "--video requires a file path"
+      SOURCE=$2
+      shift 2
+      ;;
+    --metadata-epoch)
+      [[ $# -ge 2 ]] || die "--metadata-epoch requires a directory"
+      METADATA_EPOCH=$2
+      shift 2
+      ;;
     --delay-ms)
       [[ $# -ge 2 ]] || die "--delay-ms requires a value"
       DELAY_MS=$2
@@ -71,15 +82,32 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      die "unknown option: $1"
+      [[ -z "$SOURCE" ]] || die "unexpected argument: $1"
+      SOURCE=$1
+      shift
       ;;
   esac
 done
 
-VIDEO="$EPOCH_DIR/video.mp4"
-DETECTIONS="$EPOCH_DIR/detections.jsonl"
-[[ -f "$VIDEO" ]] || die "video.mp4 not found in $EPOCH_DIR"
-[[ -f "$DETECTIONS" ]] || die "detections.jsonl not found in $EPOCH_DIR"
+[[ -n "$SOURCE" ]] || { usage >&2; exit 2; }
+SOURCE=$(realpath "$SOURCE")
+if [[ -d "$SOURCE" ]]; then
+  EPOCH_DIR="$SOURCE"
+  VIDEO="$EPOCH_DIR/video.mp4"
+  [[ -z "$METADATA_EPOCH" ]] || die "--metadata-epoch is unnecessary with an epoch directory"
+  METADATA_EPOCH="$EPOCH_DIR"
+else
+  [[ -f "$SOURCE" ]] || die "source does not exist: $SOURCE"
+  VIDEO="$SOURCE"
+  if [[ -n "$METADATA_EPOCH" ]]; then
+    METADATA_EPOCH=$(realpath "$METADATA_EPOCH")
+  fi
+fi
+
+if [[ -n "$METADATA_EPOCH" ]]; then
+  DETECTIONS="$METADATA_EPOCH/detections.jsonl"
+  [[ -f "$DETECTIONS" ]] || die "detections.jsonl not found in $METADATA_EPOCH"
+fi
 
 # systemd receives this secret from a root-only EnvironmentFile. Load only the
 # one value needed here and never print it or write it to a log.
@@ -114,6 +142,11 @@ PIPELINE_LOG="$REPLAY_DIR.pipeline.log"
 echo "[replay] source=$VIDEO"
 echo "[replay] resolution=${HIGH_WIDTH}x${HIGH_HEIGHT} ground=${GROUND_HOST}:5000 delay=${DELAY_MS}ms speed=${SPEED}x"
 echo "[replay] mission=$MISSION_ID"
+if [[ -n "$METADATA_EPOCH" ]]; then
+  echo "[replay] metadata=$METADATA_EPOCH"
+else
+  echo "[replay] metadata=disabled (video-only)"
+fi
 
 cleanup() {
   status=$?
@@ -155,14 +188,22 @@ kill -0 "$PIPELINE_PID" 2>/dev/null || {
   die "video replay pipeline exited during startup"
 }
 
-python3 jetson/replay_vision.py \
-  "$EPOCH_DIR" \
-  --overlay-url "http://${GROUND_HOST}:5001/api/v1/detection/overlay" \
-  --token "$JETSON_INGEST_TOKEN" \
-  --mission-id "$MISSION_ID" \
-  --capture-epoch 1 \
-  --delay-ms "$DELAY_MS" \
-  --speed "$SPEED"
+if [[ -n "$METADATA_EPOCH" ]]; then
+  python3 jetson/replay_vision.py \
+    "$METADATA_EPOCH" \
+    --overlay-url "http://${GROUND_HOST}:5001/api/v1/detection/overlay" \
+    --token "$JETSON_INGEST_TOKEN" \
+    --mission-id "$MISSION_ID" \
+    --capture-epoch 1 \
+    --delay-ms "$DELAY_MS" \
+    --speed "$SPEED"
+else
+  echo "[replay] running video-only; no bbox metadata will be published"
+  wait "$PIPELINE_PID"
+  PIPELINE_PID=
+  echo "[replay] completed; pipeline log=$PIPELINE_LOG"
+  exit 0
+fi
 
 wait "$PIPELINE_PID"
 PIPELINE_PID=

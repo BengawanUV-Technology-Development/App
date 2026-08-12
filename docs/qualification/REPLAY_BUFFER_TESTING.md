@@ -44,6 +44,20 @@ Repeat with `--delay-ms 0`, `50`, `150`, `200`, and `300`. The launcher uses
 the laptop target `100.114.81.87` by default. Override it with
 `--ground-host` when needed.
 
+For a standalone video without an inference sidecar, such as
+`/home/bengawan/Documents/object_detection_footage_dari_om_buana/video_tf_09082026.mp4`,
+run video-only replay:
+
+```bash
+jetson/replay_recording.sh \
+  /home/bengawan/Documents/object_detection_footage_dari_om_buana/video_tf_09082026.mp4
+```
+
+This sends the video/RTP preview but does not publish bbox metadata. To test
+the buffer with metadata from another recording, add
+`--metadata-epoch /path/to/epoch-0001`; the metadata is remapped to the fresh
+mission identity generated for the video replay.
+
 The explicit two-terminal form below remains useful for debugging:
 
 ```bash
