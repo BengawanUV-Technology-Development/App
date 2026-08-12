@@ -173,8 +173,8 @@ berada di Jetson:
 
 `video.mp4` adalah cabang high-res B0249 yang sama dengan input YOLO/SAHI.
 Jika ARKMICRO EasyCAP terhubung dan dikonfigurasi, `video_analog.mkv` merekam
-output switcher analog secara paralel sebagai MJPEG passthrough tanpa encoder
-tambahan; isi RGB/night/thermal mengikuti pilihan RC pilot.
+output switcher analog secara paralel sebagai MJPEG dengan timestamp yang
+dinormalisasi; isi RGB/night/thermal mengikuti pilihan RC pilot.
 `preview-events.jsonl` mencatat pilihan preview web digital/analog;
 `telemetry.jsonl` berisi snapshot telemetry read-only yang dicocokkan ke
 `frame_id` dan PTS. Pada mode capture-only, `detections.jsonl` tetap berisi
