@@ -685,9 +685,35 @@ class RecordingController:
                 self._signal_and_wait(pid, signal.SIGTERM, 10)
                 if self._pid_is_alive(pid):
                     self._signal_and_wait(pid, signal.SIGKILL, 10)
+            self._launch_postflight_snapshots()
             with self._lock:
                 self._ended_at = self._ended_at or time.time()
                 return self._state_locked()
+
+    def _launch_postflight_snapshots(self) -> None:
+        """Fire-and-forget: generate the hover-preview snapshots + manifest
+        for the epoch that just finished, in the background. Never block or
+        fail the stop() response on this -- it's a convenience feature, not
+        part of the recording contract. See
+        docs/post-flight-detection-snapshots.md."""
+
+        if not self._session_dir or not self._capture_epoch:
+            return
+        epoch_dir = self._session_dir / "epochs" / f"{self._capture_epoch:04d}"
+        script = self.config.pipeline_script.with_name("generate_detection_snapshots.py")
+        if not script.is_file():
+            return
+        try:
+            subprocess.Popen(
+                [sys.executable, str(script), str(epoch_dir)],
+                cwd=str(script.parent),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            print(f"[recording-agent] could not launch post-flight snapshot generation: {exc}", flush=True)
 
     def _signal_and_wait(self, pid: int, sig: signal.Signals, timeout: float) -> None:
         try:
