@@ -232,14 +232,27 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
           <Badge tone={telemetry.armed ? "danger" : "success"}>{telemetry.armed ? "ARMED" : "SAFE"}</Badge>
         </div>
 
+        {/* ── Read-only notice ──────────────────────────────────────────── */}
+        <div className="readonly-command-notice" title="Perintah dinonaktifkan sementara. Sumber telemetri: UDP mirror (read-only).">
+          <span className="readonly-icon">🔒</span>
+          <span>Read-only &mdash; commands disabled</span>
+        </div>
+
         <div className="side-actions primary-actions">
           <ArmDisarmButton
             isArmed={Boolean(telemetry.armed)}
             isConnected={Boolean(health.connected)}
             onArm={() => runCommand("/api/v1/commands/arm", "arm")}
             onDisarm={() => runCommand("/api/v1/commands/disarm", "disarm")}
+            readOnly
           />
-          <button type="button" className="mission-start-button" onClick={startMission} disabled={!health.connected || missionCommand.isLoading}>
+          <button
+            type="button"
+            className="mission-start-button"
+            onClick={startMission}
+            disabled
+            title="Command dinonaktifkan – mode read-only (UDP mirror)"
+          >
             START AUTO
           </button>
         </div>
@@ -264,7 +277,12 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
           <div className="advanced-controls-body">
             <div className="side-section">
               <div className="side-title">Flight Modes</div>
-              <FlightModeGrid currentMode={telemetry.flight_mode} isConnected={Boolean(health.connected)} onSetMode={setFlightMode} />
+              <FlightModeGrid
+                currentMode={telemetry.flight_mode}
+                isConnected={Boolean(health.connected)}
+                onSetMode={setFlightMode}
+                readOnly
+              />
             </div>
             <div className="mission-precheck-row">
               {missionPrecheck.map((check) => (
@@ -282,6 +300,7 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
                 isConnected={Boolean(health.connected)}
                 isArmed={Boolean(telemetry.armed)}
                 onReboot={() => runCommand("/api/v1/commands/reboot", "reboot FC")}
+                readOnly
               />
             </div>
             <div className="mission-setwp-row">
@@ -303,10 +322,20 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
                   })
                 )}
               </select>
-              <button type="button" onClick={() => setCurrentWaypoint(selectedWaypointSeq)} disabled={!health.connected || missionCommand.isLoading}>
+              <button
+                type="button"
+                onClick={() => setCurrentWaypoint(selectedWaypointSeq)}
+                disabled
+                title="Command dinonaktifkan – mode read-only (UDP mirror)"
+              >
                 SET WP
               </button>
-              <button type="button" onClick={() => setCurrentWaypoint(1, "restart WP1")} disabled={!health.connected || missionCommand.isLoading || Number(mission.count || 0) <= 1}>
+              <button
+                type="button"
+                onClick={() => setCurrentWaypoint(1, "restart WP1")}
+                disabled
+                title="Command dinonaktifkan – mode read-only (UDP mirror)"
+              >
                 RESTART WP1
               </button>
             </div>

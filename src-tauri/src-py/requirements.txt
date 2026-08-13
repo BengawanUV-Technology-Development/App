@@ -16,6 +16,10 @@ flasgger==0.9.7.1
 google-genai==2.14.0
 python-dotenv==1.2.2
 
+# MAVLink middleware worker – decodes raw MAVLink stream dari UDP mirror
+# (Mission Planner MAVLink Mirror → udp:0.0.0.0:14551)
+pymavlink>=2.4.41
+
 # JPEG decode/MP4 recording and legacy EasyCAP support. Jetson UDP ingest uses
 # the system GStreamer executable, not OpenCV's GStreamer backend.
 opencv-python==4.12.0.88
