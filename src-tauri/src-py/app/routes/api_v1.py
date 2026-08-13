@@ -27,7 +27,7 @@ POSTFLIGHT_SNAPSHOT_DIR = Path(
 ).expanduser()
 
 api_v1_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
-_adapter: MissionPlannerAdapter | None = None
+_adapter = None  # MavlinkUdpAdapter (or legacy MissionPlannerAdapter) – duck-typed
 _flight_recorder: FlightRecorder | None = None
 _vision_overlay_store: VisionOverlayStore | None = None
 _database: Database | None = None
