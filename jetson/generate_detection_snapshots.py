@@ -22,7 +22,9 @@ already produces (see SplitPipeline in arducam_split_pipeline.py).
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -30,6 +32,7 @@ from typing import Any, Iterator
 
 import cv2
 import numpy as np
+import requests
 
 from coordinate_estimator import CameraCalibration, estimate_target_latlon
 
@@ -117,7 +120,36 @@ def _draw_bbox(jpeg_bytes: bytes, bbox_normalized_xyxy: list[float], label: str)
     return encoded.tobytes() if success else jpeg_bytes
 
 
-def generate(epoch_dir: Path, min_interval_seconds: float) -> Path:
+def _default_ground_url() -> str | None:
+    host = os.getenv("JETSON_GCS_HOST", "").strip()
+    if not host:
+        return None
+    port = os.getenv("JETSON_GCS_API_PORT", "5001").strip()
+    return f"http://{host}:{port}/api/v1/postflight/detections"
+
+
+def _send_to_ground(
+    session: requests.Session, ground_url: str, token: str, record: dict[str, Any], snapshot_jpeg: bytes,
+) -> bool:
+    payload = {**record, "snapshot_jpeg_base64": base64.b64encode(snapshot_jpeg).decode("ascii")}
+    try:
+        response = session.post(
+            ground_url, json=payload,
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        if response.status_code >= 300:
+            print(f"[snapshot] ground rejected {record['detection_id']}: HTTP {response.status_code} {response.text[:200]}", file=sys.stderr, flush=True)
+            return False
+        return True
+    except requests.RequestException as exc:
+        print(f"[snapshot] failed to send {record['detection_id']} to ground: {exc}", file=sys.stderr, flush=True)
+        return False
+
+
+def generate(
+    epoch_dir: Path, min_interval_seconds: float, *, ground_url: str | None = None, ingest_token: str | None = None,
+) -> Path:
     detections_path = epoch_dir / "detections.jsonl"
     telemetry_path = epoch_dir / "telemetry.jsonl"
     video_path = epoch_dir / "video.mp4"
@@ -131,8 +163,12 @@ def generate(epoch_dir: Path, min_interval_seconds: float) -> Path:
 
     telemetry_by_frame = _load_telemetry_by_frame_id(telemetry_path)
     calibration = CameraCalibration()
+    upload_session = requests.Session() if (ground_url and ingest_token) else None
+    if (ground_url and not ingest_token) or (ingest_token and not ground_url):
+        print("[snapshot] both --ground-url and --ingest-token are required to upload; skipping upload", file=sys.stderr, flush=True)
 
     written = 0
+    uploaded = 0
     skipped_interval = 0
     last_written_seconds: float | None = None
     with manifest_path.open("w", encoding="utf-8") as manifest_file:
@@ -175,23 +211,29 @@ def generate(epoch_dir: Path, min_interval_seconds: float) -> Path:
                     continue
                 snapshot_filename = f"{detection_id}.jpg"
                 (snapshots_dir / snapshot_filename).write_bytes(snapshot_jpeg)
-                manifest_file.write(json.dumps({
+                record = {
                     "detection_id": detection_id,
+                    "mission_id": row.get("mission_id"),
+                    "capture_epoch": row.get("capture_epoch"),
                     "frame_id": row.get("frame_id"),
                     "capture_utc_ns": row.get("capture_utc_ns"),
                     "class": detection.get("class"),
                     "confidence": detection.get("confidence"),
                     "bbox_normalized_xyxy": bbox,
                     "coordinate": coordinate,
-                    "snapshot_file": f"snapshots/{snapshot_filename}",
-                }, separators=(",", ":")) + "\n")
+                }
+                manifest_file.write(json.dumps(
+                    {**record, "snapshot_file": f"snapshots/{snapshot_filename}"}, separators=(",", ":"),
+                ) + "\n")
                 written += 1
                 wrote_any = True
+                if upload_session is not None and _send_to_ground(upload_session, ground_url, ingest_token, record, snapshot_jpeg):
+                    uploaded += 1
             if wrote_any:
                 last_written_seconds = seconds
 
     print(
-        f"[snapshot] wrote {written} detection snapshot(s), "
+        f"[snapshot] wrote {written} detection snapshot(s) ({uploaded} uploaded to ground), "
         f"skipped {skipped_interval} by min-interval, manifest={manifest_path}",
         flush=True,
     )
@@ -205,8 +247,23 @@ def main() -> int:
         "--min-interval-seconds", type=float, default=2.0,
         help="Skip generating a new snapshot until at least this much video time has passed since the last one (default 2.0)",
     )
+    parser.add_argument(
+        "--ground-url", default=None,
+        help="POST target for each snapshot (default: derived from JETSON_GCS_HOST/JETSON_GCS_API_PORT, "
+        "same as the live pipeline's other ground endpoints)",
+    )
+    parser.add_argument(
+        "--ingest-token", default=None,
+        help="Bearer token for --ground-url (default: JETSON_INGEST_TOKEN env var)",
+    )
+    parser.add_argument(
+        "--no-upload", action="store_true",
+        help="Generate the manifest+snapshots locally only, never attempt to send them to ground",
+    )
     args = parser.parse_args()
-    generate(args.epoch_dir.resolve(), args.min_interval_seconds)
+    ground_url = None if args.no_upload else (args.ground_url or _default_ground_url())
+    ingest_token = None if args.no_upload else (args.ingest_token or os.getenv("JETSON_INGEST_TOKEN", "").strip() or None)
+    generate(args.epoch_dir.resolve(), args.min_interval_seconds, ground_url=ground_url, ingest_token=ingest_token)
     return 0
 
 

@@ -89,6 +89,21 @@ CREATE TABLE IF NOT EXISTS reports (
     created_at_ns INTEGER NOT NULL,
     updated_at_ns INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS postflight_detections (
+    detection_id TEXT PRIMARY KEY,
+    mission_id TEXT NOT NULL,
+    capture_epoch INTEGER NOT NULL,
+    frame_id INTEGER NOT NULL,
+    class TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    bbox_json TEXT NOT NULL,
+    coordinate_json TEXT NOT NULL,
+    capture_utc_ns INTEGER,
+    snapshot_path TEXT NOT NULL,
+    received_at_ns INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS postflight_detections_mission_idx
+ON postflight_detections(mission_id, capture_epoch);
 """
 
 
@@ -169,6 +184,55 @@ class Database:
                 ),
             )
         return cursor.rowcount == 1
+
+    def insert_postflight_detection(self, record: dict[str, Any], snapshot_path: str) -> bool:
+        """record comes from generate_detection_snapshots.py's manifest.jsonl
+        (see docs/post-flight-detection-snapshots.md); snapshot_path is
+        where the caller already saved the jpeg on disk."""
+        with self._lock, self.connect() as connection:
+            cursor = connection.execute(
+                "INSERT OR IGNORE INTO postflight_detections("
+                "detection_id,mission_id,capture_epoch,frame_id,class,confidence,"
+                "bbox_json,coordinate_json,capture_utc_ns,snapshot_path,received_at_ns"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    record["detection_id"], record["mission_id"], record["capture_epoch"], record["frame_id"],
+                    record["class"], record["confidence"],
+                    json.dumps(record["bbox_normalized_xyxy"], separators=(",", ":")),
+                    json.dumps(record["coordinate"], separators=(",", ":")),
+                    record.get("capture_utc_ns"), snapshot_path, time.time_ns(),
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def list_postflight_detections(self, mission_id: str | None = None) -> list[dict[str, Any]]:
+        query = "SELECT * FROM postflight_detections"
+        params: tuple[Any, ...] = ()
+        if mission_id is not None:
+            query += " WHERE mission_id=?"
+            params = (mission_id,)
+        query += " ORDER BY received_at_ns DESC"
+        with self.connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+        results = []
+        for row in rows:
+            result = dict(row)
+            result["bbox_normalized_xyxy"] = json.loads(result.pop("bbox_json"))
+            result["coordinate"] = json.loads(result.pop("coordinate_json"))
+            results.append(result)
+        return results
+
+    def get_postflight_detection(self, detection_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM postflight_detections WHERE detection_id=?", (detection_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["bbox_normalized_xyxy"] = json.loads(result.pop("bbox_json"))
+        result["coordinate"] = json.loads(result.pop("coordinate_json"))
+        return result
 
     def create_command(self, command_id: str, command_type: str, operator_session: str, request_payload: dict[str, Any]) -> bool:
         now = time.time_ns()

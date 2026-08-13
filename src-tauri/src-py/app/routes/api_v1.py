@@ -1,6 +1,12 @@
-from flask import Blueprint, Response, jsonify, request
+import base64
+import binascii
+import os
+import uuid
+from pathlib import Path
 
-from app.contracts import ContractError, validate_detection_event
+from flask import Blueprint, Response, jsonify, request, send_file
+
+from app.contracts import ContractError, validate_detection_event, validate_normalized_xyxy
 from app.persistence import Database
 from app.services.mission_planner_adapter import MissionPlannerAdapter, MissionPlannerBridgeError
 from app.services.flight_recorder import FlightRecorder, FlightRecorderError
@@ -8,6 +14,16 @@ from app.services.vision_overlay import VisionOverlayError, VisionOverlayStore
 from app.services.browser_render_metrics import BrowserRenderMetrics, BrowserRenderMetricsError
 from app.services.frame_sync import FrameSyncError, FrameSynchronizer, StreamRegistry
 
+
+# Where jetson/generate_detection_snapshots.py's jpegs land once ingested
+# (see docs/post-flight-detection-snapshots.md). Same runtime/ convention
+# as BUV_DATABASE_PATH in main.py.
+POSTFLIGHT_SNAPSHOT_DIR = Path(
+    os.getenv(
+        "BUV_POSTFLIGHT_SNAPSHOT_DIR",
+        str(Path(__file__).resolve().parent.parent.parent / "runtime" / "postflight_snapshots"),
+    )
+).expanduser()
 
 api_v1_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 _adapter: MissionPlannerAdapter | None = None
@@ -351,3 +367,84 @@ def ingest_detection():
         "detection_id": normalized["detection_id"],
         "reporting_state": "PENDING_BATCH_9",
     }), 202 if created else 200
+
+
+def _postflight_snapshot_path(detection_id: str) -> Path:
+    # detection_id is a UUID validated below, never used to build a path
+    # from unsanitized input.
+    return POSTFLIGHT_SNAPSHOT_DIR / f"{detection_id}.jpg"
+
+
+@api_v1_bp.route("/postflight/detections", methods=["POST"])
+def ingest_postflight_detection():
+    """Receive one hover-preview snapshot from
+    jetson/generate_detection_snapshots.py (see
+    docs/post-flight-detection-snapshots.md) -- a manifest row plus its
+    already-cropped, already-bbox-drawn jpeg, base64-encoded."""
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "request body must be a JSON object"}), 400
+    try:
+        detection_id = str(uuid.UUID(str(payload.get("detection_id"))))
+        mission_id = str(payload["mission_id"])
+        if not mission_id.startswith("mission-"):
+            raise ContractError("mission_id must start with 'mission-'")
+        capture_epoch = int(payload["capture_epoch"])
+        frame_id = int(payload["frame_id"])
+        label = payload.get("class")
+        if not isinstance(label, str) or not label.strip():
+            raise ContractError("class must be a non-empty string")
+        confidence = payload.get("confidence")
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+            raise ContractError("confidence must be between 0 and 1")
+        bbox = validate_normalized_xyxy(payload.get("bbox_normalized_xyxy"))
+        coordinate = payload.get("coordinate")
+        if not isinstance(coordinate, dict) or "status" not in coordinate:
+            raise ContractError("coordinate must be a dict with a status")
+        capture_utc_ns = payload.get("capture_utc_ns")
+        snapshot_b64 = payload.get("snapshot_jpeg_base64")
+        if not isinstance(snapshot_b64, str) or not snapshot_b64:
+            raise ContractError("snapshot_jpeg_base64 is required")
+        jpeg_bytes = base64.b64decode(snapshot_b64, validate=True)
+        if not (jpeg_bytes.startswith(b"\xff\xd8") and jpeg_bytes.endswith(b"\xff\xd9")):
+            raise ContractError("snapshot_jpeg_base64 does not decode to a JPEG")
+    except (KeyError, TypeError, ValueError, ContractError, binascii.Error) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    POSTFLIGHT_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    snapshot_path = _postflight_snapshot_path(detection_id)
+    snapshot_path.write_bytes(jpeg_bytes)
+    created = _get_database().insert_postflight_detection(
+        {
+            "detection_id": detection_id, "mission_id": mission_id, "capture_epoch": capture_epoch,
+            "frame_id": frame_id, "class": label.strip(), "confidence": float(confidence),
+            "bbox_normalized_xyxy": list(bbox), "coordinate": coordinate, "capture_utc_ns": capture_utc_ns,
+        },
+        str(snapshot_path),
+    )
+    return jsonify({"ok": True, "accepted": created, "duplicate": not created, "detection_id": detection_id}), 202 if created else 200
+
+
+@api_v1_bp.route("/postflight/detections", methods=["GET"])
+def list_postflight_detections():
+    """Recent post-flight detections for the map's target pins. Never
+    includes the jpeg itself -- fetch /postflight/detections/<id>/snapshot
+    on hover instead, so this list stays light."""
+
+    mission_id = request.args.get("mission_id")
+    records = _get_database().list_postflight_detections(mission_id=mission_id)
+    for record in records:
+        record.pop("snapshot_path", None)
+    return jsonify({"ok": True, "detections": records})
+
+
+@api_v1_bp.route("/postflight/detections/<detection_id>/snapshot", methods=["GET"])
+def postflight_detection_snapshot(detection_id: str):
+    record = _get_database().get_postflight_detection(detection_id)
+    if record is None:
+        return jsonify({"ok": False, "error": "unknown detection_id"}), 404
+    snapshot_path = Path(record["snapshot_path"])
+    if not snapshot_path.is_file():
+        return jsonify({"ok": False, "error": "snapshot file is missing on disk"}), 404
+    return send_file(snapshot_path, mimetype="image/jpeg", max_age=3600)

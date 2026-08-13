@@ -39,6 +39,7 @@ class BearerAuthenticator:
             "/api/v1/detection/ingest",
             "/api/v1/stream/register",
             "/api/v1/ingest/health",
+            "/api/v1/postflight/detections",
         }
     )
     OPERATOR_SOCKET_PATHS = frozenset({"/api/v1/events", "/api/v1/vision/ws"})
