@@ -21,7 +21,9 @@ python-dotenv==1.2.2
 opencv-python==4.12.0.88
 
 # Ray-to-ground-plane target coordinate estimation (app/services/coordinate_estimator.py).
-numpy==1.26.4
+# Unpinned: opencv-python already pulls in a compatible numpy transitively,
+# and pinning to a specific version here fights that resolution.
+numpy>=1.26
 
 # Jetson RTP/UDP video receiver (app/services/jetson_video_service.py) binds
 # to GStreamer through GObject introspection ("import gi"). These wheels only
