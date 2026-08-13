@@ -240,9 +240,19 @@ def build_pipeline_description(
     # every other branch too, which throttled the whole pipeline (including
     # the network preview branch) down to inference speed. leaky=downstream
     # lets a slow inference branch drop its own frames instead.
-    appsink_buffers = 16
-    appsink_drop = "drop=false"
-    appsink_queue = "queue max-size-buffers=16 max-size-time=0 max-size-bytes=0 leaky=downstream"
+    # A deep queue here doesn't protect anything (identity is already
+    # captured upstream, and DetectionWorker's own size-1 queue already
+    # keeps only the latest submitted frame) -- it only adds latency, since
+    # every buffer that does survive leaky-dropping has to wait behind
+    # whatever's ahead of it in this queue for the color-space conversion
+    # below. Measured end to end: with max-size-buffers=16 here, frames
+    # were sitting 600-700ms before DetectionWorker ever saw them, which
+    # alone blew the ground-side sync window. A depth of 1-2 keeps only the
+    # most recent candidate in flight, matching the "always want the
+    # latest" design already used downstream.
+    appsink_buffers = 2
+    appsink_drop = "drop=true"
+    appsink_queue = "queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream"
     recovery_file = recovery_file or video_path.with_name(f"{video_path.name}.moov.recovery")
     if qualification_video is None:
         source = f"""nvarguscamerasrc sensor-id={args.sensor_id} wbmode=1 !
@@ -551,10 +561,11 @@ class MetadataPublisher:
         }
         self.threads: dict[str, threading.Thread] = {}
         self.stats: dict[str, dict[str, Any]] = {
-            "overlay": {"sent": 0, "errors": 0, "dropped": 0, "last_error": None},
-            "event": {"sent": 0, "errors": 0, "dropped": 0, "last_error": None},
+            "overlay": {"sent": 0, "errors": 0, "dropped": 0, "last_error": None, "last_latency_ms": None},
+            "event": {"sent": 0, "errors": 0, "dropped": 0, "last_error": None, "last_latency_ms": None},
         }
         self._last_error_at = 0.0
+        self._last_latency_log_at = 0.0
         self._lock = threading.Lock()
 
     def start(self) -> None:
@@ -685,8 +696,28 @@ class MetadataPublisher:
                 response = session.post(url, json=payload, headers=headers, timeout=self.timeout)
                 if response.status_code >= 300:
                     raise RuntimeError(f"{kind} ingest HTTP {response.status_code}")
+                # capture_monotonic_ns is the Jetson's own clock, set once at
+                # capture in _on_source_buffer, so comparing it to the
+                # Jetson's own clock again right here needs no cross-machine
+                # time sync: it is the true elapsed time from "frame
+                # captured" to "ground has this POST's response", covering
+                # inference queueing + inference compute + the HTTP round
+                # trip together, which decode_to_ground_publish on the
+                # ground side cannot show once most samples are hitting the
+                # wait_ms ceiling.
+                capture_monotonic_ns = payload.get("capture_monotonic_ns")
+                latency_ms = (
+                    (time.monotonic_ns() - capture_monotonic_ns) / 1_000_000
+                    if capture_monotonic_ns
+                    else None
+                )
+                now_log = time.monotonic()
                 with self._lock:
                     self.stats[kind]["sent"] += 1
+                    self.stats[kind]["last_latency_ms"] = latency_ms
+                if latency_ms is not None and now_log - self._last_latency_log_at >= 2:
+                    print(f"[detector] {kind} capture-to-ack latency: {latency_ms:.1f}ms", flush=True)
+                    self._last_latency_log_at = now_log
                 consecutive_failures = 0
                 if was_failing:
                     print(f"[detector] {utc_iso(time.time())} {kind} ingest recovered", flush=True)
@@ -772,6 +803,8 @@ class DetectionWorker:
         self.dropped_oldest = 0
         self.inference_failures = 0
         self.last_inference_ms: float | None = None
+        self.last_convert_ms: float | None = None
+        self.last_queue_wait_ms: float | None = None
         self.failed_at_frame_id: int | None = None
         self.started_monotonic = time.monotonic()
         if args.weights:
@@ -870,9 +903,38 @@ class DetectionWorker:
                 "inference_failures": self.inference_failures,
                 "inference_fps": self.processed_frames / elapsed,
                 "last_inference_ms": self.last_inference_ms,
+                "last_convert_ms": self.last_convert_ms,
+                "last_queue_wait_ms": self.last_queue_wait_ms,
                 "failed_at_frame_id": self.failed_at_frame_id,
                 "publisher": self.publisher.metadata(),
             }
+
+    @staticmethod
+    def _materialize_image(image: Any) -> Any:
+        """Convert a still-mapped Gst.Sample into a numpy BGR array.
+
+        Deferred here (off the GLib main-loop thread that produced it) so
+        that thread never blocks on a ~24MB map+copy; see the comment on
+        SplitPipeline._on_sample. Passing a plain numpy array through
+        unchanged keeps this compatible with any other future caller.
+        """
+
+        if not hasattr(image, "get_buffer"):
+            return image
+        from gi.repository import Gst  # Gst.init() already ran in SplitPipeline._run_once
+        import numpy as np
+
+        buffer = image.get_buffer()
+        caps = image.get_caps().get_structure(0)
+        width = caps.get_value("width")
+        height = caps.get_value("height")
+        success, map_info = buffer.map(Gst.MapFlags.READ)
+        if not success:
+            raise RuntimeError("failed to map GStreamer buffer for inference")
+        try:
+            return np.frombuffer(map_info.data, dtype=np.uint8).reshape((height, width, 3)).copy()
+        finally:
+            buffer.unmap(map_info)
 
     def _run(self) -> None:
         while True:
@@ -885,16 +947,29 @@ class DetectionWorker:
             if packet is None:
                 return
             detections: list[dict[str, Any]] = []
-            inference_started = time.monotonic()
+            pulled_monotonic = time.monotonic()
+            queue_wait_ms = max(0.0, (time.monotonic_ns() - packet.capture_monotonic_ns) / 1_000_000)
             with self._lock:
                 running = self.status == "RUNNING" and self.runner is not None
             if running:
                 try:
-                    detections = self.runner.predict(packet.image)
+                    image = self._materialize_image(packet.image)
+                    convert_ms = (time.monotonic() - pulled_monotonic) * 1000
+                    inference_started = time.monotonic()
+                    detections = self.runner.predict(image)
                     inference_ms = (time.monotonic() - inference_started) * 1000
                     with self._lock:
                         self.processed_frames += 1
                         self.last_inference_ms = inference_ms
+                        self.last_convert_ms = convert_ms
+                        self.last_queue_wait_ms = queue_wait_ms
+                    if self.processed_frames % 20 == 1:
+                        print(
+                            f"[detector] frame {packet.frame_id} stage timing: "
+                            f"queue_wait={queue_wait_ms:.1f}ms convert={convert_ms:.1f}ms "
+                            f"inference={inference_ms:.1f}ms",
+                            flush=True,
+                        )
                 except Exception as exc:
                     with self._lock:
                         self.status = "FAILED"
@@ -1305,10 +1380,10 @@ class SplitPipeline:
         if sample is None:
             return self.gst.FlowReturn.ERROR
         buffer = sample.get_buffer()
-        caps = sample.get_caps().get_structure(0)
-        width = caps.get_value("width")
-        height = caps.get_value("height")
-
+        # width/height are not read here: the appsink caps are fixed to
+        # args.high_width/args.high_height by build_pipeline_description, so
+        # DetectionWorker (which does the actual map+reshape, off this
+        # thread) uses those directly instead of re-deriving them per frame.
         pts = None if buffer.pts == self.gst.CLOCK_TIME_NONE else int(buffer.pts)
         source_packet = self._wait_for_frame_identity(pts)
         if source_packet is None:
@@ -1327,17 +1402,18 @@ class SplitPipeline:
         # Capture-only mode does not need to copy a high-resolution BGR frame
         # into Python. Canonical identity and sidecars were already assigned
         # by the source-pad probe before this branch.
-        image = None
-        if self.worker is not None and self.worker.needs_image:
-            success, map_info = buffer.map(self.gst.MapFlags.READ)
-            if not success:
-                return self.gst.FlowReturn.ERROR
-            try:
-                import numpy as np
-
-                image = np.frombuffer(map_info.data, dtype=np.uint8).reshape((height, width, 3)).copy()
-            finally:
-                buffer.unmap(map_info)
+        #
+        # The actual numpy map+copy (~24MB per 3840x2160 BGR frame) used to
+        # happen right here, synchronously, on this same GLib main-loop
+        # thread that also drives every other pipeline callback (RTP send,
+        # identity probes, etc). Measuring capture-to-ack latency end to end
+        # showed 800ms-1200ms even over a fast local network with a proven
+        # ~30ms round trip -- the bottleneck was this thread getting tied up
+        # doing image copies instead of servicing the pipeline. Handing the
+        # still-mapped GStreamer sample to DetectionWorker's own thread (it
+        # already holds a ref via pull-sample, so it stays valid) moves that
+        # cost off this shared thread entirely.
+        image = sample if (self.worker is not None and self.worker.needs_image) else None
 
         inference_packet = FramePacket(
             mission_id=source_packet.mission_id,
