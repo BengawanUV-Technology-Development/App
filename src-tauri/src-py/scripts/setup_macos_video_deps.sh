@@ -37,6 +37,7 @@ fi
 
 echo "[setup] installing Python requirements into $VENV_DIR"
 "$VENV_DIR/bin/python3" -m pip install -q -r "$SRC_PY_DIR/requirements.txt"
+"$VENV_DIR/bin/python3" -m pip install -q -r "$SRC_PY_DIR/requirements-video.txt"
 
 echo "[setup] verifying gi import..."
 "$VENV_DIR/bin/python3" -c "import gi; gi.require_version('Gst', '1.0'); from gi.repository import Gst; Gst.init([]); print('[setup] gi + GStreamer OK:', Gst.version_string())"

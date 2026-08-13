@@ -26,13 +26,15 @@ opencv-python==4.12.0.88
 numpy>=1.26
 
 # Jetson RTP/UDP video receiver (app/services/jetson_video_service.py) binds
-# to GStreamer through GObject introspection ("import gi"). These wheels only
-# link successfully once the underlying GLib/GObject-Introspection/GStreamer
-# C libraries are present on the system:
-#   Docker (Debian): already installed by this project's Dockerfile via apt.
-#   macOS (manual/native run): run scripts/setup_macos_video_deps.sh first,
-#     which installs the Homebrew formulas these wheels build against.
+# to GStreamer through GObject introspection ("import gi"). PyGObject/pycairo
+# are intentionally NOT listed here -- they are C extensions that must be
+# built against the platform's GLib/GObject-Introspection/GStreamer/Cairo
+# headers, and pip has no prebuilt wheel for them on Linux or macOS:
+#   Docker (Debian): satisfied by the Dockerfile's apt install of python3-gi
+#     (system-wide, no compiler needed). Do NOT pip install pygobject here --
+#     the Docker image has no C toolchain, so `pip install pygobject` fails.
+#   macOS (manual/native run): run scripts/setup_macos_video_deps.sh, which
+#     installs the Homebrew formulas these wheels build against and then
+#     pip-installs requirements-video.txt into the venv.
 #   Jetson (jetson/*.py): uses the OS-provided python3-gi from apt; do not
 #     pip-install PyGObject there, it would shadow the NVIDIA-tuned bindings.
-pygobject==3.50.0
-pycairo==1.27.0

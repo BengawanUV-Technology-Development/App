@@ -1,0 +1,6 @@
+# macOS-only. Compiles PyGObject/pycairo against the Homebrew GLib/
+# GObject-Introspection/GStreamer/Cairo headers installed by
+# scripts/setup_macos_video_deps.sh. Do NOT add this file to the Docker
+# build or the Jetson environment -- see the comment in requirements.txt.
+pygobject==3.50.0
+pycairo==1.27.0
