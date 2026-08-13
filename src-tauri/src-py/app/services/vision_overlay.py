@@ -9,6 +9,8 @@ from numbers import Real
 from typing import Any
 
 
+from app.services.geotagging import estimate_target_gps
+
 class VisionOverlayError(ValueError):
     """Raised when a per-frame vision overlay does not match the contract."""
 
@@ -69,7 +71,7 @@ class VisionOverlayStore:
         self._received_monotonic: float | None = None
 
     @staticmethod
-    def _normalize(payload: Any) -> dict[str, Any]:
+    def _normalize(payload: Any, telemetry: dict | None = None) -> dict[str, Any]:
         if not isinstance(payload, dict):
             raise VisionOverlayError("overlay payload must be a JSON object")
         if payload.get("type") != "vision.overlay":
@@ -130,6 +132,36 @@ class VisionOverlayStore:
                         f"detections[{index}].bbox_norm_highres must be between 0 and 1"
                     )
                 normalized["bbox_norm_highres"] = normalized_values
+
+            # --- GEOTAGGING INJECTION ---
+            if telemetry and telemetry.get("gps_valid"):
+                tel = telemetry.get("telemetry", {})
+                lat = tel.get("lat")
+                lng = tel.get("lng")
+                alt_m = tel.get("relative_alt") # Use AGL
+                roll = tel.get("roll_deg")
+                pitch = tel.get("pitch_deg")
+                yaw = tel.get("yaw_deg")
+                
+                if all(v is not None for v in [lat, lng, alt_m, roll, pitch, yaw]):
+                    # Determine center of detection. Prefer highres, else network
+                    if "bbox_highres" in normalized:
+                        x1, y1, x2, y2 = normalized["bbox_highres"]
+                        u_c, v_c = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+                        img_w, img_h = source_width, source_height
+                    else:
+                        x1, y1, x2, y2 = normalized["bbox_network"]
+                        u_c, v_c = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+                        img_w, img_h = network_width, network_height
+                        
+                    gps = estimate_target_gps(
+                        u_c, v_c, img_w, img_h,
+                        lat, lng, alt_m, roll, pitch, yaw
+                    )
+                    if gps:
+                        normalized["geotag_lat"] = gps[0]
+                        normalized["geotag_lng"] = gps[1]
+                        
             normalized_detections.append(normalized)
 
         detection_id = payload.get("detection_id")
@@ -181,8 +213,8 @@ class VisionOverlayStore:
             "detections": normalized_detections,
         }
 
-    def ingest(self, payload: Any) -> dict[str, Any]:
-        normalized = self._normalize(payload)
+    def ingest(self, payload: Any, telemetry: dict | None = None) -> dict[str, Any]:
+        normalized = self._normalize(payload, telemetry)
         received_at_unix = time.time()
         received_monotonic = time.monotonic()
         with self._lock:

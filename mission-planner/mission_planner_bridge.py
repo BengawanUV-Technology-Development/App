@@ -118,6 +118,20 @@ def _state_candidates():
     except Exception:
         pass
 
+    try:
+        import clr
+        clr.AddReference("MissionPlanner")
+        import MissionPlanner
+        candidates.append(("MissionPlanner.MainV2.comPort.MAV.cs", MissionPlanner.MainV2.comPort.MAV.cs))
+    except Exception:
+        pass
+
+    try:
+        import MissionPlanner
+        candidates.append(("MissionPlanner.MainV2.comPort.MAV.cs_main", MissionPlanner.MainV2.comPort.MAV.cs))
+    except Exception:
+        pass
+
     return candidates
 
 
@@ -195,6 +209,14 @@ def _vehicle_connected():
             if hasattr(MAV.BaseStream, "IsOpen"):
                 if bool(MAV.BaseStream.IsOpen):
                     return True
+    except Exception:
+        pass
+
+    try:
+        import MissionPlanner
+        if MissionPlanner.MainV2.comPort.BaseStream is not None:
+            if bool(MissionPlanner.MainV2.comPort.BaseStream.IsOpen):
+                return True
     except Exception:
         pass
 

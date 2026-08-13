@@ -96,7 +96,8 @@ def ingest_detection_overlay():
 
     payload = request.get_json(silent=True)
     try:
-        return jsonify(_get_vision_overlay_store().ingest(payload)), 202
+        telemetry = _get_adapter().snapshot()
+        return jsonify(_get_vision_overlay_store().ingest(payload, telemetry=telemetry)), 202
     except VisionOverlayError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
@@ -340,9 +341,43 @@ def ingest_detection():
     # 1. Fetch telemetry state for context aggregation
     telemetry_state = _get_adapter().snapshot()
     
-    # 2. Aggregate data
+    # 2. Reconstruct Coordinate if payload missing or dummy
+    from app.services.geotagging import estimate_target_gps
+    
+    cv_payload = dict(payload)
+    recon = cv_payload.get("reconstructed_location", {})
+    # if it's dummy or missing, recalculate
+    if not recon or recon.get("latitude") == 0.0 or recon.get("latitude") is None:
+        det_data = cv_payload.get("detection_data", {})
+        if "bbox" in det_data:
+            # Assuming bbox is [x1, y1, x2, y2]
+            bbox = det_data["bbox"]
+            u_c = (bbox[0] + bbox[2]) / 2.0
+            v_c = (bbox[1] + bbox[3]) / 2.0
+            
+            tel = telemetry_state.get("telemetry", {})
+            lat = tel.get("lat")
+            lng = tel.get("lng")
+            alt_m = tel.get("relative_alt")
+            roll = tel.get("roll_deg")
+            pitch = tel.get("pitch_deg")
+            yaw = tel.get("yaw_deg")
+            
+            if all(v is not None for v in [lat, lng, alt_m, roll, pitch, yaw]):
+                gps = estimate_target_gps(
+                    u_c, v_c, 1920, 1080, # default 1080p assumption if not provided
+                    lat, lng, alt_m, roll, pitch, yaw
+                )
+                if gps:
+                    cv_payload["reconstructed_location"] = {
+                        "latitude": gps[0],
+                        "longitude": gps[1],
+                        "estimated_margin_error_m": 5.0
+                    }
+
+    # 3. Aggregate data
     ingested_data = {
-        "cv_payload": payload,
+        "cv_payload": cv_payload,
         "telemetry_context": telemetry_state
     }
     
