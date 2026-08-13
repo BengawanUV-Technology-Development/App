@@ -22,6 +22,14 @@ Options:
   --env-file FILE    Root environment file; default /etc/buv/jetson-recording-v03.env
   -h, --help         Show this help
 
+Environment:
+  REPLAY_INGEST_TIMEOUT  Registration/overlay HTTP timeout in seconds passed
+                          as --ingest-timeout; default 3.0. The production
+                          default (0.5s, see arducam_split_pipeline.py) is
+                          tuned for a direct low-latency link and is often
+                          too tight over Tailscale, especially right after
+                          the ground receiver has just started.
+
 An epoch directory must contain video.mp4 and detections.jsonl.
 EOF
 }
@@ -30,6 +38,13 @@ die() {
   echo "[replay] ERROR: $*" >&2
   exit 2
 }
+
+# Resolve paths relative to this script's own location, not the caller's
+# working directory, so it runs the same whether invoked as
+# "./replay_recording.sh" from inside jetson/ or "jetson/replay_recording.sh"
+# from the repo root.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PIPELINE_SCRIPT="$SCRIPT_DIR/arducam_split_pipeline.py"
 
 if [[ $# -eq 0 ]]; then
   usage >&2
@@ -221,7 +236,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 PIPELINE_ARGS=(
-  "$PYTHON_BIN" jetson/arducam_split_pipeline.py \
+  "$PYTHON_BIN" "$PIPELINE_SCRIPT" \
   --host "$GROUND_HOST" \
   --port 5000 \
   --qualification-video "$VIDEO" \
@@ -238,7 +253,8 @@ PIPELINE_ARGS=(
   --allow-root-record-dir \
   --min-free-bytes 0 \
   --registration-url "http://${GROUND_HOST}:5001/api/v1/stream/register" \
-  --ingest-token "$JETSON_INGEST_TOKEN"
+  --ingest-token "$JETSON_INGEST_TOKEN" \
+  --ingest-timeout "${REPLAY_INGEST_TIMEOUT:-3.0}"
 )
 if [[ "$RUN_INFERENCE" == true ]]; then
   PIPELINE_ARGS+=(
@@ -271,7 +287,7 @@ if [[ "$RUN_INFERENCE" == true ]]; then
   echo "[replay] completed; pipeline log=$PIPELINE_LOG"
   exit 0
 elif [[ -n "$METADATA_EPOCH" ]]; then
-  "$PYTHON_BIN" jetson/replay_vision.py \
+  "$PYTHON_BIN" "$SCRIPT_DIR/replay_vision.py" \
     "$METADATA_EPOCH" \
     --overlay-url "http://${GROUND_HOST}:5001/api/v1/detection/overlay" \
     --token "$JETSON_INGEST_TOKEN" \

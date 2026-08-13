@@ -19,3 +19,15 @@ python-dotenv==1.2.2
 # JPEG decode/MP4 recording and legacy EasyCAP support. Jetson UDP ingest uses
 # the system GStreamer executable, not OpenCV's GStreamer backend.
 opencv-python==4.12.0.88
+
+# Jetson RTP/UDP video receiver (app/services/jetson_video_service.py) binds
+# to GStreamer through GObject introspection ("import gi"). These wheels only
+# link successfully once the underlying GLib/GObject-Introspection/GStreamer
+# C libraries are present on the system:
+#   Docker (Debian): already installed by this project's Dockerfile via apt.
+#   macOS (manual/native run): run scripts/setup_macos_video_deps.sh first,
+#     which installs the Homebrew formulas these wheels build against.
+#   Jetson (jetson/*.py): uses the OS-provided python3-gi from apt; do not
+#     pip-install PyGObject there, it would shadow the NVIDIA-tuned bindings.
+pygobject==3.50.0
+pycairo==1.27.0

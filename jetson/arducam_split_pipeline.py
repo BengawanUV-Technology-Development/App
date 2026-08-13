@@ -40,8 +40,8 @@ from datetime import datetime, timezone
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
-from urllib.error import URLError
-from urllib.request import Request, urlopen
+
+import requests
 
 try:
     from .mavlink_telemetry import MAVLinkTelemetryCollector
@@ -629,27 +629,29 @@ class MetadataPublisher:
         kind: str,
         channel: queue.Queue[tuple[str, dict[str, Any]] | None],
     ) -> None:
+        # A session per worker thread reuses one keep-alive connection across
+        # requests instead of a fresh TCP handshake per frame, which is what
+        # made this channel brittle over higher-latency links (e.g. Tailscale
+        # path renegotiation). requests.Session/urllib3 detect a dead
+        # connection and transparently reopen one, so this stays as resilient
+        # as the old per-request approach while being far less chatty.
+        session = requests.Session()
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.token}",
+        }
         while True:
             item = channel.get()
             if item is None:
                 return
             url, payload = item
-            request = Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.token}",
-                },
-                method="POST",
-            )
             try:
-                with urlopen(request, timeout=self.timeout) as response:
-                    if response.status >= 300:
-                        raise RuntimeError(f"{kind} ingest HTTP {response.status}")
+                response = session.post(url, json=payload, headers=headers, timeout=self.timeout)
+                if response.status_code >= 300:
+                    raise RuntimeError(f"{kind} ingest HTTP {response.status_code}")
                 with self._lock:
                     self.stats[kind]["sent"] += 1
-            except (OSError, URLError, RuntimeError) as exc:
+            except (requests.RequestException, RuntimeError) as exc:
                 now = time.monotonic()
                 with self._lock:
                     self.stats[kind]["errors"] += 1
@@ -1011,7 +1013,7 @@ class SplitPipeline:
 
             self.gst = Gst
             self.glib = GLib
-            Gst.init(None)
+            Gst.init([])
             description = build_pipeline_description(self.args, self.video_path, self.recovery_file)
             print("[pipeline] high-res recording and low-res RTP branches enabled", flush=True)
             if self.args.qualification_video is not None:
@@ -1342,21 +1344,19 @@ class SplitPipeline:
             "fps": self.args.network_fps,
             "rtp_clock_rate": 90_000,
         }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.args.ingest_token}",
+        }
+        session = requests.Session()
         while not self._registration_stop.is_set():
-            request = Request(
-                self.args.registration_url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.args.ingest_token}",
-                },
-                method="POST",
-            )
             try:
-                with urlopen(request, timeout=self.args.ingest_timeout) as response:
-                    if response.status >= 300:
-                        raise RuntimeError(f"registration HTTP {response.status}")
-            except (OSError, URLError, RuntimeError) as exc:
+                response = session.post(
+                    self.args.registration_url, json=payload, headers=headers, timeout=self.args.ingest_timeout
+                )
+                if response.status_code >= 300:
+                    raise RuntimeError(f"registration HTTP {response.status_code}")
+            except (requests.RequestException, RuntimeError) as exc:
                 print(f"[network] stream registration unavailable: {exc}", flush=True)
             self._registration_stop.wait(5)
 

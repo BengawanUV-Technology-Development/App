@@ -148,7 +148,7 @@ class JetsonVideoService:
             from gi.repository import GLib, Gst
         except ImportError as exc:
             raise JetsonVideoError("PyGObject with GStreamer 1.0 is required for the frame-aware receiver") from exc
-        Gst.init(None)
+        Gst.init([])
         return Gst, GLib
 
     def status(self):

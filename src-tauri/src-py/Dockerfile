@@ -20,6 +20,8 @@ RUN pip3 install --break-system-packages --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# 5001/tcp: Flask API/WS. 5000/udp: Jetson RTP video receiver (JETSON_VIDEO_PORT).
 EXPOSE 5001
+EXPOSE 5000/udp
 
 CMD ["python3", "main.py"]
