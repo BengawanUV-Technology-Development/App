@@ -179,12 +179,14 @@ class MissionPlannerAdapter:
             except (TypeError, ValueError):
                 alt_m = None
 
+            cmd_id = item.get("command")
             has_position = (
                 lat is not None
                 and lng is not None
                 and abs(lat) <= 90.0
                 and abs(lng) <= 180.0
                 and not (lat == 0.0 and lng == 0.0)
+                and cmd_id not in (22, 84, 3000) # 22=TAKEOFF, 84=VTOL_TAKEOFF, 3000=DO_VTOL_TRANSITION
             )
 
             waypoints.append({
