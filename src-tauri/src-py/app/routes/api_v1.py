@@ -1,5 +1,3 @@
-import os
-
 from flask import Blueprint, Response, jsonify, request
 
 from app.contracts import ContractError, validate_detection_event
@@ -10,31 +8,6 @@ from app.services.vision_overlay import VisionOverlayError, VisionOverlayStore
 from app.services.browser_render_metrics import BrowserRenderMetrics, BrowserRenderMetricsError
 from app.services.frame_sync import FrameSyncError, FrameSynchronizer, StreamRegistry
 
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name, "").strip()
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
-# 150ms was measured (via camera_state.latency.decode_to_ground_publish) to
-# be tighter than the actual video/metadata skew: YOLO inference alone runs
-# ~100-200ms, plus the metadata HTTP POST over a relayed Tailscale link, so
-# almost every frame was hitting the full wait and expiring as
-# METADATA_TIMEOUT before its detection could ever arrive -- confirmed via
-# replay testing showing 0% MATCHED. Re-tested at 400ms: still mostly
-# METADATA_TIMEOUT, with actual metadata arrivals clustering at 400-440ms
-# over the current (relayed, not direct) Tailscale path -- i.e. 400ms was
-# still under the real skew, not just its tail. 700ms gives headroom above
-# that measured cluster; override with BUV_VISION_SYNC_WAIT_MS per-link if a
-# particular network needs a different value (higher = more matches but the
-# overlay lags the video by up to this much; lower = more real-time but more
-# frames show with no box).
-VISION_SYNC_WAIT_MS = _env_int("BUV_VISION_SYNC_WAIT_MS", 700)
 
 api_v1_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 _adapter: MissionPlannerAdapter | None = None
@@ -51,7 +24,7 @@ def init_api_v1_routes(adapter: MissionPlannerAdapter, database: Database | None
     _flight_recorder = FlightRecorder(
         adapter.snapshot,
         stream_registry=StreamRegistry(),
-        synchronizer=FrameSynchronizer(wait_ms=VISION_SYNC_WAIT_MS),
+        synchronizer=FrameSynchronizer(),
         telemetry_history=adapter.telemetry_recorder.nearest,
     )
     _vision_overlay_store = VisionOverlayStore()

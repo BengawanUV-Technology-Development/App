@@ -122,7 +122,7 @@ class JetsonVideoService:
             "expected_fps": None, "frame_count": 0, "preview_frame_count": 0,
             "last_frame_timestamp": None, "last_frame_at_unix": None,
             "packet_error_count": 0, "decoder_error_count": 0,
-            "identity_error_count": 0, "metadata_timeout_count": 0,
+            "identity_error_count": 0, "unmatched_live_count": 0,
             "restart_count": 0, "stream_port": None, "payload_type": None,
             "decoder": None, "stream_registration": None,
             "latency": {"decode_to_ground_publish": LatencyMetrics().snapshot()},
@@ -208,9 +208,10 @@ class JetsonVideoService:
             self._frame_ready.notify_all()
 
     def ingest_metadata(self, payload: dict) -> bool:
-        accepted = self.synchronizer.push_metadata(payload)
-        self._drain_ready()
-        return accepted
+        # Stashed for the next video frame with this exact identity to
+        # opportunistically pick up in _on_decoded_sample. Nothing to drain
+        # here anymore: video is never held waiting, see FrameSynchronizer.
+        return self.synchronizer.push_metadata(payload)
 
     def wait_for_vision_frame(self, last_version: int, timeout: float = 5.0):
         with self._frame_ready:
@@ -268,7 +269,6 @@ class JetsonVideoService:
             bus = pipeline.get_bus()
             bus.add_signal_watch()
             bus.connect("message", self._on_bus_message, loop)
-            GLib.timeout_add(20, self._on_sync_tick)
             with self._lock:
                 self._pipeline, self._loop = pipeline, loop
                 self._camera_state.update(camera_running=True, camera_status="STARTING", camera_error=None)
@@ -333,19 +333,11 @@ class JetsonVideoService:
                     self._camera_state["identity_error_count"] += 1
                 return self._gst.FlowReturn.OK
             key, rtp_timestamp = identity
-            self.synchronizer.push_video(key, bytes(mapped.data), rtp_timestamp)
-            self._drain_ready()
+            frame = self.synchronizer.match_video(key, bytes(mapped.data), rtp_timestamp)
+            self._publish_frame(frame)
         finally:
             buffer.unmap(mapped)
         return self._gst.FlowReturn.OK
-
-    def _on_sync_tick(self):
-        self._drain_ready()
-        return bool(self._loop and self._loop.is_running() and not self._stop_event.is_set())
-
-    def _drain_ready(self):
-        for frame in self.synchronizer.pop_ready():
-            self._publish_frame(frame)
 
     def _publish_frame(self, frame):
         now = time.time()
@@ -355,8 +347,8 @@ class JetsonVideoService:
             self._camera_state["preview_frame_count"] += 1
             self._camera_state["last_frame_at_unix"] = now
             self._camera_state["last_frame_timestamp"] = datetime.now(timezone.utc).isoformat()
-            if frame.state == "METADATA_TIMEOUT":
-                self._camera_state["metadata_timeout_count"] += 1
+            if frame.state == "LIVE":
+                self._camera_state["unmatched_live_count"] += 1
             self._fps_samples.append(monotonic_now)
             if len(self._fps_samples) >= 2 and self._fps_samples[-1] > self._fps_samples[0]:
                 self._camera_state["fps"] = (len(self._fps_samples) - 1) / (self._fps_samples[-1] - self._fps_samples[0])

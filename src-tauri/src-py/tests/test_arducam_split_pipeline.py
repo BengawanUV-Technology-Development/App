@@ -87,8 +87,12 @@ class ArducamSplitPipelineTests(unittest.TestCase):
         self.assertIn("appsink name=highres_sink", description)
         self.assertIn("nvvidconv ! video/x-raw,format=BGRx ! videoconvert ! video/x-raw,format=BGR", description)
         self.assertNotIn("nvvidconv ! video/x-raw,format=BGR,width=1920", description)
-        self.assertIn("max-size-buffers=16", description)
-        self.assertIn("drop=false", description)
+        # Shallow + leaky: the inference branch only ever wants the latest
+        # frame, and a deep buffer here was measured adding ~600ms of
+        # queueing latency for no benefit (see arducam_split_pipeline.py's
+        # appsink_queue comment).
+        self.assertIn("max-size-buffers=2", description)
+        self.assertIn("drop=true", description)
         self.assertIn("rtph264pay name=preview_payloader pt=96", description)
         self.assertIn("identity name=preview_identity", description)
         self.assertIn("fragment-duration=1000", description)

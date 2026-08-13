@@ -110,17 +110,24 @@ class MatchedFrame:
 
 
 class FrameSynchronizer:
-    """Bounded exact join; metadata expires after 150 ms and never shifts frames."""
+    """Instant, non-blocking video release.
 
-    def __init__(self, wait_ms: int = 150, capacity: int = 120):
-        self.wait_ns = wait_ms * 1_000_000
+    A video frame is shown the moment it decodes: opportunistically
+    carrying a detection if one for the same identity already arrived, but
+    never held waiting for one. An earlier version held every video frame
+    for up to a fixed window on the chance its metadata would arrive --
+    that forced the *entire* live feed to lag by that window, not just the
+    frames that ended up matched, since every frame (matched or not) was
+    held for the same wait. Detections that miss this opportunistic window
+    are not lost: they are reviewed post-flight from the recording instead
+    of live (see docs/post-flight-detection-snapshots.md), so the live feed
+    can be real-time with zero added latency.
+    """
+
+    def __init__(self, capacity: int = 120):
         self.capacity = capacity
         self._lock = threading.RLock()
-        self._video: OrderedDict[CanonicalKey, tuple[bytes, int, int]] = OrderedDict()
         self._metadata: OrderedDict[CanonicalKey, tuple[dict[str, Any], int]] = OrderedDict()
-        self._expired: OrderedDict[CanonicalKey, int] = OrderedDict()
-        self.stale_metadata_rejected = 0
-        self.video_evicted = 0
         self.metadata_evicted = 0
 
     @staticmethod
@@ -133,46 +140,31 @@ class FrameSynchronizer:
 
     def reset(self) -> None:
         with self._lock:
-            self._video.clear()
             self._metadata.clear()
-            self._expired.clear()
-
-    def push_video(self, key: CanonicalKey, jpeg: bytes, rtp_timestamp: int, now_ns: int | None = None) -> None:
-        now_ns = now_ns or time.monotonic_ns()
-        with self._lock:
-            self._video[key] = (jpeg, rtp_timestamp, now_ns)
-            self._video.move_to_end(key)
-            if self._bounded(self._video, self.capacity):
-                self.video_evicted += 1
 
     def push_metadata(self, payload: dict[str, Any], now_ns: int | None = None) -> bool:
         key = CanonicalKey.from_payload(payload)
         now_ns = now_ns or time.monotonic_ns()
         with self._lock:
-            if key in self._expired:
-                self.stale_metadata_rejected += 1
-                return False
             self._metadata[key] = (payload, now_ns)
             self._metadata.move_to_end(key)
             if self._bounded(self._metadata, self.capacity):
                 self.metadata_evicted += 1
             return True
 
-    def pop_ready(self, now_ns: int | None = None) -> list[MatchedFrame]:
+    def match_video(
+        self, key: CanonicalKey, jpeg: bytes, rtp_timestamp: int, now_ns: int | None = None
+    ) -> MatchedFrame:
+        """Release this video frame immediately: MATCHED if metadata for
+        this exact identity already arrived, LIVE (no box, not an error --
+        just nothing to show yet) otherwise."""
+
         now_ns = now_ns or time.monotonic_ns()
-        ready: list[MatchedFrame] = []
         with self._lock:
-            for key, (jpeg, rtp_timestamp, decoded_ns) in list(self._video.items()):
-                metadata_item = self._metadata.pop(key, None)
-                if metadata_item is not None:
-                    self._video.pop(key, None)
-                    ready.append(MatchedFrame(key, jpeg, metadata_item[0], rtp_timestamp, decoded_ns, "MATCHED"))
-                elif now_ns - decoded_ns >= self.wait_ns:
-                    self._video.pop(key, None)
-                    self._expired[key] = now_ns
-                    ready.append(MatchedFrame(key, jpeg, None, rtp_timestamp, decoded_ns, "METADATA_TIMEOUT"))
-            self._bounded(self._expired, self.capacity * 2)
-        return ready
+            metadata_item = self._metadata.pop(key, None)
+        if metadata_item is not None:
+            return MatchedFrame(key, jpeg, metadata_item[0], rtp_timestamp, now_ns, "MATCHED")
+        return MatchedFrame(key, jpeg, None, rtp_timestamp, now_ns, "LIVE")
 
 
 class RtpIdentityTracker:

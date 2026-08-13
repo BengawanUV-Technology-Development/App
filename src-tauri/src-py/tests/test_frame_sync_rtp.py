@@ -57,20 +57,24 @@ class RtpIdentityTests(unittest.TestCase):
 
 
 class FrameSynchronizerTests(unittest.TestCase):
-    def test_exact_metadata_match_and_timeout_never_shift(self):
-        sync = FrameSynchronizer(wait_ms=150, capacity=4)
+    def test_video_releases_instantly_matched_or_live(self):
+        sync = FrameSynchronizer(capacity=4)
         first = CanonicalKey(MISSION_ID, 1, 1, "arducam")
         second = CanonicalKey(MISSION_ID, 1, 2, "arducam")
-        sync.push_video(first, b"jpeg-1", 100, now_ns=1_000_000_000)
-        sync.push_video(second, b"jpeg-2", 200, now_ns=1_010_000_000)
-        sync.push_metadata({**second.as_dict(), "detections": [{"class": "person"}]}, now_ns=1_020_000_000)
-        ready = sync.pop_ready(now_ns=1_160_000_000)
-        self.assertEqual([(item.key.frame_id, item.state) for item in ready], [(1, "METADATA_TIMEOUT"), (2, "MATCHED")])
-        self.assertFalse(sync.push_metadata({**first.as_dict(), "detections": []}, now_ns=1_170_000_000))
+        # No metadata for `first` yet: released immediately as LIVE, not held.
+        frame_one = sync.match_video(first, b"jpeg-1", 100, now_ns=1_000_000_000)
+        self.assertEqual(frame_one.state, "LIVE")
+        self.assertIsNone(frame_one.metadata)
+        # Metadata for `second` arrives before its video: opportunistic match.
+        sync.push_metadata({**second.as_dict(), "detections": [{"class": "person"}]}, now_ns=1_010_000_000)
+        frame_two = sync.match_video(second, b"jpeg-2", 200, now_ns=1_020_000_000)
+        self.assertEqual(frame_two.state, "MATCHED")
+        self.assertEqual(frame_two.metadata["detections"], [{"class": "person"}])
+        # Metadata arriving after its video already published is simply
+        # unconsumed by any later match_video call for that identity again.
         third = CanonicalKey(MISSION_ID, 1, 3, "arducam")
-        sync.push_video(third, b"jpeg-3", 300, now_ns=1_180_000_000)
-        self.assertEqual(sync.pop_ready(now_ns=1_180_000_000), [])
-        self.assertEqual(sync.stale_metadata_rejected, 1)
+        frame_three = sync.match_video(third, b"jpeg-3", 300, now_ns=1_030_000_000)
+        self.assertEqual(frame_three.state, "LIVE")
 
     def test_new_stream_registration_replaces_old_ssrc(self):
         store = registry()
