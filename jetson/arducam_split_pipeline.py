@@ -208,11 +208,18 @@ def build_pipeline_description(
     key_int = max(1, round(high_fps))
     network_key_int = max(1, round(network_fps))
     high_fps_caps = fps_caps(high_fps)
-    # This callback assigns canonical identity and must observe every master
-    # frame. Inference dropping occurs later in its size-one worker queue.
+    # Canonical identity is assigned by a probe on the tee's own sink pad
+    # (see capture_pad in _run_once), upstream of every branch below, so it
+    # always observes every master frame regardless of what any branch's
+    # queue does. A non-leaky queue here would block the tee itself once
+    # full: GStreamer's tee pushes to each branch synchronously from the
+    # same calling thread, so a stalled branch backpressures capture for
+    # every other branch too, which throttled the whole pipeline (including
+    # the network preview branch) down to inference speed. leaky=downstream
+    # lets a slow inference branch drop its own frames instead.
     appsink_buffers = 16
     appsink_drop = "drop=false"
-    appsink_queue = "queue max-size-buffers=16 max-size-time=0 max-size-bytes=0"
+    appsink_queue = "queue max-size-buffers=16 max-size-time=0 max-size-bytes=0 leaky=downstream"
     recovery_file = recovery_file or video_path.with_name(f"{video_path.name}.moov.recovery")
     if qualification_video is None:
         source = f"""nvarguscamerasrc sensor-id={args.sensor_id} wbmode=1 !
@@ -235,7 +242,7 @@ tee name=capture"""
         preview_converter = "videoconvert ! videoscale"
     return f"""
 {source}
-capture. ! queue max-size-buffers=8 max-size-time=0 max-size-bytes=0 !
+capture. ! queue max-size-buffers=8 max-size-time=0 max-size-bytes=0 leaky=downstream !
 {record_converter} ! video/x-raw,format=I420,width={high_width},height={high_height} !
 x264enc bitrate={args.local_bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max={key_int} bframes=0 !
 h264parse ! mp4mux fragment-duration=1000 fragment-mode=first-moov-then-finalise moov-recovery-file={_gst_quote(recovery_file)} ! filesink location={_gst_quote(video_path)}
@@ -632,14 +639,20 @@ class MetadataPublisher:
         # A session per worker thread reuses one keep-alive connection across
         # requests instead of a fresh TCP handshake per frame, which is what
         # made this channel brittle over higher-latency links (e.g. Tailscale
-        # path renegotiation). requests.Session/urllib3 detect a dead
-        # connection and transparently reopen one, so this stays as resilient
-        # as the old per-request approach while being far less chatty.
+        # path renegotiation). In testing, once the underlying route changed
+        # under a live Tailscale relay, this session's pooled connection
+        # stayed wedged in a connect-timeout loop indefinitely -- a brand new
+        # process/Session to the same host succeeded immediately every time.
+        # So this cannot rely on urllib3 transparently recovering; after
+        # repeated consecutive failures the session itself is discarded and
+        # rebuilt from scratch, which is what actually unwedges it.
         session = requests.Session()
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.token}",
         }
+        was_failing = False
+        consecutive_failures = 0
         while True:
             item = channel.get()
             if item is None:
@@ -651,13 +664,24 @@ class MetadataPublisher:
                     raise RuntimeError(f"{kind} ingest HTTP {response.status_code}")
                 with self._lock:
                     self.stats[kind]["sent"] += 1
+                consecutive_failures = 0
+                if was_failing:
+                    print(f"[detector] {utc_iso(time.time())} {kind} ingest recovered", flush=True)
+                    was_failing = False
             except (requests.RequestException, RuntimeError) as exc:
+                consecutive_failures += 1
+                if consecutive_failures >= 3:
+                    session.close()
+                    session = requests.Session()
+                    print(f"[detector] {utc_iso(time.time())} {kind} ingest session reset after {consecutive_failures} consecutive failures", flush=True)
+                    consecutive_failures = 0
                 now = time.monotonic()
+                was_failing = True
                 with self._lock:
                     self.stats[kind]["errors"] += 1
                     self.stats[kind]["last_error"] = str(exc)
                 if now - self._last_error_at >= 5:
-                    print(f"[detector] {kind} ingest unavailable: {exc}", flush=True)
+                    print(f"[detector] {utc_iso(time.time())} {kind} ingest unavailable: {exc}", flush=True)
                     self._last_error_at = now
 
 
@@ -934,6 +958,11 @@ class SplitPipeline:
         self.stopping = False
         self.failure_error: str | None = None
         self.frame_counter = 0
+        self._throughput_log_tick = 0
+        self._throughput_last_capture = 0
+        self._throughput_last_processed = 0
+        self._throughput_last_sent = 0
+        self._throughput_last_monotonic = time.monotonic()
         self.worker: DetectionWorker | None = None
         self.network_sender = RtpNetworkSender(args.host, args.port)
         self._identity_condition = threading.Condition()
@@ -1128,7 +1157,34 @@ class SplitPipeline:
         if self.stopping or self.failure_error:
             return False
         self._write_metadata("RECORDING")
+        self._throughput_log_tick += 1
+        if self._throughput_log_tick >= 5:
+            self._throughput_log_tick = 0
+            self._log_throughput()
         return bool(self.loop and self.loop.is_running())
+
+    def _log_throughput(self) -> None:
+        """Per-branch fps so a stalled branch (and any tee backpressure it
+        causes on the others) is visible in the log without re-deriving it
+        from timestamps after the fact."""
+
+        now = time.monotonic()
+        elapsed = max(0.001, now - self._throughput_last_monotonic)
+        processed = self.worker.processed_frames if self.worker is not None else 0
+        sent = self.network_sender.packets_sent
+        capture_fps = (self.frame_counter - self._throughput_last_capture) / elapsed
+        inference_fps = (processed - self._throughput_last_processed) / elapsed
+        network_pps = (sent - self._throughput_last_sent) / elapsed
+        print(
+            f"[throughput] capture={capture_fps:.1f}fps inference={inference_fps:.1f}fps "
+            f"network={network_pps:.1f}pkt/s over {elapsed:.1f}s "
+            f"(capture_total={self.frame_counter} inference_total={processed} network_total={sent})",
+            flush=True,
+        )
+        self._throughput_last_capture = self.frame_counter
+        self._throughput_last_processed = processed
+        self._throughput_last_sent = sent
+        self._throughput_last_monotonic = now
 
     def _on_message(self, _bus, message) -> None:
         message_type = message.type
@@ -1349,6 +1405,8 @@ class SplitPipeline:
             "Authorization": f"Bearer {self.args.ingest_token}",
         }
         session = requests.Session()
+        was_failing = False
+        consecutive_failures = 0
         while not self._registration_stop.is_set():
             try:
                 response = session.post(
@@ -1356,8 +1414,25 @@ class SplitPipeline:
                 )
                 if response.status_code >= 300:
                     raise RuntimeError(f"registration HTTP {response.status_code}")
+                consecutive_failures = 0
+                if was_failing:
+                    print(f"[network] {utc_iso(time.time())} stream registration recovered", flush=True)
+                    was_failing = False
             except (requests.RequestException, RuntimeError) as exc:
-                print(f"[network] stream registration unavailable: {exc}", flush=True)
+                print(f"[network] {utc_iso(time.time())} stream registration unavailable: {exc}", flush=True)
+                was_failing = True
+                consecutive_failures += 1
+                if consecutive_failures >= 3:
+                    # A pooled connection can get wedged after the underlying
+                    # route changes (observed with Tailscale relay
+                    # renegotiation): retries kept timing out on this same
+                    # session while a brand new session to the same host
+                    # succeeded immediately. Rebuilding the session is what
+                    # actually recovers it.
+                    session.close()
+                    session = requests.Session()
+                    print(f"[network] {utc_iso(time.time())} stream registration session reset after {consecutive_failures} consecutive failures", flush=True)
+                    consecutive_failures = 0
             self._registration_stop.wait(5)
 
     def _shutdown_pipeline(self) -> None:
