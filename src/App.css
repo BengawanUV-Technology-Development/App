@@ -1797,6 +1797,59 @@ select {
   color: #38bdf8;
 }
 
+.detection-hover-popup .maplibregl-popup-content {
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  border-radius: 6px;
+  padding: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.detection-hover-popup .maplibregl-popup-tip {
+  border-top-color: rgba(15, 23, 42, 0.96);
+}
+
+.detection-hover-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 220px;
+}
+
+.detection-hover-card img {
+  width: 100%;
+  border-radius: 4px;
+  display: block;
+  background: #090f1a;
+}
+
+.detection-hover-caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-family: var(--font-mono);
+}
+
+.detection-hover-label {
+  color: #fecaca;
+  font-size: 0.7rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.detection-hover-confidence {
+  color: #cbd5e1;
+  font-size: 0.68rem;
+}
+
+.detection-hover-caveat {
+  color: #fbbf24;
+  font-size: 0.62rem;
+  font-style: italic;
+}
+
 .map-grid-overlay {
   position: absolute;
   inset: 0;

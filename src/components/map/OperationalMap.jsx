@@ -2,9 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { API_BASE, apiGet } from "../../services/api";
 
 const DEFAULT_CENTER = [110.8656314, -7.5532394];
 const MAX_TRACK_POINTS = 1000;
+// Post-flight detections are reviewed after landing (see
+// docs/post-flight-detection-snapshots.md), not live, so polling this
+// slowly is intentional -- it doesn't need to feel real-time.
+const DETECTIONS_POLL_MS = 15000;
 const MODEL_SIZE_METERS = 12;
 const MODEL_HEADING_OFFSET_DEG = 180;
 const MODEL_BODY_COLOR = "#cffff8";
@@ -101,6 +106,27 @@ function currentMissionPointData(mission) {
         },
       },
     ],
+  };
+}
+
+function detectionPointData(detections) {
+  return {
+    type: "FeatureCollection",
+    features: (detections || [])
+      .filter((detection) => detection.coordinate?.status && detection.coordinate.status !== "not_available")
+      .map((detection) => ({
+        type: "Feature",
+        properties: {
+          detectionId: detection.detection_id,
+          label: detection.class || "target",
+          confidence: `${Math.round(Number(detection.confidence || 0) * 100)}%`,
+          uncalibrated: detection.coordinate.status === "ESTIMATED_UNCALIBRATED",
+        },
+        geometry: {
+          type: "Point",
+          coordinates: [Number(detection.coordinate.lon), Number(detection.coordinate.lat)],
+        },
+      })),
   };
 }
 
@@ -301,6 +327,8 @@ function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchD
   const missionRef = useRef(mission);
   const followRef = useRef(false);
   const stateRef = useRef({ lat, lng, alt, headingDeg, rollDeg, pitchDeg });
+  const detectionsRef = useRef([]);
+  const detectionPopupRef = useRef(null);
   const [isFollowing, setIsFollowing] = useState(false);
 
   const setFollowing = (nextValue) => {
@@ -329,6 +357,22 @@ function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchD
     map.getSource("mission-points").setData(missionPointData(mission));
     map.getSource("mission-current-point")?.setData(currentMissionPointData(mission));
   }, [mission]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const pollDetections = async () => {
+      const response = await apiGet("/api/v1/postflight/detections");
+      if (cancelled || !response.ok) return;
+      detectionsRef.current = response.data?.detections || [];
+      mapRef.current?.getSource("postflight-detections")?.setData(detectionPointData(detectionsRef.current));
+    };
+    pollDetections();
+    const interval = setInterval(pollDetections, DETECTIONS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
 
   useEffect(() => {
     if (!mountRef.current || mapRef.current) return undefined;
@@ -458,6 +502,80 @@ function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchD
           "text-halo-width": 1.5,
         },
       });
+      map.addSource("postflight-detections", {
+        type: "geojson",
+        data: detectionPointData(detectionsRef.current),
+      });
+      map.addLayer({
+        id: "postflight-detection-halo",
+        type: "circle",
+        source: "postflight-detections",
+        paint: {
+          "circle-radius": 12,
+          "circle-color": "rgba(248, 113, 113, 0.2)",
+          "circle-stroke-color": "#f87171",
+          "circle-stroke-width": 2,
+        },
+      });
+      map.addLayer({
+        id: "postflight-detection-core",
+        type: "circle",
+        source: "postflight-detections",
+        paint: {
+          "circle-radius": 5,
+          "circle-color": ["case", ["get", "uncalibrated"], "#fbbf24", "#f87171"],
+          "circle-stroke-color": "#fff7ed",
+          "circle-stroke-width": 1.5,
+        },
+      });
+      map.addLayer({
+        id: "postflight-detection-label",
+        type: "symbol",
+        source: "postflight-detections",
+        layout: {
+          "text-field": ["get", "label"],
+          "text-size": 10,
+          "text-font": ["Open Sans Regular"],
+          "text-offset": [0, 1.3],
+          "text-anchor": "top",
+          "text-allow-overlap": false,
+        },
+        paint: {
+          "text-color": "#fecaca",
+          "text-halo-color": "#450a0a",
+          "text-halo-width": 1,
+        },
+      });
+
+      map.on("mouseenter", "postflight-detection-core", (event) => {
+        map.getCanvas().style.cursor = "pointer";
+        const feature = event.features?.[0];
+        if (!feature) return;
+        const { detectionId, label, confidence, uncalibrated } = feature.properties;
+        const coordinates = feature.geometry.coordinates.slice();
+        const snapshotUrl = `${API_BASE}/api/v1/postflight/detections/${detectionId}/snapshot`;
+        detectionPopupRef.current?.remove();
+        detectionPopupRef.current = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 14, className: "detection-hover-popup" })
+          .setLngLat(coordinates)
+          .setHTML(
+            `<div class="detection-hover-card">`
+            + `<img src="${snapshotUrl}" alt="${label}" loading="lazy" />`
+            + `<div class="detection-hover-caption">`
+            + `<span class="detection-hover-label">${label}</span>`
+            + `<span class="detection-hover-confidence">${confidence}</span>`
+            + (uncalibrated === "true" || uncalibrated === true
+              ? `<span class="detection-hover-caveat">uncalibrated estimate</span>`
+              : "")
+            + `</div></div>`,
+          )
+          .addTo(map);
+      });
+      map.on("mouseleave", "postflight-detection-core", () => {
+        map.getCanvas().style.cursor = "";
+        detectionPopupRef.current?.remove();
+        detectionPopupRef.current = null;
+      });
+
       map.addLayer(createAircraftLayer(stateRef, trackRef));
 
       const state = stateRef.current;

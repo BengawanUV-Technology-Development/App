@@ -433,7 +433,8 @@ def list_postflight_detections():
     on hover instead, so this list stays light."""
 
     mission_id = request.args.get("mission_id")
-    records = _get_database().list_postflight_detections(mission_id=mission_id)
+    limit = request.args.get("limit", default=500, type=int)
+    records = _get_database().list_postflight_detections(mission_id=mission_id, limit=limit)
     for record in records:
         record.pop("snapshot_path", None)
     return jsonify({"ok": True, "detections": records})

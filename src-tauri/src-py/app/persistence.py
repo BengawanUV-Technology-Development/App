@@ -205,13 +205,14 @@ class Database:
             )
         return cursor.rowcount == 1
 
-    def list_postflight_detections(self, mission_id: str | None = None) -> list[dict[str, Any]]:
+    def list_postflight_detections(self, mission_id: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
         query = "SELECT * FROM postflight_detections"
-        params: tuple[Any, ...] = ()
+        params: list[Any] = []
         if mission_id is not None:
             query += " WHERE mission_id=?"
-            params = (mission_id,)
-        query += " ORDER BY received_at_ns DESC"
+            params.append(mission_id)
+        query += " ORDER BY received_at_ns DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 2000)))
         with self.connect() as connection:
             rows = connection.execute(query, params).fetchall()
         results = []
