@@ -6,6 +6,8 @@ from copy import deepcopy
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from .telemetry_recorder import TelemetryRecorder
+
 
 class MissionPlannerBridgeError(RuntimeError):
     def __init__(self, status_code: int, payload: dict):
@@ -34,6 +36,7 @@ class MissionPlannerAdapter:
         self._raw = None
         self._telemetry = self._empty_telemetry()
         self._thread = None
+        self.telemetry_recorder = TelemetryRecorder()
 
     @staticmethod
     def _empty_telemetry():
@@ -230,6 +233,8 @@ class MissionPlannerAdapter:
                 self._raw = raw
                 self._telemetry = telemetry
                 self._version += 1
+            if telemetry.get("connected"):
+                self.telemetry_recorder.record(telemetry, now=now)
             return self.snapshot()
         except Exception as exc:
             with self._lock:

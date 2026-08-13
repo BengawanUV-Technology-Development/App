@@ -25,6 +25,7 @@ def init_api_v1_routes(adapter: MissionPlannerAdapter, database: Database | None
         adapter.snapshot,
         stream_registry=StreamRegistry(),
         synchronizer=FrameSynchronizer(wait_ms=150),
+        telemetry_history=adapter.telemetry_recorder.nearest,
     )
     _vision_overlay_store = VisionOverlayStore()
     _browser_render_metrics = BrowserRenderMetrics()

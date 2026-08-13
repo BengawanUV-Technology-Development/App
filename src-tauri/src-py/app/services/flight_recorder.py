@@ -13,6 +13,8 @@ from typing import Callable, Iterator
 from .jetson_video_service import JetsonVideoError, JetsonVideoService
 from .jetson_recording_client import JetsonRecordingClient, JetsonRecordingError
 from .frame_sync import FrameSynchronizer, StreamRegistry
+from .coordinate_estimator import CameraCalibration, estimate_target_latlon
+from .telemetry_recorder import DEFAULT_JOIN_WINDOW_SECONDS
 
 
 class FlightRecorderError(RuntimeError):
@@ -34,8 +36,17 @@ class FlightRecorder:
         recordings_dir: str | Path | None = None,
         stream_registry: StreamRegistry | None = None,
         synchronizer: FrameSynchronizer | None = None,
+        telemetry_history: Callable[[float, float], dict | None] | None = None,
     ):
         self.telemetry_provider = telemetry_provider
+        # Ground-side target geolocation: telemetry_history looks up the
+        # vehicle pose nearest a detection's capture time (see
+        # telemetry_recorder.TelemetryRecorder.nearest); camera_calibration
+        # holds the intrinsics/mount used to turn a bbox into a ray. See
+        # coordinate_estimator's module docstring for the calibration caveat
+        # -- estimates are tagged ESTIMATED_UNCALIBRATED until that's fixed.
+        self.telemetry_history = telemetry_history
+        self.camera_calibration = CameraCalibration()
         self.recordings_dir = Path(
             recordings_dir or os.getenv("FLIGHT_RECORDINGS_DIR") or Path.cwd() / "recordings"
         ).resolve()
@@ -172,7 +183,35 @@ class FlightRecorder:
     def ingest_frame_metadata(self, payload: dict) -> bool:
         if self._jetson_video is None:
             raise FlightRecorderError("Jetson receiver is unavailable")
+        self._attach_ground_coordinates(payload)
         return self._jetson_video.ingest_metadata(payload)
+
+    def _attach_ground_coordinates(self, payload: dict) -> None:
+        """Overwrite each detection's "coordinate" stub with a ground-side
+        estimate, using telemetry buffered near this frame's capture time
+        (see class docstring / coordinate_estimator for the method and its
+        calibration caveat). Leaves "not_available" if no telemetry is
+        available within the join window -- never raises.
+        """
+        detections = payload.get("detections")
+        if not detections or self.telemetry_history is None:
+            return
+        capture_utc_ns = payload.get("capture_utc_ns")
+        width, height = payload.get("source_width"), payload.get("source_height")
+        if capture_utc_ns is None or not width or not height:
+            return
+        telemetry = self.telemetry_history(capture_utc_ns / 1e9, DEFAULT_JOIN_WINDOW_SECONDS)
+        for detection in detections:
+            bbox = detection.get("bbox_normalized_xyxy")
+            if not bbox:
+                continue
+            detection["coordinate"] = estimate_target_latlon(
+                bbox_normalized_xyxy=bbox,
+                image_width=width,
+                image_height=height,
+                telemetry=telemetry,
+                calibration=self.camera_calibration,
+            )
 
     @property
     def vision_service(self) -> JetsonVideoService:
