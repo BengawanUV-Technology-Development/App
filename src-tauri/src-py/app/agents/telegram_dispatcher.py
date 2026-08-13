@@ -48,12 +48,12 @@ def send_telegram_alert(ai_decision: dict, cv_payload: dict):
     
     data = json.dumps(payload).encode('utf-8')
     req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
-    
-    # Bypass SSL Verification
+
+    # Talking to Telegram's own public API over the open internet -- there is
+    # no reason to disable certificate verification here, and doing so would
+    # accept a MITM'd response silently. Use the normal verified context.
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    
+
     try:
         with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
             if response.status == 200:

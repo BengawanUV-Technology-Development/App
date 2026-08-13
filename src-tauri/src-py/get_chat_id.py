@@ -14,10 +14,7 @@ if not TOKEN or TOKEN == "token_anda":
 url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
 print("Menghubungi Telegram...")
 
-# Bypass SSL Verification (untuk mengatasi error sertifikat di Windows)
 ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
 
 try:
     with urllib.request.urlopen(url, context=ctx) as response:
