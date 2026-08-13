@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import queue
 import re
@@ -118,6 +119,28 @@ def fps_caps(value: float) -> str:
 
     fraction = Fraction(value).limit_denominator(1000)
     return f"{fraction.numerator}/{fraction.denominator}"
+
+
+def network_branch_will_carry_frame(frame_id: int, high_fps: float, network_fps: float) -> bool:
+    """Predict whether the network/preview branch will ever transmit this
+    global frame_id, without depending on _on_preview_buffer's own runtime
+    accumulator (which only reflects frames that actually reached that
+    callback, and can therefore desync under queue drops).
+
+    _on_preview_buffer selects frames with a Bresenham/DDA accumulator that
+    starts at (high_fps - network_fps) and adds network_fps per candidate
+    frame, firing whenever the running total reaches high_fps. That is
+    equivalent to the closed form below: frame_id is selected iff the
+    cumulative count of "fires" up to frame_id differs from the cumulative
+    count up to frame_id - 1. Being a pure function of frame_id (not of how
+    many frames a given branch actually saw), both branches agree on the
+    same answer regardless of what either one dropped upstream.
+    """
+
+    def cumulative_selections(t: int) -> int:
+        return math.floor((network_fps * t + 1e-9) / high_fps)
+
+    return cumulative_selections(frame_id) != cumulative_selections(frame_id - 1)
 
 
 def scale_bbox(bbox: list[float], source_width: int, source_height: int, target_width: int, target_height: int) -> list[int]:
@@ -963,6 +986,7 @@ class SplitPipeline:
         self._throughput_last_processed = 0
         self._throughput_last_sent = 0
         self._throughput_last_monotonic = time.monotonic()
+        self._inference_unmatchable_skipped = 0
         self.worker: DetectionWorker | None = None
         self.network_sender = RtpNetworkSender(args.host, args.port)
         self._identity_condition = threading.Condition()
@@ -1178,7 +1202,8 @@ class SplitPipeline:
         print(
             f"[throughput] capture={capture_fps:.1f}fps inference={inference_fps:.1f}fps "
             f"network={network_pps:.1f}pkt/s over {elapsed:.1f}s "
-            f"(capture_total={self.frame_counter} inference_total={processed} network_total={sent})",
+            f"(capture_total={self.frame_counter} inference_total={processed} network_total={sent} "
+            f"inference_unmatchable_skipped_total={self._inference_unmatchable_skipped})",
             flush=True,
         )
         self._throughput_last_capture = self.frame_counter
@@ -1291,6 +1316,14 @@ class SplitPipeline:
             if self.loop and self.loop.is_running():
                 self.glib.idle_add(self.loop.quit)
             return self.gst.FlowReturn.ERROR
+        if not network_branch_will_carry_frame(source_packet.frame_id, self.args.high_fps, self.args.network_fps):
+            # The network branch will never transmit this frame_id (it keeps
+            # a different, evenly-spaced subset than whatever the inference
+            # queue happens to pull), so ground can never have a video frame
+            # to join this detection against. Running YOLO on it would only
+            # produce a result that can never be displayed.
+            self._inference_unmatchable_skipped += 1
+            return self.gst.FlowReturn.OK
         # Capture-only mode does not need to copy a high-resolution BGR frame
         # into Python. Canonical identity and sidecars were already assigned
         # by the source-pad probe before this branch.
@@ -1526,6 +1559,7 @@ class SplitPipeline:
                 "source_pts_field": "source_pts_ns",
                 "description": "identity is assigned in the source callback before recording metadata, inference, and preview publication",
             },
+            "inference_unmatchable_skipped": self._inference_unmatchable_skipped,
             "detector": self.worker.metadata() if self.worker is not None else {
                 "enabled": False,
                 "mode": "none",
