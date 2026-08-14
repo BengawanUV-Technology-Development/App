@@ -120,6 +120,18 @@ def stop_camera():
         return jsonify({**_get_flight_recorder().status(), "ok": False, "error": str(exc)}), 409
 
 
+@api_v1_bp.route("/camera/preview-source", methods=["POST"])
+def set_camera_preview_source():
+    payload = request.get_json(silent=True) or {}
+    source = payload.get("source")
+    try:
+        result = _get_flight_recorder().set_preview_source(source)
+        _get_vision_overlay_store().clear()
+        return jsonify({"ok": True, **result})
+    except FlightRecorderError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 409
+
+
 @api_v1_bp.route("/camera/preview", methods=["GET"])
 def camera_preview():
     return Response(

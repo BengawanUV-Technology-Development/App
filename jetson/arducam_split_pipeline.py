@@ -164,7 +164,8 @@ def scale_bbox(bbox: list[float], source_width: int, source_height: int, target_
 def _gst_quote(value: str | Path) -> str:
     """Quote a value for Gst.parse_launch, not for a shell."""
 
-    text = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    text = Path(value).as_posix() if isinstance(value, Path) else str(value).replace("\\", "/")
+    text = text.replace('"', '\\"')
     return f'"{text}"'
 
 
@@ -230,36 +231,22 @@ def build_pipeline_description(
         if not qualification_video.is_file():
             raise ValueError(f"qualification video does not exist: {qualification_video}")
 
+    easycap_device = str(getattr(args, "easycap_device", "") or "").strip()
+    if easycap_device:
+        if not Path(easycap_device).is_absolute():
+            raise ValueError("easycap-device must be an absolute /dev path")
+        validate_dimension(args.easycap_width, "easycap-width")
+        validate_dimension(args.easycap_height, "easycap-height")
+        validate_fps(args.easycap_fps, "easycap-fps")
+
     key_int = max(1, round(high_fps))
     network_key_int = max(1, round(network_fps))
     high_fps_caps = fps_caps(high_fps)
-    # Canonical identity is assigned by a probe on the tee's own sink pad
-    # (see capture_pad in _run_once), upstream of every branch below, so it
-    # always observes every master frame regardless of what any branch's
-    # queue does. A non-leaky queue here would block the tee itself once
-    # full: GStreamer's tee pushes to each branch synchronously from the
-    # same calling thread, so a stalled branch backpressures capture for
-    # every other branch too, which throttled the whole pipeline (including
-    # the network preview branch) down to inference speed. leaky=downstream
-    # lets a slow inference branch drop its own frames instead.
-    # A deep queue here doesn't protect anything (identity is already
-    # captured upstream, and DetectionWorker's own size-1 queue already
-    # keeps only the latest submitted frame) -- it only adds latency, since
-    # every buffer that does survive leaky-dropping has to wait behind
-    # whatever's ahead of it in this queue for the color-space conversion
-    # below. Measured end to end: with max-size-buffers=16 here, frames
-    # were sitting 600-700ms before DetectionWorker ever saw them, which
-    # alone blew the ground-side sync window. A depth of 1-2 keeps only the
-    # most recent candidate in flight, matching the "always want the
-    # latest" design already used downstream.
     appsink_buffers = 2
     appsink_drop = "drop=true"
     appsink_queue = "queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream"
     recovery_file = recovery_file or video_path.with_name(f"{video_path.name}.moov.recovery")
     if qualification_video is None:
-        # Flip once here, before the tee, so recording, inference and the
-        # network preview all see the same orientation. nvarguscamerasrc has no
-        # flip property of its own; nvvidconv does it on the NVMM surface.
         flip_stage = (
             f"nvvidconv flip-method={args.flip_method} !\nvideo/x-raw(memory:NVMM),format=NV12 !\n"
             if args.flip_method
@@ -269,9 +256,6 @@ def build_pipeline_description(
 video/x-raw(memory:NVMM),width={high_width},height={high_height},format=NV12,framerate={high_fps_caps} !
 {flip_stage}tee name=capture"""
         record_converter = "nvvidconv"
-        # Jetson nvvidconv cannot output packed BGR directly. Convert to the
-        # supported BGRx surface first, then use videoconvert for the Python
-        # appsink's packed BGR contract.
         inference_converter = "nvvidconv ! video/x-raw,format=BGRx ! videoconvert"
         preview_converter = "nvvidconv"
     else:
@@ -283,6 +267,46 @@ tee name=capture"""
         record_converter = "videoconvert ! videoscale"
         inference_converter = "videoconvert ! videoscale"
         preview_converter = "videoconvert ! videoscale"
+
+    if easycap_device:
+        analog_video_path = video_path.with_name("video_analog.mkv")
+        easycap_fps_caps = fps_caps(float(getattr(args, "easycap_fps", 30.0)))
+        network_fps_caps = fps_caps(network_fps)
+        analog_branch = f"""
+v4l2src device={_gst_quote(easycap_device)} do-timestamp=true !
+image/jpeg,width={args.easycap_width},height={args.easycap_height},framerate={easycap_fps_caps} !
+jpegparse ! jpegdec ! videoconvert ! videorate !
+video/x-raw,format=I420,width={args.easycap_width},height={args.easycap_height},framerate={easycap_fps_caps} !
+tee name=analog_capture
+analog_capture. ! queue max-size-buffers=64 max-size-time=0 max-size-bytes=0 !
+jpegenc quality=90 ! jpegparse ! matroskamux ! filesink location={_gst_quote(analog_video_path)}
+analog_capture. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream !
+videoscale add-borders=true ! videorate !
+video/x-raw,format=I420,width={network_width},height={network_height},framerate={network_fps_caps} !
+queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! preview_selector.sink_1
+""".strip()
+        preview_stage = f"""
+capture. ! queue max-size-buffers=4 max-size-time=0 max-size-bytes=0 leaky=downstream !
+{preview_converter} ! video/x-raw,format=I420,width={network_width},height={network_height} !
+videorate ! video/x-raw,format=I420,framerate={network_fps_caps} !
+queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! preview_selector.sink_0
+{analog_branch}
+input-selector name=preview_selector sync-streams=true cache-buffers=true !
+identity name=preview_identity !
+x264enc bitrate={args.network_bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max={network_key_int} bframes=0 !
+h264parse ! rtph264pay name=preview_payloader pt={args.payload_type} ssrc={args.rtp_ssrc} config-interval=1 mtu=1200 !
+appsink name=network_sink emit-signals=true max-buffers=128 drop=true sync=false
+""".strip()
+    else:
+        preview_stage = f"""
+capture. ! queue max-size-buffers=4 max-size-time=0 max-size-bytes=0 leaky=downstream !
+{preview_converter} ! video/x-raw,format=I420,width={network_width},height={network_height} !
+identity name=preview_identity !
+x264enc bitrate={args.network_bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max={network_key_int} bframes=0 !
+h264parse ! rtph264pay name=preview_payloader pt={args.payload_type} ssrc={args.rtp_ssrc} config-interval=1 mtu=1200 !
+appsink name=network_sink emit-signals=true max-buffers=128 drop=true sync=false
+""".strip()
+
     return f"""
 {source}
 capture. ! queue max-size-buffers=8 max-size-time=0 max-size-bytes=0 leaky=downstream !
@@ -292,12 +316,7 @@ h264parse ! mp4mux fragment-duration=1000 fragment-mode=first-moov-then-finalise
 capture. ! {appsink_queue} !
 {inference_converter} ! video/x-raw,format=BGR,width={high_width},height={high_height} !
 appsink name=highres_sink emit-signals=true max-buffers={appsink_buffers} {appsink_drop} sync=false
-capture. ! queue max-size-buffers=4 max-size-time=0 max-size-bytes=0 leaky=downstream !
-{preview_converter} ! video/x-raw,format=I420,width={network_width},height={network_height} !
-identity name=preview_identity !
-x264enc bitrate={args.network_bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max={network_key_int} bframes=0 !
-h264parse ! rtph264pay name=preview_payloader pt={args.payload_type} ssrc={args.rtp_ssrc} config-interval=1 mtu=1200 !
-appsink name=network_sink emit-signals=true max-buffers=128 drop=true sync=false
+{preview_stage}
 """.strip()
 
 
@@ -1054,6 +1073,10 @@ class SplitPipeline:
         )
         self.mission_dir, self.session_dir = self._create_session_dir()
         self.video_path = self.session_dir / "video.mp4"
+        self.analog_video_path = self.session_dir / "video_analog.mkv"
+        self.preview_events_path = self.session_dir / "preview-events.jsonl"
+        self.preview_source = "digital"
+        self.preview_selector = None
         # Keep mp4mux's recovery index beside the recording on the validated
         # SSD. Fragmented MP4 grows continuously and does not stage the entire
         # recording in /tmp before writing the final moov atom.
@@ -1201,6 +1224,10 @@ class SplitPipeline:
             bus.connect("message", self._on_message)
             if self.worker is None:
                 raise RuntimeError("Detection worker was not initialized")
+            self.preview_selector = self.pipeline.get_by_name("preview_selector")
+            self._refresh_preview_source(force=True)
+            if self.preview_selector is not None:
+                self.glib.timeout_add(100, self._poll_preview_source)
             self.sidecars.start()
             self.worker.start()
             self.network_sender.start()
@@ -1228,6 +1255,8 @@ class SplitPipeline:
                 self._telemetry_started = False
             if not self.failure_error:
                 self.failure_error = self._validate_video_output()
+            if not self.failure_error:
+                self.failure_error = self._validate_analog_video_output()
             if not self.failure_error:
                 try:
                     self.recovery_file.unlink()
@@ -1558,6 +1587,73 @@ class SplitPipeline:
         if self.pipeline is not None:
             self.pipeline.set_state(self.gst.State.NULL)
 
+    def _read_preview_source(self) -> str:
+        path = getattr(self.args, "preview_source_file", None)
+        if path is None:
+            return "digital"
+        try:
+            value = Path(path).read_text(encoding="utf-8").strip().lower()
+        except OSError:
+            return "digital"
+        return value if value in {"digital", "analog"} else "digital"
+
+    def _refresh_preview_source(self, force: bool = False) -> None:
+        requested = self._read_preview_source()
+        if requested == "analog" and not getattr(self.args, "easycap_device", ""):
+            requested = "digital"
+        if not force and requested == self.preview_source:
+            return
+        if self.preview_selector is None:
+            self.preview_source = requested
+            return
+        pad_name = "sink_1" if requested == "analog" else "sink_0"
+        pad = self.preview_selector.get_static_pad(pad_name)
+        if pad is None:
+            print(f"[preview] selector pad {pad_name} is unavailable; keeping {self.preview_source}", flush=True)
+            return
+        self.preview_selector.set_property("active-pad", pad)
+        previous = self.preview_source
+        self.preview_source = requested
+        print(f"[preview] source changed: {previous} -> {requested}", flush=True)
+        if previous != requested:
+            event = {
+                "schema_version": "2.0",
+                "type": "preview_source_changed",
+                "timestamp": utc_iso(time.time()),
+                "from": previous,
+                "to": requested,
+                "camera_id": "arducam",
+            }
+            try:
+                with self.preview_events_path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+            except OSError:
+                pass
+        self._write_metadata("RECORDING")
+
+    def _poll_preview_source(self) -> bool:
+        if self.stopping or self.failure_error:
+            return False
+        self._refresh_preview_source()
+        return bool(self.loop and self.loop.is_running())
+
+    def _validate_analog_video_output(self) -> str | None:
+        """Validate the optional timestamp-normalized MJPEG Matroska recording."""
+
+        if not getattr(self.args, "easycap_device", ""):
+            return None
+        try:
+            size = self.analog_video_path.stat().st_size
+            with self.analog_video_path.open("rb") as handle:
+                header = handle.read(4)
+        except OSError as exc:
+            return f"cannot validate video_analog.mkv: {exc}"
+        if size <= 0:
+            return "video_analog.mkv is empty after pipeline shutdown"
+        if header != b"\x1aE\xdf\xa3":
+            return "video_analog.mkv is missing the Matroska EBML header"
+        return None
+
     def _validate_video_output(self) -> str | None:
         """Reject a nominally completed session with an empty/invalid MP4."""
 
@@ -1588,12 +1684,16 @@ class SplitPipeline:
             usage = shutil.disk_usage(self.session_dir)
             video_size = self.video_path.stat().st_size if self.video_path.exists() else 0
             recovery_size = self.recovery_file.stat().st_size if self.recovery_file.exists() else 0
+            analog_video_size = (
+                self.analog_video_path.stat().st_size if self.analog_video_path.exists() else 0
+            )
             storage = {
                 **self.storage_info.as_dict(),
                 "free_bytes": usage.free,
                 "used_bytes": usage.used,
                 "video_size_bytes": video_size,
                 "recovery_file_size_bytes": recovery_size,
+                "analog_video_size_bytes": analog_video_size,
             }
         except OSError as exc:
             storage = {**self.storage_info.as_dict(), "error": str(exc)}
@@ -1612,6 +1712,25 @@ class SplitPipeline:
                 if self.args.qualification_video is not None
                 else None,
                 "hardware_evidence": self.args.qualification_video is None,
+            },
+            "preview": {
+                "source": self.preview_source,
+                "digital_camera": "arducam",
+                "analog_available": bool(getattr(self.args, "easycap_device", "")),
+                "analog_device": getattr(self.args, "easycap_device", "") or None,
+                "analog_camera": "selected_by_pilot" if getattr(self.args, "easycap_device", "") else None,
+                "recording_source": "arducam",
+                "inference_source": "arducam",
+                "bbox_overlay_compatible": self.preview_source == "digital",
+            },
+            "analog_recording": {
+                "enabled": bool(getattr(self.args, "easycap_device", "")),
+                "device": getattr(self.args, "easycap_device", "") or None,
+                "width": getattr(self.args, "easycap_width", 640) if getattr(self.args, "easycap_device", "") else None,
+                "height": getattr(self.args, "easycap_height", 480) if getattr(self.args, "easycap_device", "") else None,
+                "fps": getattr(self.args, "easycap_fps", 30.0) if getattr(self.args, "easycap_device", "") else None,
+                "codec": "MJPEG" if getattr(self.args, "easycap_device", "") else None,
+                "container": "Matroska" if getattr(self.args, "easycap_device", "") else None,
             },
             "frame_count": self.frame_counter,
             "started_at": utc_iso(self.started_at),
@@ -1634,10 +1753,12 @@ class SplitPipeline:
             "network_sender": self.network_sender.metadata(),
             "files": {
                 "video": "video.mp4",
+                "analog_video": "video_analog.mkv" if getattr(self.args, "easycap_device", "") else None,
                 "video_recovery_file": "video.mp4.moov.recovery",
                 "frames": "frames.jsonl",
                 "telemetry": "telemetry.jsonl",
                 "detections": "detections.jsonl",
+                "preview_events": "preview-events.jsonl" if getattr(self.args, "easycap_device", "") else None,
             },
             "storage": storage,
             "frame_identity": {
@@ -1745,6 +1866,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--slice-width", type=int, default=640)
     parser.add_argument("--slice-height", type=int, default=640)
     parser.add_argument("--overlap", type=float, default=0.2)
+    parser.add_argument(
+        "--easycap-device",
+        default="",
+        help="Optional absolute V4L2 device path used only for analog web preview",
+    )
+    parser.add_argument("--easycap-width", type=int, default=640)
+    parser.add_argument("--easycap-height", type=int, default=480)
+    parser.add_argument("--easycap-fps", type=float, default=30.0)
+    parser.add_argument(
+        "--preview-source-file",
+        type=Path,
+        default=None,
+        help="Agent-owned file containing digital or analog",
+    )
     parser.add_argument("--ingest-url", default="")
     parser.add_argument("--event-ingest-url", default="")
     parser.add_argument("--registration-url", default="")

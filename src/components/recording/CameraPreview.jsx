@@ -15,15 +15,19 @@ function CameraPreview() {
   const [minimumConfidence, setMinimumConfidence] = useState(0.45);
   const [classFilter, setClassFilter] = useState("");
   const [connectionNonce, setConnectionNonce] = useState(0);
+  const [sourceError, setSourceError] = useState(null);
+
+  const previewSource = camera.preview_source || "digital";
+  const analogAvailable = camera.preview_analog_available === true;
 
   const filteredDetections = useCallback(() => {
-    if (!overlayEnabled || !Array.isArray(header?.detections)) return [];
+    if (previewSource === "analog" || !overlayEnabled || !Array.isArray(header?.detections)) return [];
     const wanted = classFilter.trim().toLowerCase();
     return header.detections.filter((item) => (
       Number(item.confidence || 0) >= minimumConfidence
       && (!wanted || String(item.class || "").toLowerCase().includes(wanted))
     ));
-  }, [classFilter, header, minimumConfidence, overlayEnabled]);
+  }, [classFilter, header, minimumConfidence, overlayEnabled, previewSource]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -132,6 +136,18 @@ function CameraPreview() {
     return () => clearInterval(interval);
   }, [refresh]);
 
+  const switchPreview = async (source) => {
+    setIsLoading(true);
+    setSourceError(null);
+    const result = await apiPost("/api/v1/camera/preview-source", { source });
+    if (!result.ok) {
+      setSourceError(result.error || "Gagal mengubah sumber preview");
+    } else {
+      await refresh();
+    }
+    setIsLoading(false);
+  };
+
   const restart = async () => {
     setIsLoading(true);
     if (!camera.recording) await apiPost("/api/v1/camera/stop");
@@ -153,9 +169,16 @@ function CameraPreview() {
           <span>{camera.camera_error || `Vision WebSocket ${socketState.toLowerCase()}`}</span>
         </div>
       ) : null}
+      {sourceError ? (
+        <div className="camera-preview-source-error">{sourceError}</div>
+      ) : null}
+      {previewSource === "analog" ? (
+        <div className="camera-preview-ai-status">ANALOG FPV ACTIVE · AI DETECTION CONTINUES ON DIGITAL</div>
+      ) : null}
       <div className="vision-frame-metrics">
         <span>CAM {header?.camera_id || "arducam"}</span>
         <span>STREAM {streamState}</span>
+        <span>SRC {previewSource.toUpperCase()}</span>
         <span>DETECTOR {header?.detector_state || "UNKNOWN"}</span>
         <span>{detectionState}</span>
         <span>{Number(header?.fps || 0).toFixed(1)} FPS</span>
@@ -167,6 +190,25 @@ function CameraPreview() {
         <input value={classFilter} onChange={(event) => setClassFilter(event.target.value)} placeholder="class filter" aria-label="Detection class filter" />
       </div>
       <div className="camera-preview-controls">
+        <div className="camera-preview-sources">
+          <button
+            type="button"
+            className={previewSource === "digital" ? "is-selected" : ""}
+            onClick={() => switchPreview("digital")}
+            disabled={isLoading || previewSource === "digital"}
+          >
+            DIGITAL
+          </button>
+          <button
+            type="button"
+            className={previewSource === "analog" ? "is-selected" : ""}
+            onClick={() => switchPreview("analog")}
+            disabled={isLoading || !analogAvailable || previewSource === "analog"}
+            title={analogAvailable ? "Switch to EasyCAP analog video" : "EasyCAP hardware is not connected"}
+          >
+            ANALOG
+          </button>
+        </div>
         <span className={streamState === "RUNNING" ? "is-live" : ""}>FRAME {header?.frame_id ?? "-"} · EPOCH {header?.capture_epoch ?? "-"}</span>
         <div><button type="button" onClick={restart} disabled={isLoading}>RECONNECT</button></div>
       </div>

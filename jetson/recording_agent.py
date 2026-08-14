@@ -141,6 +141,10 @@ class AgentConfig:
         self.network_fps = env_float("JETSON_NETWORK_FPS", 15.0, 0.1, 120.0)
         self.local_bitrate_kbps = env_int("JETSON_LOCAL_BITRATE_KBPS", 12000, 100, 100000)
         self.network_bitrate_kbps = env_int("JETSON_NETWORK_BITRATE_KBPS", 2000, 100, 100000)
+        self.easycap_device = os.getenv("JETSON_EASYCAP_DEVICE", "").strip()
+        self.easycap_width = env_int("JETSON_EASYCAP_WIDTH", 640, 16, 7680)
+        self.easycap_height = env_int("JETSON_EASYCAP_HEIGHT", 480, 16, 7680)
+        self.easycap_fps = env_float("JETSON_EASYCAP_FPS", 30.0, 0.1, 120.0)
         self.sidecar_queue_size = env_int("JETSON_SIDECAR_QUEUE_SIZE", 4096, 1, 65536)
         self.weights = os.getenv("JETSON_MODEL_WEIGHTS", "").strip()
         self.device = os.getenv("JETSON_MODEL_DEVICE", "cuda:0").strip()
@@ -260,6 +264,14 @@ class AgentConfig:
             "--registration-url",
             registration_url,
         ]
+        if self.easycap_device:
+            command.extend([
+                "--easycap-device", self.easycap_device,
+                "--easycap-width", str(self.easycap_width),
+                "--easycap-height", str(self.easycap_height),
+                "--easycap-fps", str(self.easycap_fps),
+                "--preview-source-file", str(self.record_dir / ".preview-source"),
+            ])
         if self.record_mountpoint:
             command.extend(["--mountpoint", self.record_mountpoint])
         if self.allow_root_record_dir:
@@ -513,12 +525,52 @@ class RecordingController:
             "storage": metadata.get("storage"),
             "detector": metadata.get("detector"),
             "health": metadata.get("health"),
+            "preview_source": self._read_preview_source() if self._analog_available() else "digital",
+            "preview_analog_available": self._analog_available(),
+            "preview_active_source": (
+                metadata.get("preview", {}).get("source")
+                if metadata
+                else self._read_preview_source() if self._analog_available() else "digital"
+            ),
             "stream_target": {
                 "host": self._gcs_host,
                 "video_port": self._video_port,
                 "api_port": self._api_port,
             } if self._gcs_host else None,
         }
+
+    def _preview_source_path(self) -> Path:
+        return Path(self.config.record_dir).expanduser().resolve() / ".preview-source"
+
+    def _read_preview_source(self) -> str:
+        try:
+            value = self._preview_source_path().read_text(encoding="utf-8").strip().lower()
+        except OSError:
+            return "digital"
+        return value if value in {"digital", "analog"} else "digital"
+
+    def _write_preview_source(self, source: str) -> None:
+        path = self._preview_source_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source + "\n", encoding="utf-8")
+
+    def _analog_available(self) -> bool:
+        device = getattr(self.config, "easycap_device", "")
+        return bool(device and Path(device).exists())
+
+    def set_preview_source(self, source: Any) -> dict[str, Any]:
+        if not isinstance(source, str):
+            raise RecordingAgentError("preview source must be digital or analog")
+        normalized = source.strip().lower()
+        if normalized not in {"digital", "analog"}:
+            raise RecordingAgentError("preview source must be digital or analog")
+        if normalized == "analog" and not self._analog_available():
+            raise RecordingAgentError(
+                "analog preview is unavailable; configure JETSON_EASYCAP_DEVICE and connect EasyCAP"
+            )
+        with self._lock:
+            self._write_preview_source(normalized)
+            return self._state_locked()
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -775,6 +827,13 @@ class RecordingRequestHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             self._send_json(401, {"ok": False, "error": "Unauthorized"})
             return
+        if self.path == "/preview/source":
+            self._send_json(200, {
+                "ok": True,
+                "preview_source": self.controller._read_preview_source() if self.controller._analog_available() else "digital",
+                "preview_analog_available": self.controller._analog_available(),
+            })
+            return
         if self.path != "/recording/status":
             self._send_json(404, {"ok": False, "error": "Not found"})
             return
@@ -786,6 +845,10 @@ class RecordingRequestHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self._read_json()
+            if self.path == "/preview/source":
+                result = self.controller.set_preview_source(payload.get("source"))
+                self._send_json(200, result)
+                return
             if self.path == "/recording/start":
                 label = payload.get("label")
                 if label is not None and not isinstance(label, str):

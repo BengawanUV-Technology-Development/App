@@ -370,6 +370,14 @@ class FlightRecorder:
             self.live_detections.reset()
             return self.status()
 
+    def set_preview_source(self, source: str) -> dict:
+        if self._jetson_recording is None:
+            raise FlightRecorderError("preview source selection requires JETSON_RECORDING_AGENT_URL")
+        try:
+            return self._jetson_recording.set_preview_source(source)
+        except JetsonRecordingError as exc:
+            raise FlightRecorderError(str(exc)) from exc
+
         with self._frame_ready:
             if not self._state["recording"]:
                 raise FlightRecorderError("No flight recording is active")

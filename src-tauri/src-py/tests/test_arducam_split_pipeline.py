@@ -114,7 +114,7 @@ class ArducamSplitPipelineTests(unittest.TestCase):
 
             description = build_pipeline_description(args, Path("/tmp/video.mp4"))
 
-        self.assertIn(f'filesrc location="{video.resolve()}"', description)
+        self.assertIn(f'filesrc location="{video.resolve().as_posix()}"', description)
         self.assertIn("qtdemux ! h264parse ! avdec_h264", description)
         self.assertIn("identity name=qualification_clock sync=true", description)
         self.assertIn("tee name=capture", description)
