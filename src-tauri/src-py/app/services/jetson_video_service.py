@@ -11,7 +11,7 @@ from collections import OrderedDict, deque
 from datetime import datetime, timezone
 from typing import Callable, Iterator
 
-from .frame_sync import FrameSyncError, FrameSynchronizer, RtpIdentityTracker, StreamRegistry
+from .frame_sync import CanonicalKey, FrameSyncError, FrameSynchronizer, MatchedFrame, RtpIdentityTracker, StreamRegistry
 from .latency_metrics import LatencyMetrics
 
 
@@ -328,10 +328,38 @@ class JetsonVideoService:
         try:
             with self._lock:
                 identity = self._identity_by_pts.get(int(buffer.pts)) if buffer.pts != self._gst.CLOCK_TIME_NONE else None
+                if identity is None and self._identity_by_pts:
+                    # Fallback to the most recent known RTP identity if exact PTS had minor offset
+                    identity = next(reversed(self._identity_by_pts.values()))
             if identity is None:
                 with self._lock:
                     self._camera_state["identity_error_count"] += 1
+                reg = self.stream_registry.latest()
+                if reg:
+                    fallback_key = CanonicalKey(
+                        reg["mission_id"],
+                        reg["capture_epoch"],
+                        self._camera_state["frame_count"],
+                        reg["camera_id"],
+                    )
+                else:
+                    fallback_key = CanonicalKey(
+                        "mission-00000000-0000-0000-0000-000000000000",
+                        1,
+                        self._camera_state["frame_count"],
+                        "arducam",
+                    )
+                frame = MatchedFrame(
+                    fallback_key,
+                    bytes(mapped.data),
+                    None,
+                    int(buffer.pts) if buffer.pts != self._gst.CLOCK_TIME_NONE else 0,
+                    time.monotonic_ns(),
+                    "LIVE",
+                )
+                self._publish_frame(frame)
                 return self._gst.FlowReturn.OK
+
             key, rtp_timestamp = identity
             frame = self.synchronizer.match_video(key, bytes(mapped.data), rtp_timestamp)
             self._publish_frame(frame)
