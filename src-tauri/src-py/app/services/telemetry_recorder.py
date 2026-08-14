@@ -42,14 +42,45 @@ class TelemetryRecorder:
         self._history: deque[tuple[float, dict[str, Any]]] = deque(maxlen=history_size)
         self._lock = threading.Lock()
         self._file = self.log_path.open("a", encoding="utf-8", buffering=1)
+        # Optional per-recording-session mirror of this same stream. Ported
+        # from irfan/mission-planner-vision-refactor's per-session
+        # telemetry.jsonl, adapted to be time-driven rather than frame-driven:
+        # that branch's FlightRecorder writes one row per encoded video frame,
+        # but here (CAMERA_SOURCE=jetson_udp) recording happens on the Jetson,
+        # so the ground side has no frame loop to hang a row off of -- it just
+        # mirrors every sample it already polls from Mission Planner while a
+        # session is active. See FlightRecorder._begin_telemetry_session.
+        self._session_file = None
+        self._session_lock = threading.Lock()
+
+    def start_session(self, session_dir: str | Path) -> None:
+        """Begin mirroring every recorded sample into <session_dir>/telemetry.jsonl,
+        in addition to the existing global log. Safe to call if a previous
+        session was never explicitly ended (closes it first)."""
+        session_path = Path(session_dir) / "telemetry.jsonl"
+        handle = session_path.open("a", encoding="utf-8", buffering=1)
+        with self._session_lock:
+            if self._session_file is not None:
+                self._session_file.close()
+            self._session_file = handle
+
+    def end_session(self) -> None:
+        with self._session_lock:
+            if self._session_file is not None:
+                self._session_file.close()
+                self._session_file = None
 
     def record(self, telemetry: dict[str, Any], now: float | None = None) -> None:
         """Store one successfully-polled telemetry sample (skip stale/offline snapshots)."""
         now = now if now is not None else time.time()
         row = {"recorded_at_unix": now, **telemetry}
+        line = json.dumps(row, separators=(",", ":")) + "\n"
         with self._lock:
             self._history.append((now, telemetry))
-            self._file.write(json.dumps(row, separators=(",", ":")) + "\n")
+            self._file.write(line)
+        with self._session_lock:
+            if self._session_file is not None:
+                self._session_file.write(line)
 
     def nearest(self, target_unix: float, max_age_seconds: float = 0.5) -> dict[str, Any] | None:
         """Return the telemetry sample closest to target_unix, or None if none is within tolerance."""

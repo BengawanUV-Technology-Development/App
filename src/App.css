@@ -1844,6 +1844,11 @@ select {
   font-size: 0.68rem;
 }
 
+.detection-hover-cluster {
+  color: #86efac;
+  font-size: 0.62rem;
+}
+
 .detection-hover-caveat {
   color: #fbbf24;
   font-size: 0.62rem;

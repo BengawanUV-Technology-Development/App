@@ -2,12 +2,20 @@
 vehicle's pose at capture time into an estimated real-world lat/lon.
 
 Math background: unproject the bbox center through the pinhole camera model
-into a 3D ray in camera space, rotate that ray into the world (NED) frame
-using the vehicle's attitude, intersect it with a flat ground plane at the
+into a 3D ray in camera space, rotate that ray into a Z-up world frame using
+the vehicle's attitude, intersect it with a flat ground plane at the
 vehicle's current relative (AGL) altitude, then convert the resulting
 north/east offset (meters) into a lat/lon delta with a flat-earth
 approximation (accurate to a few cm over the few-hundred-meter ranges this
 is used at).
+
+Rotation convention: the roll/pitch/yaw -> rotation-matrix step (R = Rx @ Ry
+@ Rz) and the camera-frame axis flip are ported as-is from
+irfan/mission-planner-vision-refactor's geotagging.py, not the aerospace
+ZYX/MAVLink body->NED convention -- team decision (2026-08-14) to keep that
+branch's math here for now so the two stay merge-compatible. It has not been
+validated against real MAVLink telemetry; revisit if target estimates look
+systematically off once real flight data is available.
 
 IMPORTANT -- calibration status: the camera intrinsics (focal length, sensor
 width) and the mount rotation default to placeholder values borrowed from
@@ -49,51 +57,26 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
-def _rotation_body_to_ned(roll_deg: float, pitch_deg: float, yaw_deg: float) -> np.ndarray:
-    """Standard aerospace ZYX (yaw-pitch-roll) body->NED rotation, MAVLink convention."""
+def _rotation_world(roll_deg: float, pitch_deg: float, yaw_deg: float) -> np.ndarray:
+    """R = Rx @ Ry @ Rz, ported as-is from irfan/mission-planner-vision-refactor's
+    geotagging.get_rotation_matrix(). See module docstring for the convention note."""
     r, p, y = math.radians(roll_deg), math.radians(pitch_deg), math.radians(yaw_deg)
     cr, sr = math.cos(r), math.sin(r)
     cp, sp = math.cos(p), math.sin(p)
     cy, sy = math.cos(y), math.sin(y)
-    return np.array(
-        [
-            [cp * cy, sr * sp * cy - cr * sy, cr * sp * cy + sr * sy],
-            [cp * sy, sr * sp * sy + cr * cy, cr * sp * sy - sr * cy],
-            [-sp, sr * cp, cr * cp],
-        ],
-        dtype=np.float64,
-    )
-
-
-# Fixed camera-optical-frame -> vehicle-body-frame rotation for the canonical
-# "boresight straight down, top-of-image toward the nose" nadir mount: camera
-# +Z (boresight) -> body +Z (down), camera +X (image right) -> body +Y
-# (right), camera +Y (image down) -> body -X (toward the tail). This is the
-# single most common belly-camera install; if this airframe's camera is
-# mounted differently, express the difference via JETSON_CAMERA_MOUNT_*_DEG
-# rather than editing this constant.
-_NADIR_CAMERA_TO_BODY = np.array(
-    [
-        [0.0, -1.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0],
-    ],
-    dtype=np.float64,
-)
+    rx = np.array([[1.0, 0.0, 0.0], [0.0, cr, -sr], [0.0, sr, cr]], dtype=np.float64)
+    ry = np.array([[cp, 0.0, sp], [0.0, 1.0, 0.0], [-sp, 0.0, cp]], dtype=np.float64)
+    rz = np.array([[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    return rx @ ry @ rz
 
 
 class CameraCalibration:
-    """Pinhole intrinsics + rigid mount offset. See module docstring for the calibration caveat."""
+    """Pinhole intrinsics. See module docstring for the calibration caveat."""
 
     def __init__(self):
         self.focal_length_mm = _env_float("JETSON_CAMERA_FOCAL_LENGTH_MM", 6.0)
         self.sensor_width_mm = _env_float("JETSON_CAMERA_SENSOR_WIDTH_MM", 6.287)
-        self.mount_roll_deg = _env_float("JETSON_CAMERA_MOUNT_ROLL_DEG", 0.0)
-        self.mount_pitch_deg = _env_float("JETSON_CAMERA_MOUNT_PITCH_DEG", 0.0)
-        self.mount_yaw_deg = _env_float("JETSON_CAMERA_MOUNT_YAW_DEG", 0.0)
         self.is_calibrated = _env_bool("JETSON_CAMERA_CALIBRATED", False)
-        self._mount_offset = _rotation_body_to_ned(self.mount_roll_deg, self.mount_pitch_deg, self.mount_yaw_deg)
-        self.camera_to_body = self._mount_offset @ _NADIR_CAMERA_TO_BODY
 
     def intrinsics(self, image_width: int, image_height: int) -> np.ndarray:
         fx = self.focal_length_mm * (image_width / self.sensor_width_mm)
@@ -120,14 +103,20 @@ def _estimate_ground_offset_m(
     u = (bbox_normalized_xyxy[0] + bbox_normalized_xyxy[2]) / 2.0 * image_width
     v = (bbox_normalized_xyxy[1] + bbox_normalized_xyxy[3]) / 2.0 * image_height
     k_inv = np.linalg.inv(calibration.intrinsics(image_width, image_height))
-    ray_cam = k_inv @ np.array([u, v, 1.0], dtype=np.float64)
+    ray_cv = k_inv @ np.array([u, v, 1.0], dtype=np.float64)
+    # CV camera convention (+Y down, +Z forward) -> Blender-style (+Y up, +Z backward).
+    ray_blender = np.array([ray_cv[0], -ray_cv[1], -ray_cv[2]], dtype=np.float64)
 
-    r_body_to_ned = _rotation_body_to_ned(roll_deg, pitch_deg, yaw_deg)
-    ray_ned = r_body_to_ned @ calibration.camera_to_body @ ray_cam
-    if ray_ned[2] <= 1e-6:
-        return None  # ray points level or upward from the vehicle; never meets the ground below it
-    t = altitude_agl_m / ray_ned[2]
-    return t * ray_ned[0], t * ray_ned[1]
+    ray_world = _rotation_world(roll_deg, pitch_deg, yaw_deg) @ ray_blender
+    norm = np.linalg.norm(ray_world)
+    if norm == 0:
+        return None
+    ray_world = ray_world / norm
+    if ray_world[2] >= -1e-6:
+        return None  # ray level or upward in this Z-up world frame; never meets the ground below it
+    t = -altitude_agl_m / ray_world[2]
+    east_m, north_m = t * ray_world[0], t * ray_world[1]
+    return north_m, east_m
 
 
 def _offset_to_latlon(lat_deg: float, lon_deg: float, north_m: float, east_m: float) -> tuple[float, float]:

@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import itertools
 import json
+import math
 import os
 import subprocess
 import sys
@@ -35,6 +37,104 @@ import numpy as np
 import requests
 
 from coordinate_estimator import CameraCalibration, estimate_target_latlon
+
+_LOCATED_STATUSES = {"ESTIMATED", "ESTIMATED_UNCALIBRATED"}
+EARTH_RADIUS_M = 6378137.0
+
+# Detections in the same frame whose boxes overlap this much are treated as
+# the same physical target (e.g. a borderline detector threshold producing
+# two boxes for one pedestrian) -- keep only the higher-confidence one.
+IOU_DEDUP_THRESHOLD = 0.5
+
+# Located detections (see _LOCATED_STATUSES) whose estimated ground position
+# is within this many meters of each other, at any point across the whole
+# flight, are treated as repeat sightings of the same physical target.
+CLUSTER_DISTANCE_METERS = 5.0
+
+
+def _iou(box_a: list[float], box_b: list[float]) -> float:
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
+    inter_w = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+    inter_h = max(0.0, min(ay2, by2) - max(ay1, by1))
+    intersection = inter_w * inter_h
+    if intersection <= 0:
+        return 0.0
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+def _dedup_overlapping(detections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Greedy NMS-style dedup for detections within a single frame. Keeps
+    the higher-confidence box of each overlapping pair; two genuinely
+    different targets in the same frame (non-overlapping boxes) are both
+    kept untouched."""
+    ordered = sorted(
+        (d for d in detections if d.get("bbox_normalized_xyxy")),
+        key=lambda d: float(d.get("confidence", 0)),
+        reverse=True,
+    )
+    kept: list[dict[str, Any]] = []
+    for candidate in ordered:
+        box = candidate["bbox_normalized_xyxy"]
+        if any(_iou(box, k["bbox_normalized_xyxy"]) >= IOU_DEDUP_THRESHOLD for k in kept):
+            continue
+        kept.append(candidate)
+    return kept
+
+
+def _flat_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    lat_rad = math.radians((lat1 + lat2) / 2.0)
+    north_m = math.radians(lat1 - lat2) * EARTH_RADIUS_M
+    east_m = math.radians(lon1 - lon2) * EARTH_RADIUS_M * math.cos(lat_rad)
+    return math.hypot(north_m, east_m)
+
+
+def _cluster_by_coordinate(records: list[dict[str, Any]]) -> None:
+    """Union-find clustering of located detections by ground-position
+    proximity, mutating each record in place with cluster_id/cluster_size/
+    is_representative. This is the cross-time half of the two-stage
+    dedup (the other half, _dedup_overlapping, only looks within one
+    frame): the same pedestrian seen across many frames as the drone
+    passes over collapses into one cluster here, and only its
+    highest-confidence sighting is marked representative -- that's the pin
+    the map shows by default post-flight. Detections without a location
+    (coordinate status not in _LOCATED_STATUSES) can't be compared by
+    position, so each is left as its own singleton cluster.
+    """
+    parent = list(range(len(records)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    located = [i for i, r in enumerate(records) if r["coordinate"].get("status") in _LOCATED_STATUSES]
+    for position, i in enumerate(located):
+        lat_i, lon_i = records[i]["coordinate"]["lat"], records[i]["coordinate"]["lon"]
+        for j in located[position + 1:]:
+            lat_j, lon_j = records[j]["coordinate"]["lat"], records[j]["coordinate"]["lon"]
+            if _flat_distance_m(lat_i, lon_i, lat_j, lon_j) <= CLUSTER_DISTANCE_METERS:
+                union(i, j)
+
+    groups: dict[int, list[int]] = {}
+    for i in range(len(records)):
+        groups.setdefault(find(i), []).append(i)
+
+    for cluster_id, members in enumerate(groups.values(), start=1):
+        best = max(members, key=lambda i: float(records[i]["detection"].get("confidence", 0)))
+        for i in members:
+            records[i]["cluster_id"] = cluster_id
+            records[i]["cluster_size"] = len(members)
+            records[i]["is_representative"] = i == best
 
 
 def _load_jsonl(path: Path) -> Iterator[dict[str, Any]]:
@@ -167,48 +267,69 @@ def generate(
     if (ground_url and not ingest_token) or (ingest_token and not ground_url):
         print("[snapshot] both --ground-url and --ingest-token are required to upload; skipping upload", file=sys.stderr, flush=True)
 
+    # Pass 1 (cheap: no video/ffmpeg access): apply the same min-interval
+    # thinning as before, then within-frame IoU dedup, then compute each
+    # surviving detection's coordinate. This produces the full candidate
+    # set that cross-time clustering needs -- clustering can't run
+    # incrementally per frame, it needs every detection's coordinate.
+    candidates: list[dict[str, Any]] = []
+    skipped_interval = 0
+    last_seconds: float | None = None
+    for row in _load_jsonl(detections_path):
+        detections = row.get("detections") or []
+        if not detections:
+            continue
+        source_pts_ns = row.get("source_pts_ns")
+        if source_pts_ns is None:
+            continue
+        seconds = source_pts_ns / 1_000_000_000
+        # A sustained detection streak would otherwise produce a nearly
+        # identical crop every ~1/inference_fps seconds; thin those out.
+        if last_seconds is not None and seconds - last_seconds < min_interval_seconds:
+            skipped_interval += 1
+            continue
+
+        width, height = row.get("source_width"), row.get("source_height")
+        telemetry = telemetry_by_frame.get(row.get("frame_id"))
+        wrote_any = False
+        for detection in _dedup_overlapping(detections):
+            detection_id = detection.get("detection_id")
+            if not detection_id:
+                continue
+            coordinate = estimate_target_latlon(
+                bbox_normalized_xyxy=detection["bbox_normalized_xyxy"],
+                image_width=width,
+                image_height=height,
+                telemetry=telemetry,
+                calibration=calibration,
+            )
+            candidates.append({"row": row, "seconds": seconds, "detection": detection, "coordinate": coordinate})
+            wrote_any = True
+        if wrote_any:
+            last_seconds = seconds
+
+    _cluster_by_coordinate(candidates)
+
+    # Pass 2: the expensive part (ffmpeg frame extraction + upload), now
+    # that every candidate already knows its cluster_id/cluster_size/
+    # is_representative. Grouped by frame so each frame is only extracted
+    # from video.mp4 once, same as before.
     written = 0
     uploaded = 0
-    skipped_interval = 0
-    last_written_seconds: float | None = None
     with manifest_path.open("w", encoding="utf-8") as manifest_file:
-        for row in _load_jsonl(detections_path):
-            detections = row.get("detections") or []
-            if not detections:
-                continue
-            source_pts_ns = row.get("source_pts_ns")
-            if source_pts_ns is None:
-                continue
-            seconds = source_pts_ns / 1_000_000_000
-            # A sustained detection streak would otherwise produce a nearly
-            # identical crop every ~1/inference_fps seconds; thin those out.
-            if last_written_seconds is not None and seconds - last_written_seconds < min_interval_seconds:
-                skipped_interval += 1
-                continue
-
-            width, height = row.get("source_width"), row.get("source_height")
-            frame_jpeg = _extract_frame_jpeg(video_path, seconds)
+        for _, frame_candidates in itertools.groupby(candidates, key=lambda c: (c["row"].get("capture_utc_ns"), c["row"].get("frame_id"))):
+            frame_candidates = list(frame_candidates)
+            row = frame_candidates[0]["row"]
+            frame_jpeg = _extract_frame_jpeg(video_path, frame_candidates[0]["seconds"])
             if frame_jpeg is None:
                 continue
 
-            telemetry = telemetry_by_frame.get(row.get("frame_id"))
-            wrote_any = False
-            for detection in detections:
-                bbox = detection.get("bbox_normalized_xyxy")
-                if not bbox:
-                    continue
-                coordinate = estimate_target_latlon(
-                    bbox_normalized_xyxy=bbox,
-                    image_width=width,
-                    image_height=height,
-                    telemetry=telemetry,
-                    calibration=calibration,
-                )
+            for candidate in frame_candidates:
+                detection = candidate["detection"]
+                bbox = detection["bbox_normalized_xyxy"]
                 label = f"{detection.get('class', '?')} {float(detection.get('confidence', 0)):.2f}"
                 snapshot_jpeg = _draw_bbox(frame_jpeg, bbox, label)
-                detection_id = detection.get("detection_id")
-                if not detection_id:
-                    continue
+                detection_id = detection["detection_id"]
                 snapshot_filename = f"{detection_id}.jpg"
                 (snapshots_dir / snapshot_filename).write_bytes(snapshot_jpeg)
                 record = {
@@ -220,17 +341,17 @@ def generate(
                     "class": detection.get("class"),
                     "confidence": detection.get("confidence"),
                     "bbox_normalized_xyxy": bbox,
-                    "coordinate": coordinate,
+                    "coordinate": candidate["coordinate"],
+                    "cluster_id": candidate["cluster_id"],
+                    "cluster_size": candidate["cluster_size"],
+                    "is_representative": candidate["is_representative"],
                 }
                 manifest_file.write(json.dumps(
                     {**record, "snapshot_file": f"snapshots/{snapshot_filename}"}, separators=(",", ":"),
                 ) + "\n")
                 written += 1
-                wrote_any = True
                 if upload_session is not None and _send_to_ground(upload_session, ground_url, ingest_token, record, snapshot_jpeg):
                     uploaded += 1
-            if wrote_any:
-                last_written_seconds = seconds
 
     print(
         f"[snapshot] wrote {written} detection snapshot(s) ({uploaded} uploaded to ground), "

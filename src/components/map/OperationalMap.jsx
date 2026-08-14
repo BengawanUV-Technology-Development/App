@@ -10,6 +10,10 @@ const MAX_TRACK_POINTS = 1000;
 // docs/post-flight-detection-snapshots.md), not live, so polling this
 // slowly is intentional -- it doesn't need to feel real-time.
 const DETECTIONS_POLL_MS = 15000;
+// Live, un-clustered detection dots (see /api/v1/live/detections) are only
+// meaningful while a recording is in progress, so this polls much faster
+// than the post-flight pins and stops entirely once recording ends.
+const LIVE_DETECTIONS_POLL_MS = 1500;
 const MODEL_SIZE_METERS = 12;
 const MODEL_HEADING_OFFSET_DEG = 180;
 const MODEL_BODY_COLOR = "#cffff8";
@@ -114,6 +118,13 @@ function detectionPointData(detections) {
     type: "FeatureCollection",
     features: (detections || [])
       .filter((detection) => detection.coordinate?.status && detection.coordinate.status !== "not_available")
+      // Post-flight dedup (see docs/post-flight-detection-snapshots.md):
+      // generate_detection_snapshots.py clusters repeat sightings of the
+      // same physical target and marks the strongest one representative.
+      // is_representative === false means a stronger sighting of the same
+      // cluster already has a pin; null/undefined (older rows, or a
+      // singleton cluster) still shows, nothing to defer to.
+      .filter((detection) => detection.is_representative !== false)
       .map((detection) => ({
         type: "Feature",
         properties: {
@@ -121,10 +132,31 @@ function detectionPointData(detections) {
           label: detection.class || "target",
           confidence: `${Math.round(Number(detection.confidence || 0) * 100)}%`,
           uncalibrated: detection.coordinate.status === "ESTIMATED_UNCALIBRATED",
+          clusterSize: Number(detection.cluster_size || 1),
         },
         geometry: {
           type: "Point",
           coordinates: [Number(detection.coordinate.lon), Number(detection.coordinate.lat)],
+        },
+      })),
+  };
+}
+
+function liveDetectionPointData(detections) {
+  return {
+    type: "FeatureCollection",
+    features: (detections || [])
+      .filter((detection) => hasValidPosition(detection.lat, detection.lon))
+      .map((detection) => ({
+        type: "Feature",
+        properties: {
+          detectionId: detection.detection_id,
+          confidence: Number(detection.confidence || 0),
+          located: detection.located === true,
+        },
+        geometry: {
+          type: "Point",
+          coordinates: [Number(detection.lon), Number(detection.lat)],
         },
       })),
   };
@@ -329,6 +361,8 @@ function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchD
   const stateRef = useRef({ lat, lng, alt, headingDeg, rollDeg, pitchDeg });
   const detectionsRef = useRef([]);
   const detectionPopupRef = useRef(null);
+  const liveDetectionsRef = useRef([]);
+  const isRecordingRef = useRef(false);
   const [isFollowing, setIsFollowing] = useState(false);
 
   const setFollowing = (nextValue) => {
@@ -368,6 +402,34 @@ function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchD
     };
     pollDetections();
     const interval = setInterval(pollDetections, DETECTIONS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const clearLiveDetections = () => {
+      liveDetectionsRef.current = [];
+      mapRef.current?.getSource("live-detections")?.setData(liveDetectionPointData([]));
+    };
+    const pollLiveDetections = async () => {
+      const statusResponse = await apiGet("/api/v1/recordings/status");
+      if (cancelled) return;
+      const recording = statusResponse.ok && statusResponse.data?.recording === true;
+      if (recording !== isRecordingRef.current) {
+        isRecordingRef.current = recording;
+        if (!recording) clearLiveDetections();
+      }
+      if (!recording) return;
+      const response = await apiGet("/api/v1/live/detections");
+      if (cancelled || !response.ok) return;
+      liveDetectionsRef.current = response.data?.detections || [];
+      mapRef.current?.getSource("live-detections")?.setData(liveDetectionPointData(liveDetectionsRef.current));
+    };
+    pollLiveDetections();
+    const interval = setInterval(pollLiveDetections, LIVE_DETECTIONS_POLL_MS);
     return () => {
       cancelled = true;
       clearInterval(interval);
@@ -547,11 +609,35 @@ function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchD
         },
       });
 
+      map.addSource("live-detections", {
+        type: "geojson",
+        data: liveDetectionPointData(liveDetectionsRef.current),
+      });
+      map.addLayer({
+        id: "live-detection-dot",
+        type: "circle",
+        source: "live-detections",
+        paint: {
+          "circle-radius": 4,
+          "circle-color": ["case", ["==", ["get", "located"], false], "#94a3b8", "#fbbf24"],
+          // Raw/un-clustered noise layer: opacity carries confidence for
+          // located dots, while dots that fell back to the vehicle's own
+          // position (no ground-plane estimate yet) stay a fixed dim gray
+          // regardless of confidence -- they're not placed, just "nearby".
+          "circle-opacity": [
+            "case",
+            ["==", ["get", "located"], false],
+            0.35,
+            ["interpolate", ["linear"], ["get", "confidence"], 0, 0.15, 1, 0.95],
+          ],
+        },
+      });
+
       map.on("mouseenter", "postflight-detection-core", (event) => {
         map.getCanvas().style.cursor = "pointer";
         const feature = event.features?.[0];
         if (!feature) return;
-        const { detectionId, label, confidence, uncalibrated } = feature.properties;
+        const { detectionId, label, confidence, uncalibrated, clusterSize } = feature.properties;
         const coordinates = feature.geometry.coordinates.slice();
         const snapshotUrl = `${API_BASE}/api/v1/postflight/detections/${detectionId}/snapshot`;
         detectionPopupRef.current?.remove();
@@ -563,6 +649,9 @@ function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchD
             + `<div class="detection-hover-caption">`
             + `<span class="detection-hover-label">${label}</span>`
             + `<span class="detection-hover-confidence">${confidence}</span>`
+            + (Number(clusterSize) > 1
+              ? `<span class="detection-hover-cluster">confirmed by ${clusterSize} sightings</span>`
+              : "")
             + (uncalibrated === "true" || uncalibrated === true
               ? `<span class="detection-hover-caveat">uncalibrated estimate</span>`
               : "")

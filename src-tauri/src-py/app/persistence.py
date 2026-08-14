@@ -100,7 +100,10 @@ CREATE TABLE IF NOT EXISTS postflight_detections (
     coordinate_json TEXT NOT NULL,
     capture_utc_ns INTEGER,
     snapshot_path TEXT NOT NULL,
-    received_at_ns INTEGER NOT NULL
+    received_at_ns INTEGER NOT NULL,
+    cluster_id INTEGER,
+    cluster_size INTEGER,
+    is_representative INTEGER
 );
 CREATE INDEX IF NOT EXISTS postflight_detections_mission_idx
 ON postflight_detections(mission_id, capture_epoch);
@@ -114,6 +117,23 @@ class Database:
         self._lock = threading.RLock()
         with self.connect() as connection:
             connection.executescript(DDL)
+            # CREATE TABLE IF NOT EXISTS is a no-op against an already-existing
+            # table, so columns added to postflight_detections after it first
+            # shipped need an explicit ALTER TABLE for databases created before
+            # this change (there's no broader migration framework here yet --
+            # this table is the only one that's grown columns post-release).
+            self._ensure_columns(connection, "postflight_detections", {
+                "cluster_id": "INTEGER",
+                "cluster_size": "INTEGER",
+                "is_representative": "INTEGER",
+            })
+
+    @staticmethod
+    def _ensure_columns(connection: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+        existing = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
+        for name, sql_type in columns.items():
+            if name not in existing:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -193,14 +213,19 @@ class Database:
             cursor = connection.execute(
                 "INSERT OR IGNORE INTO postflight_detections("
                 "detection_id,mission_id,capture_epoch,frame_id,class,confidence,"
-                "bbox_json,coordinate_json,capture_utc_ns,snapshot_path,received_at_ns"
-                ") VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "bbox_json,coordinate_json,capture_utc_ns,snapshot_path,received_at_ns,"
+                "cluster_id,cluster_size,is_representative"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     record["detection_id"], record["mission_id"], record["capture_epoch"], record["frame_id"],
                     record["class"], record["confidence"],
                     json.dumps(record["bbox_normalized_xyxy"], separators=(",", ":")),
                     json.dumps(record["coordinate"], separators=(",", ":")),
                     record.get("capture_utc_ns"), snapshot_path, time.time_ns(),
+                    record.get("cluster_id"), record.get("cluster_size"),
+                    # SQLite has no native bool; store 0/1/NULL, restore to
+                    # Python bool on read (see list/get below).
+                    None if record.get("is_representative") is None else int(bool(record["is_representative"])),
                 ),
             )
         return cursor.rowcount == 1
@@ -215,13 +240,7 @@ class Database:
         params.append(max(1, min(int(limit), 2000)))
         with self.connect() as connection:
             rows = connection.execute(query, params).fetchall()
-        results = []
-        for row in rows:
-            result = dict(row)
-            result["bbox_normalized_xyxy"] = json.loads(result.pop("bbox_json"))
-            result["coordinate"] = json.loads(result.pop("coordinate_json"))
-            results.append(result)
-        return results
+        return [self._normalize_postflight_row(row) for row in rows]
 
     def get_postflight_detection(self, detection_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
@@ -230,9 +249,16 @@ class Database:
             ).fetchone()
         if row is None:
             return None
+        return self._normalize_postflight_row(row)
+
+    @staticmethod
+    def _normalize_postflight_row(row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
         result["bbox_normalized_xyxy"] = json.loads(result.pop("bbox_json"))
         result["coordinate"] = json.loads(result.pop("coordinate_json"))
+        result["is_representative"] = (
+            None if result["is_representative"] is None else bool(result["is_representative"])
+        )
         return result
 
     def create_command(self, command_id: str, command_type: str, operator_session: str, request_payload: dict[str, Any]) -> bool:

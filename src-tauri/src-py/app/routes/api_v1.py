@@ -42,6 +42,8 @@ def init_api_v1_routes(adapter: MissionPlannerAdapter, database: Database | None
         stream_registry=StreamRegistry(),
         synchronizer=FrameSynchronizer(),
         telemetry_history=adapter.telemetry_recorder.nearest,
+        telemetry_session_start=adapter.telemetry_recorder.start_session,
+        telemetry_session_stop=adapter.telemetry_recorder.end_session,
     )
     _vision_overlay_store = VisionOverlayStore()
     _browser_render_metrics = BrowserRenderMetrics()
@@ -117,6 +119,20 @@ def camera_preview():
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@api_v1_bp.route("/live/detections", methods=["GET"])
+def live_detections():
+    """Raw, un-clustered detection dots for the in-flight map view (last ~20s).
+
+    Meant to be polled frequently while a recording is active so the operator
+    can see detection density/noise in real time; the frontend should stop
+    polling once the recording ends. See
+    docs/post-flight-detection-snapshots.md for the (separate, deduplicated)
+    post-flight review pins.
+    """
+
+    return jsonify({"ok": True, "detections": _get_flight_recorder().live_detections.snapshot()})
 
 
 @api_v1_bp.route("/detection/overlay", methods=["GET"])
@@ -403,6 +419,19 @@ def ingest_postflight_detection():
         if not isinstance(coordinate, dict) or "status" not in coordinate:
             raise ContractError("coordinate must be a dict with a status")
         capture_utc_ns = payload.get("capture_utc_ns")
+        # Cross-time/within-frame dedup metadata from
+        # generate_detection_snapshots.py's clustering pass (see
+        # docs/post-flight-detection-snapshots.md). Optional: older callers
+        # (or the AI-agent dummy test) may not send them.
+        cluster_id = payload.get("cluster_id")
+        if cluster_id is not None and not isinstance(cluster_id, int):
+            raise ContractError("cluster_id must be an integer")
+        cluster_size = payload.get("cluster_size")
+        if cluster_size is not None and not isinstance(cluster_size, int):
+            raise ContractError("cluster_size must be an integer")
+        is_representative = payload.get("is_representative")
+        if is_representative is not None and not isinstance(is_representative, bool):
+            raise ContractError("is_representative must be a boolean")
         snapshot_b64 = payload.get("snapshot_jpeg_base64")
         if not isinstance(snapshot_b64, str) or not snapshot_b64:
             raise ContractError("snapshot_jpeg_base64 is required")
@@ -420,6 +449,7 @@ def ingest_postflight_detection():
             "detection_id": detection_id, "mission_id": mission_id, "capture_epoch": capture_epoch,
             "frame_id": frame_id, "class": label.strip(), "confidence": float(confidence),
             "bbox_normalized_xyxy": list(bbox), "coordinate": coordinate, "capture_utc_ns": capture_utc_ns,
+            "cluster_id": cluster_id, "cluster_size": cluster_size, "is_representative": is_representative,
         },
         str(snapshot_path),
     )

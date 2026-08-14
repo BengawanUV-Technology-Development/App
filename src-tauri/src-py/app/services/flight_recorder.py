@@ -14,6 +14,7 @@ from .jetson_video_service import JetsonVideoError, JetsonVideoService
 from .jetson_recording_client import JetsonRecordingClient, JetsonRecordingError
 from .frame_sync import FrameSynchronizer, StreamRegistry
 from .coordinate_estimator import CameraCalibration, estimate_target_latlon
+from .live_detections import LiveDetectionStore
 from .telemetry_recorder import DEFAULT_JOIN_WINDOW_SECONDS
 
 
@@ -37,8 +38,16 @@ class FlightRecorder:
         stream_registry: StreamRegistry | None = None,
         synchronizer: FrameSynchronizer | None = None,
         telemetry_history: Callable[[float, float], dict | None] | None = None,
+        telemetry_session_start: Callable[[Path], None] | None = None,
+        telemetry_session_stop: Callable[[], None] | None = None,
     ):
         self.telemetry_provider = telemetry_provider
+        # Per-session ground telemetry.jsonl (Task #12): bound to
+        # TelemetryRecorder.start_session/end_session. Best-effort -- a
+        # failure here must never block or unwind an actual recording
+        # start/stop, since the Jetson is the authoritative recorder.
+        self.telemetry_session_start = telemetry_session_start
+        self.telemetry_session_stop = telemetry_session_stop
         # Ground-side target geolocation: telemetry_history looks up the
         # vehicle pose nearest a detection's capture time (see
         # telemetry_recorder.TelemetryRecorder.nearest); camera_calibration
@@ -47,6 +56,7 @@ class FlightRecorder:
         # -- estimates are tagged ESTIMATED_UNCALIBRATED until that's fixed.
         self.telemetry_history = telemetry_history
         self.camera_calibration = CameraCalibration()
+        self.live_detections = LiveDetectionStore()
         self.recordings_dir = Path(
             recordings_dir or os.getenv("FLIGHT_RECORDINGS_DIR") or Path.cwd() / "recordings"
         ).resolve()
@@ -184,7 +194,24 @@ class FlightRecorder:
         if self._jetson_video is None:
             raise FlightRecorderError("Jetson receiver is unavailable")
         self._attach_ground_coordinates(payload)
+        self._record_live_detections(payload)
         return self._jetson_video.ingest_metadata(payload)
+
+    def _record_live_detections(self, payload: dict) -> None:
+        detections = payload.get("detections")
+        if not detections:
+            return
+        snapshot = self.telemetry_provider() or {}
+        vehicle = snapshot.get("telemetry") or {}
+        fallback_lat = fallback_lon = None
+        if snapshot.get("gps_valid"):
+            fallback_lat, fallback_lon = vehicle.get("lat"), vehicle.get("lng")
+        self.live_detections.add_many(
+            detections,
+            capture_utc_ns=payload.get("capture_utc_ns"),
+            fallback_lat=fallback_lat,
+            fallback_lon=fallback_lon,
+        )
 
     def _attach_ground_coordinates(self, payload: dict) -> None:
         """Overwrite each detection's "coordinate" stub with a ground-side
@@ -339,6 +366,8 @@ class FlightRecorder:
                 self._jetson_recording.stop()
             except JetsonRecordingError as exc:
                 raise FlightRecorderError(str(exc)) from exc
+            self._end_telemetry_session()
+            self.live_detections.reset()
             return self.status()
 
         with self._frame_ready:
@@ -370,12 +399,41 @@ class FlightRecorder:
         try:
             # Keep the GCS receiver ready before asking Jetson to send frames.
             self.start_camera()
-            self._jetson_recording.start(
+            result = self._jetson_recording.start(
                 label, video_port=self._jetson_video.port, mission_id=mission_id
             )
         except (FlightRecorderError, JetsonRecordingError) as exc:
             raise FlightRecorderError(str(exc)) from exc
+        self.live_detections.reset()
+        self._begin_telemetry_session(result.get("session_id"))
         return self.status()
+
+    def _begin_telemetry_session(self, session_id: str | None) -> None:
+        """Start mirroring ground Mission Planner telemetry into
+        <recordings_dir>/<session_id>/telemetry.jsonl for the duration of this
+        Jetson-proxied recording. session_id is shared with the Jetson's own
+        session directory (its /recording/start response), so the two
+        telemetry.jsonl files -- Jetson-onboard and ground/Mission-Planner --
+        can be correlated post-flight by session_id even though they live on
+        different machines. Best-effort: never raises, since the Jetson video
+        recording this accompanies is the one that actually matters.
+        """
+        if not session_id or self.telemetry_session_start is None:
+            return
+        try:
+            session_dir = self.recordings_dir / session_id
+            session_dir.mkdir(parents=True, exist_ok=True)
+            self.telemetry_session_start(session_dir)
+        except OSError as exc:
+            print(f"[FlightRecorder] Failed to start ground telemetry session log: {exc}")
+
+    def _end_telemetry_session(self) -> None:
+        if self.telemetry_session_stop is None:
+            return
+        try:
+            self.telemetry_session_stop()
+        except OSError as exc:
+            print(f"[FlightRecorder] Failed to close ground telemetry session log: {exc}")
 
     def _write_metadata(self, path: Path):
         state = self.status()
