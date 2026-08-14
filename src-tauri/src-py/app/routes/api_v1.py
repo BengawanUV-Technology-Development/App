@@ -105,7 +105,7 @@ def start_camera():
     try:
         return jsonify({"ok": True, **_get_flight_recorder().start_camera()}), 202
     except FlightRecorderError as exc:
-        return jsonify({"ok": False, "error": str(exc), **_get_flight_recorder().status()}), 503
+        return jsonify({**_get_flight_recorder().status(), "ok": False, "error": str(exc)}), 503
 
 
 @api_v1_bp.route("/camera/stop", methods=["POST"])
@@ -113,7 +113,11 @@ def stop_camera():
     try:
         return jsonify({"ok": True, **_get_flight_recorder().stop_camera()})
     except FlightRecorderError as exc:
-        return jsonify({"ok": False, "error": str(exc), **_get_flight_recorder().status()}), 409
+        # Spread status() FIRST, then the explicit ok/error keys, so the
+        # real failure reason isn't silently clobbered by status()'s own
+        # "ok"/"error" fields (e.g. a healthy IDLE Jetson response reporting
+        # its own "ok": true, "error": null).
+        return jsonify({**_get_flight_recorder().status(), "ok": False, "error": str(exc)}), 409
 
 
 @api_v1_bp.route("/camera/preview", methods=["GET"])
@@ -196,7 +200,11 @@ def start_recording():
             **_get_flight_recorder().start(payload.get("label"), payload.get("mission_id")),
         }), 202
     except FlightRecorderError as exc:
-        return jsonify({"ok": False, "error": str(exc), **_get_flight_recorder().status()}), 409
+        # Spread status() FIRST, then the explicit ok/error keys, so the
+        # real failure reason isn't silently clobbered by status()'s own
+        # "ok"/"error" fields (e.g. a healthy IDLE Jetson response reporting
+        # its own "ok": true, "error": null).
+        return jsonify({**_get_flight_recorder().status(), "ok": False, "error": str(exc)}), 409
 
 
 @api_v1_bp.route("/recordings/stop", methods=["POST"])
@@ -204,7 +212,11 @@ def stop_recording():
     try:
         return jsonify({"ok": True, **_get_flight_recorder().stop()})
     except FlightRecorderError as exc:
-        return jsonify({"ok": False, "error": str(exc), **_get_flight_recorder().status()}), 409
+        # Spread status() FIRST, then the explicit ok/error keys, so the
+        # real failure reason isn't silently clobbered by status()'s own
+        # "ok"/"error" fields (e.g. a healthy IDLE Jetson response reporting
+        # its own "ok": true, "error": null).
+        return jsonify({**_get_flight_recorder().status(), "ok": False, "error": str(exc)}), 409
 
 
 @api_v1_bp.route("/health", methods=["GET"])
