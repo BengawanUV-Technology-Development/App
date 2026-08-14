@@ -3,7 +3,7 @@ import unittest
 
 import app.routes.api_v1 as api_v1_module
 from app.auth import BearerAuthenticator, TokenConfig
-from app.services.mission_planner_adapter import MissionPlannerAdapter, MissionPlannerBridgeError
+from app.services.mission_planner_adapter import MissionPlannerAdapter
 import main
 
 app = main.app
@@ -120,8 +120,6 @@ class MissionPlannerAdapterTests(unittest.TestCase):
 
 
 class FakeApiAdapter:
-    reject_reboot = False
-
     def health(self):
         return {"ok": True, "status": "RUNNING", "connected": True, "stale": False}
 
@@ -130,11 +128,6 @@ class FakeApiAdapter:
 
     def mission(self):
         return MissionPlannerAdapter._normalize_mission(VALID_MISSION)
-
-    def send_command(self, command, payload):
-        if command == "reboot" and self.reject_reboot:
-            raise MissionPlannerBridgeError(400, {"ok": False, "error": "Reboot is only allowed while vehicle is disarmed"})
-        return {"ok": True, "command": command, "mode": payload.get("mode")}, 200
 
 
 class ApiV1Tests(unittest.TestCase):
@@ -189,32 +182,20 @@ class ApiV1Tests(unittest.TestCase):
         self.assertEqual(payload["positioned_count"], 2)
         self.assertEqual(payload["waypoints"][1]["command_name"], "TAKEOFF")
 
-    def test_set_flight_mode_proxies_to_bridge(self):
-        response = self.post("/api/v1/commands/set-flight-mode", json={"mode": "Q_HOVER"})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.get_json()["ok"])
-        self.assertEqual(response.get_json()["command"], "set-flight-mode")
-
-    def test_arm_proxies_to_bridge(self):
-        response = self.post("/api/v1/commands/arm")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["command"], "arm")
-
-    def test_reboot_proxies_to_bridge(self):
-        response = self.post("/api/v1/commands/reboot")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["command"], "reboot")
-
-    def test_bridge_command_rejection_keeps_status_and_message(self):
-        api_v1_module._adapter.reject_reboot = True
-        response = self.post("/api/v1/commands/reboot")
-        api_v1_module._adapter.reject_reboot = False
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.get_json()["error"], "Reboot is only allowed while vehicle is disarmed")
+    def test_command_routes_are_disabled_read_only(self):
+        # The adapter (MavlinkUdpAdapter) is read-only: the /commands/* POST
+        # routes were removed, not just rejected, so these all 404 rather
+        # than reaching any adapter/bridge logic.
+        for path, kwargs in (
+            ("/api/v1/commands/set-flight-mode", {"json": {"mode": "Q_HOVER"}}),
+            ("/api/v1/commands/set-current-waypoint", {"json": {"seq": 1}}),
+            ("/api/v1/commands/arm", {}),
+            ("/api/v1/commands/disarm", {}),
+            ("/api/v1/commands/reboot", {}),
+        ):
+            with self.subTest(path=path):
+                response = self.post(path, **kwargs)
+                self.assertEqual(response.status_code, 404)
 
 if __name__ == "__main__":
     unittest.main()
