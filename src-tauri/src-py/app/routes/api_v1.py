@@ -8,7 +8,8 @@ from flask import Blueprint, Response, jsonify, request, send_file
 
 from app.contracts import ContractError, validate_detection_event, validate_normalized_xyxy
 from app.persistence import Database
-from app.services.mission_planner_adapter import MissionPlannerAdapter, MissionPlannerBridgeError
+# MissionPlannerAdapter replaced by MavlinkUdpAdapter (read-only); bridge error kept for compat.
+from app.services.mission_planner_adapter import MissionPlannerBridgeError
 from app.services.flight_recorder import FlightRecorder, FlightRecorderError
 from app.services.vision_overlay import VisionOverlayError, VisionOverlayStore
 from app.services.browser_render_metrics import BrowserRenderMetrics, BrowserRenderMetricsError
@@ -26,14 +27,20 @@ POSTFLIGHT_SNAPSHOT_DIR = Path(
 ).expanduser()
 
 api_v1_bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
-_adapter: MissionPlannerAdapter | None = None
+_adapter = None  # MavlinkUdpAdapter (or legacy MissionPlannerAdapter) – duck-typed
 _flight_recorder: FlightRecorder | None = None
 _vision_overlay_store: VisionOverlayStore | None = None
 _database: Database | None = None
 _browser_render_metrics: BrowserRenderMetrics | None = None
 
 
-def init_api_v1_routes(adapter: MissionPlannerAdapter, database: Database | None = None):
+def init_api_v1_routes(adapter, database: Database | None = None):
+    """Initialize route-level singletons.
+
+    *adapter* may be a MavlinkUdpAdapter (read-only) or the legacy
+    MissionPlannerAdapter; both expose the same snapshot/health/mission
+    /messages API surface.
+    """
     global _adapter, _flight_recorder, _vision_overlay_store, _database, _browser_render_metrics
     _adapter = adapter
     _database = database
@@ -253,114 +260,74 @@ def messages():
         return jsonify({"ok": False, "error": str(exc), "messages": [], "count": 0}), 502
 
 
-@api_v1_bp.route("/commands/set-flight-mode", methods=["POST"])
-def set_flight_mode():
-    """
-    Change the UAV flight mode.
-    ---
-    parameters:
-      - name: body
-        in: body
-        required: true
-        schema:
-          type: object
-          properties:
-            mode:
-              type: string
-              example: "GUIDED"
-    responses:
-      200:
-        description: Command accepted
-      400:
-        description: Invalid mode
-      502:
-        description: MAVLink error
-    """
-    payload = request.get_json(silent=True) or {}
-    mode = str(payload.get("mode") or "").strip()
-    if not mode:
-        return jsonify({"ok": False, "error": "mode is required"}), 400
-    try:
-        response, status = _get_adapter().send_command(
-            "set-flight-mode",
-            {"request_id": payload.get("request_id"), "mode": mode},
-        )
-        return jsonify(response), status
-    except MissionPlannerBridgeError as exc:
-        return jsonify(exc.payload), exc.status_code
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 502
+# ---------------------------------------------------------------------------
+# POST command endpoints – DISABLED (adapter is read-only via UDP mirror)
+# ---------------------------------------------------------------------------
+# All MAVLink commands must be sent through Mission Planner or a dedicated
+# command channel.  Un-comment these routes only when a writable adapter is
+# re-introduced.
+#
+# @api_v1_bp.route("/commands/set-flight-mode", methods=["POST"])
+# def set_flight_mode():
+#     payload = request.get_json(silent=True) or {}
+#     mode = str(payload.get("mode") or "").strip()
+#     if not mode:
+#         return jsonify({"ok": False, "error": "mode is required"}), 400
+#     try:
+#         response, status = _get_adapter().send_command(
+#             "set-flight-mode",
+#             {"request_id": payload.get("request_id"), "mode": mode},
+#         )
+#         return jsonify(response), status
+#     except MissionPlannerBridgeError as exc:
+#         return jsonify(exc.payload), exc.status_code
+#     except Exception as exc:
+#         return jsonify({"ok": False, "error": str(exc)}), 502
 
-
-@api_v1_bp.route("/commands/set-current-waypoint", methods=["POST"])
-def set_current_waypoint():
-    payload = request.get_json(silent=True) or {}
-    try:
-        seq = int(payload.get("seq"))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "seq is required and must be an integer"}), 400
-    if seq < 0:
-        return jsonify({"ok": False, "error": "seq must be zero or greater"}), 400
-    try:
-        response, status = _get_adapter().send_command(
-            "set-current-waypoint",
-            {"request_id": payload.get("request_id"), "seq": seq},
-        )
-        return jsonify(response), status
-    except MissionPlannerBridgeError as exc:
-        return jsonify(exc.payload), exc.status_code
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 502
-
-
-def _proxy_simple_command(command):
-    payload = request.get_json(silent=True) or {}
-    try:
-        response, status = _get_adapter().send_command(
-            command,
-            {"request_id": payload.get("request_id")},
-        )
-        return jsonify(response), status
-    except MissionPlannerBridgeError as exc:
-        return jsonify(exc.payload), exc.status_code
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 502
-
-
-@api_v1_bp.route("/commands/arm", methods=["POST"])
-def arm():
-    """
-    Arm the vehicle.
-    ---
-    responses:
-      200:
-        description: Vehicle armed successfully
-    """
-    return _proxy_simple_command("arm")
-
-
-@api_v1_bp.route("/commands/disarm", methods=["POST"])
-def disarm():
-    """
-    Disarm the vehicle.
-    ---
-    responses:
-      200:
-        description: Vehicle disarmed successfully
-    """
-    return _proxy_simple_command("disarm")
-
-
-@api_v1_bp.route("/commands/reboot", methods=["POST"])
-def reboot():
-    """
-    Reboot the flight controller.
-    ---
-    responses:
-      200:
-        description: Vehicle rebooted
-    """
-    return _proxy_simple_command("reboot")
+#
+# @api_v1_bp.route("/commands/set-current-waypoint", methods=["POST"])
+# def set_current_waypoint():
+#     payload = request.get_json(silent=True) or {}
+#     try:
+#         seq = int(payload.get("seq"))
+#     except (TypeError, ValueError):
+#         return jsonify({"ok": False, "error": "seq is required and must be an integer"}), 400
+#     if seq < 0:
+#         return jsonify({"ok": False, "error": "seq must be zero or greater"}), 400
+#     try:
+#         response, status = _get_adapter().send_command(
+#             "set-current-waypoint",
+#             {"request_id": payload.get("request_id"), "seq": seq},
+#         )
+#         return jsonify(response), status
+#     except MissionPlannerBridgeError as exc:
+#         return jsonify(exc.payload), exc.status_code
+#     except Exception as exc:
+#         return jsonify({"ok": False, "error": str(exc)}), 502
+#
+# def _proxy_simple_command(command):
+#     payload = request.get_json(silent=True) or {}
+#     try:
+#         response, status = _get_adapter().send_command(
+#             command, {"request_id": payload.get("request_id")},
+#         )
+#         return jsonify(response), status
+#     except MissionPlannerBridgeError as exc:
+#         return jsonify(exc.payload), exc.status_code
+#     except Exception as exc:
+#         return jsonify({"ok": False, "error": str(exc)}), 502
+#
+# @api_v1_bp.route("/commands/arm", methods=["POST"])
+# def arm():
+#     return _proxy_simple_command("arm")
+#
+# @api_v1_bp.route("/commands/disarm", methods=["POST"])
+# def disarm():
+#     return _proxy_simple_command("disarm")
+#
+# @api_v1_bp.route("/commands/reboot", methods=["POST"])
+# def reboot():
+#     return _proxy_simple_command("reboot")
 
 
 @api_v1_bp.route("/detection/ingest", methods=["POST"])

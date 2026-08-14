@@ -17,7 +17,9 @@ from app.routes.logs import init_log_routes, logs_bp
 from app.auth import BearerAuthenticator, TokenConfig
 from app.persistence import Database
 from app.services.vision_envelope import encode_vision_envelope
-from app.services.mission_planner_adapter import MissionPlannerAdapter
+# MissionPlannerAdapter (HTTP bridge) replaced by MavlinkUdpAdapter (UDP mirror)
+# from app.services.mission_planner_adapter import MissionPlannerAdapter
+from app.services.mavlink_udp_adapter import MavlinkUdpAdapter
 from app.utils.session_log import SessionLogStore
 
 
@@ -33,7 +35,8 @@ authenticator = BearerAuthenticator(token_config)
 database_path = os.getenv("BUV_DATABASE_PATH", str(Path(__file__).resolve().parent / "runtime" / "buv.sqlite3"))
 database = Database(database_path)
 
-mission_planner_adapter = MissionPlannerAdapter()
+# Use the read-only UDP adapter; the HTTP bridge (mission_planner_bridge.py) is no longer used.
+mission_planner_adapter = MavlinkUdpAdapter()
 session_log_store = SessionLogStore(source_address=mission_planner_adapter.base_url)
 
 init_api_v1_routes(mission_planner_adapter, database)
@@ -129,7 +132,7 @@ def _print_startup_banner():
     print("=" * 72, flush=True)
     print(f"[startup] BUV backend pid={os.getpid()} cwd={os.getcwd()}", flush=True)
     print(f"[startup] api=http://127.0.0.1:{API_PORT}", flush=True)
-    print(f"[startup] mission_planner={mission_planner_adapter.base_url}", flush=True)
+    print(f"[startup] mavlink_udp={mission_planner_adapter.base_url}", flush=True)
     print(f"[startup] routes={route_list}", flush=True)
     print("=" * 72, flush=True)
 
