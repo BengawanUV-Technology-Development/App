@@ -131,6 +131,8 @@ class AgentConfig:
         self.video_port = env_int("JETSON_VIDEO_PORT", 5000, 1, 65535)
         self.payload_type = env_int("JETSON_VIDEO_PAYLOAD_TYPE", 96, 0, 127)
         self.sensor_id = env_int("JETSON_SENSOR_ID", 0, 0, 16)
+        # nvvidconv flip-method: 0 none, 2 = 180 rotation for an upside-down mount.
+        self.flip_method = env_int("JETSON_FLIP_METHOD", 0, 0, 7)
         self.high_width = env_int("JETSON_HIGH_WIDTH", 1920, 16, 7680)
         self.high_height = env_int("JETSON_HIGH_HEIGHT", 1080, 16, 7680)
         self.high_fps = env_float("JETSON_HIGH_FPS", 30.0, 0.1, 120.0)
@@ -207,6 +209,8 @@ class AgentConfig:
             str(self.payload_type),
             "--sensor-id",
             str(self.sensor_id),
+            "--flip-method",
+            str(self.flip_method),
             "--high-width",
             str(self.high_width),
             "--high-height",
@@ -809,7 +813,30 @@ class RecordingRequestHandler(BaseHTTPRequestHandler):
         print(f"[recording-agent] {self.address_string()} - {format % args}", flush=True)
 
 
+def load_env_file(path: Path) -> None:
+    """Load KEY=VALUE lines from a local .env for manual runs.
+
+    Real environment variables always win, so the systemd EnvironmentFile stays
+    authoritative for the service.
+    """
+    if not path.is_file():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        os.environ[key] = value
+
+
 def main() -> int:
+    load_env_file(Path(__file__).with_name(".env"))
     config = AgentConfig()
     controller = RecordingController(config)
     RecordingRequestHandler.controller = controller
