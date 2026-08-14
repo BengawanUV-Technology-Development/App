@@ -186,6 +186,8 @@ def build_pipeline_description(
         raise ValueError("network-fps cannot be higher than high-fps")
     if args.sensor_id < 0:
         raise ValueError("sensor-id must be zero or greater")
+    if args.flip_method < 0 or args.flip_method > 7:
+        raise ValueError("flip-method must be between 0 and 7 (nvvidconv flip-method)")
     if args.port < 1 or args.port > 65535:
         raise ValueError("port must be between 1 and 65535")
     if args.payload_type < 0 or args.payload_type > 127:
@@ -255,9 +257,17 @@ def build_pipeline_description(
     appsink_queue = "queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream"
     recovery_file = recovery_file or video_path.with_name(f"{video_path.name}.moov.recovery")
     if qualification_video is None:
+        # Flip once here, before the tee, so recording, inference and the
+        # network preview all see the same orientation. nvarguscamerasrc has no
+        # flip property of its own; nvvidconv does it on the NVMM surface.
+        flip_stage = (
+            f"nvvidconv flip-method={args.flip_method} !\nvideo/x-raw(memory:NVMM),format=NV12 !\n"
+            if args.flip_method
+            else ""
+        )
         source = f"""nvarguscamerasrc sensor-id={args.sensor_id} wbmode=1 !
 video/x-raw(memory:NVMM),width={high_width},height={high_height},format=NV12,framerate={high_fps_caps} !
-tee name=capture"""
+{flip_stage}tee name=capture"""
         record_converter = "nvvidconv"
         # Jetson nvvidconv cannot output packed BGR directly. Convert to the
         # supported BGRx surface first, then use videoconvert for the Python
@@ -1667,6 +1677,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--payload-type", type=int, default=96)
     parser.add_argument("--rtp-ssrc", type=int, default=uuid.uuid4().int & 0xFFFFFFFF)
     parser.add_argument("--sensor-id", type=int, default=0)
+    parser.add_argument(
+        "--flip-method",
+        type=int,
+        default=0,
+        help="nvvidconv flip-method applied before the tee (2 = 180 rotation)",
+    )
     parser.add_argument(
         "--qualification-video",
         type=Path,
