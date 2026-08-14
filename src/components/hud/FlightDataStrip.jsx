@@ -6,9 +6,9 @@ function FlightDataStrip({ telemetry }) {
   return (
     <div className="flight-data-strip">
       <div>
-        <span>ALT</span>
-        <strong>{format(telemetry.alt)}</strong>
-        <small>REL M</small>
+        <span>AIRSPD</span>
+        <strong>{format(telemetry.airspeed_m_s)}</strong>
+        <small>M/S</small>
       </div>
       <div>
         <span>MSL</span>
@@ -16,14 +16,14 @@ function FlightDataStrip({ telemetry }) {
         <small>M</small>
       </div>
       <div>
-        <span>GND</span>
-        <strong>{format(telemetry.groundspeed_m_s)}</strong>
-        <small>M/S</small>
+        <span>SATS</span>
+        <strong>{telemetry.satellites ?? 0}</strong>
+        <small>LOCK</small>
       </div>
       <div>
-        <span>V/S</span>
-        <strong>{format(telemetry.v_speed_m_s)}</strong>
-        <small>M/S</small>
+        <span>HDOP</span>
+        <strong>{format(telemetry.gps_hdop)}</strong>
+        <small>M</small>
       </div>
     </div>
   );

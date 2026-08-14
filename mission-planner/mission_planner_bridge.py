@@ -118,6 +118,20 @@ def _state_candidates():
     except Exception:
         pass
 
+    try:
+        import clr
+        clr.AddReference("MissionPlanner")
+        import MissionPlanner
+        candidates.append(("MissionPlanner.MainV2.comPort.MAV.cs", MissionPlanner.MainV2.comPort.MAV.cs))
+    except Exception:
+        pass
+
+    try:
+        import MissionPlanner
+        candidates.append(("MissionPlanner.MainV2.comPort.MAV.cs_main", MissionPlanner.MainV2.comPort.MAV.cs))
+    except Exception:
+        pass
+
     return candidates
 
 
@@ -199,6 +213,14 @@ def _vehicle_connected():
         pass
 
     try:
+        import MissionPlanner
+        if MissionPlanner.MainV2.comPort.BaseStream is not None:
+            if bool(MissionPlanner.MainV2.comPort.BaseStream.IsOpen):
+                return True
+    except Exception:
+        pass
+
+    try:
         state = _active_state()
         mode = str(_read_state(state, "mode", "")).strip().upper()
         if mode not in ("", "UNKNOWN", "NONE"):
@@ -255,6 +277,12 @@ def _build_snapshot():
             "voltage_v": _read_number(state, "battery_voltage"),
             "current_a": _read_number(state, "current"),
         },
+        "battery2": {
+            "remaining_percent": _read_number(state, "battery_remaining2"),
+            "voltage_v": _read_number(state, "battery_voltage2"),
+            "current_a": _read_number(state, "current2"),
+        },
+        "throttle_percent": _read_number(state, "ch3percent"),
         "ekf": {
             "ok": bool(_read_state(state, "ekf_ok", True)),
             "flags": _read_integer(state, "ekfstatus"),

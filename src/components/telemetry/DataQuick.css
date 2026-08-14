@@ -3,9 +3,11 @@
   grid-template-columns: 1fr 1fr;
   gap: 8px;
   padding: 8px;
-  background: var(--bg-surface-2);
-  border-radius: 4px;
-  border: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: 6px;
+  border: 1px solid var(--color-border, rgba(148, 163, 184, 0.18));
 }
 
 .data-quick-item {

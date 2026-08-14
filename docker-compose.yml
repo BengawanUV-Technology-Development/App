@@ -9,4 +9,6 @@ services:
       - "5000:5000/udp"
     env_file:
       - ./src-tauri/src-py/.env
+    volumes:
+      - ./recordings:/app/recordings
     restart: unless-stopped

@@ -63,3 +63,4 @@ docs/qualification/*
 AI_AGENT_IMPLEMENTATION_PLAN.md
 
 *.xml
+.aider*

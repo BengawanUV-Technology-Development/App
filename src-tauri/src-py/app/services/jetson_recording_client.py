@@ -101,6 +101,9 @@ class JetsonRecordingClient:
                 "frame_count": 0,
                 "duration_seconds": 0,
                 "error": "JETSON_RECORDING_AGENT_URL is not configured",
+                "preview_source": "digital",
+                "preview_active_source": "digital",
+                "preview_analog_available": False,
             }
         try:
             return self._request("/recording/status")
@@ -120,6 +123,9 @@ class JetsonRecordingClient:
                 "duration_seconds": 0,
                 "state_known": False,
                 "error": str(exc),
+                "preview_source": "digital",
+                "preview_active_source": None,
+                "preview_analog_available": False,
             }
 
     def start(
@@ -144,3 +150,9 @@ class JetsonRecordingClient:
 
     def stop(self) -> dict:
         return self._request("/recording/stop", "POST")
+
+    def set_preview_source(self, source: str) -> dict:
+        normalized = str(source or "").strip().lower()
+        if normalized not in {"digital", "analog"}:
+            raise JetsonRecordingError("preview source must be digital or analog")
+        return self._request("/preview/source", "POST", {"source": normalized})

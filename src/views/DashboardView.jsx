@@ -391,7 +391,7 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
         <FlightRecorderControl onEvent={pushEvent} />
 
         <DataQuick telemetry={telemetry} />
-        <BatteryMonitor percent={telemetry.battery_percent} voltage={telemetry.battery_voltage_v} current={telemetry.battery_current_a} />
+        <BatteryMonitor telemetry={telemetry} />
         <EkfVibeBar telemetry={telemetry} onClick={() => setIsEkfModalOpen(true)} />
 
         <section className="readout-panel">
@@ -399,8 +399,12 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
           <dl>
             <div><dt>MODE</dt><dd>{telemetry.flight_mode || "-"}</dd></div>
             <div><dt>ALT (AGL)</dt><dd>{formatNumber(telemetry.alt)} m</dd></div>
+            <div><dt>ALT (MSL)</dt><dd>{formatNumber(telemetry.alt_amsl)} m</dd></div>
+            <div><dt>AIRSPEED</dt><dd>{formatNumber(telemetry.airspeed_m_s)} m/s</dd></div>
             <div><dt>V/S</dt><dd>{formatNumber(telemetry.v_speed_m_s)} m/s</dd></div>
-            <div><dt>GPS</dt><dd>{hasGps ? "3D Fix" : "-"}</dd></div>
+            <div><dt>GPS FIX</dt><dd>{hasGps ? "3D Fix" : "-"}</dd></div>
+            <div><dt>SATS</dt><dd>{telemetry.satellites ?? 0}</dd></div>
+            <div><dt>HDOP</dt><dd>{formatNumber(telemetry.gps_hdop)}</dd></div>
           </dl>
         </section>
 

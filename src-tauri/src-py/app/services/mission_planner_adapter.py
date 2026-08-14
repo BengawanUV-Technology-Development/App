@@ -103,6 +103,7 @@ class MissionPlannerAdapter:
         attitude = raw.get("attitude") or {}
         velocity = raw.get("velocity") or {}
         battery = raw.get("battery") or {}
+        battery2 = raw.get("battery2") or {}
         ekf = raw.get("ekf") or {}
         vibration = raw.get("vibration") or {}
         status = raw.get("status") or {}
@@ -129,6 +130,10 @@ class MissionPlannerAdapter:
             "battery_percent": battery.get("remaining_percent"),
             "battery_voltage_v": battery.get("voltage_v"),
             "battery_current_a": battery.get("current_a"),
+            "battery2_percent": battery2.get("remaining_percent"),
+            "battery2_voltage_v": battery2.get("voltage_v"),
+            "battery2_current_a": battery2.get("current_a"),
+            "throttle_percent": raw.get("throttle_percent"),
             "roll_deg": attitude.get("roll_deg"),
             "pitch_deg": attitude.get("pitch_deg"),
             "yaw_deg": attitude.get("yaw_deg"),
@@ -177,12 +182,14 @@ class MissionPlannerAdapter:
             except (TypeError, ValueError):
                 alt_m = None
 
+            cmd_id = item.get("command")
             has_position = (
                 lat is not None
                 and lng is not None
                 and abs(lat) <= 90.0
                 and abs(lng) <= 180.0
                 and not (lat == 0.0 and lng == 0.0)
+                and cmd_id not in (22, 84, 3000) # 22=TAKEOFF, 84=VTOL_TAKEOFF, 3000=DO_VTOL_TRANSITION
             )
 
             waypoints.append({

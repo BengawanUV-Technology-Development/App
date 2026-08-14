@@ -33,6 +33,10 @@ function DataQuick({ telemetry }) {
         <span>TIME (BOOT)</span>
         <strong>{formatTime(telemetry.time_since_boot_s)}</strong>
       </div>
+      <div className="data-quick-item">
+        <span>THROTTLE</span>
+        <strong>{format(telemetry.throttle_percent, 0)} <small>%</small></strong>
+      </div>
     </div>
   );
 }
