@@ -271,24 +271,22 @@ tee name=capture"""
     if easycap_device:
         analog_video_path = video_path.with_name("video_analog.mkv")
         easycap_fps_caps = fps_caps(float(getattr(args, "easycap_fps", 30.0)))
-        network_fps_caps = fps_caps(network_fps)
         analog_branch = f"""
 v4l2src device={_gst_quote(easycap_device)} do-timestamp=true !
 image/jpeg,width={args.easycap_width},height={args.easycap_height},framerate={easycap_fps_caps} !
-jpegparse ! jpegdec ! videoconvert ! videorate !
+jpegparse ! jpegdec ! videoconvert !
 video/x-raw,format=I420,width={args.easycap_width},height={args.easycap_height},framerate={easycap_fps_caps} !
 tee name=analog_capture
 analog_capture. ! queue max-size-buffers=64 max-size-time=0 max-size-bytes=0 !
 jpegenc quality=90 ! jpegparse ! matroskamux ! filesink location={_gst_quote(analog_video_path)}
 analog_capture. ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream !
-videoscale add-borders=true ! videorate !
-video/x-raw,format=I420,width={network_width},height={network_height},framerate={network_fps_caps} !
+videoscale add-borders=true !
+video/x-raw,format=I420,width={network_width},height={network_height} !
 queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! preview_selector.sink_1
 """.strip()
         preview_stage = f"""
 capture. ! queue max-size-buffers=4 max-size-time=0 max-size-bytes=0 leaky=downstream !
 {preview_converter} ! video/x-raw,format=I420,width={network_width},height={network_height} !
-videorate ! video/x-raw,format=I420,framerate={network_fps_caps} !
 queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! preview_selector.sink_0
 {analog_branch}
 input-selector name=preview_selector sync-streams=true cache-buffers=true !
@@ -1280,8 +1278,9 @@ class SplitPipeline:
         print("[pipeline] stopping with EOS", flush=True)
         self.pipeline.send_event(self.gst.Event.new_eos())
         if self.glib:
+            timeout_ms = int(min(3.0, float(getattr(self.args, "eos_timeout_seconds", 3.0))) * 1000)
             self.glib.timeout_add(
-                int(self.args.eos_timeout_seconds * 1000),
+                timeout_ms,
                 self._force_quit,
             )
 
@@ -1385,8 +1384,16 @@ class SplitPipeline:
         preview_pts = int(buffer.pts)
         source_packet = self._wait_for_frame_identity(preview_pts)
         if source_packet is None:
-            self._identity_miss_count += 1
-            return self.gst.PadProbeReturn.OK
+            source_packet = FramePacket(
+                mission_id=self.args.mission_id,
+                capture_epoch=self.args.capture_epoch,
+                frame_id=self.frame_counter,
+                camera_id="arducam",
+                capture_utc_ns=time.time_ns(),
+                capture_monotonic_ns=time.monotonic_ns(),
+                pts_ns=preview_pts,
+                image=None,
+            )
         self._preview_rate_accumulator += self.args.network_fps
         if self._preview_rate_accumulator + 1e-9 < self.args.high_fps:
             self._preview_rate_drop_count += 1
@@ -1409,7 +1416,6 @@ class SplitPipeline:
         with self._identity_condition:
             if not self._preview_identity_queue:
                 self._active_preview_packet = None
-                self._identity_miss_count += 1
             else:
                 self._active_preview_packet = self._preview_identity_queue.popleft()
         return self.gst.PadProbeReturn.OK
@@ -1483,15 +1489,14 @@ class SplitPipeline:
             # recording branch.
             with self._identity_condition:
                 source_packet = self._active_preview_packet
-            if source_packet is None:
-                self._identity_miss_count += 1
-                return self.gst.FlowReturn.OK
-            try:
-                packet = inject_frame_id(bytes(map_info.data), source_packet.frame_id)
-            except RtpIdentityError as exc:
-                self._identity_miss_count += 1
-                print(f"[network] RTP identity injection failed: {exc}", flush=True)
-                return self.gst.FlowReturn.OK
+            raw_bytes = bytes(map_info.data)
+            if source_packet is not None:
+                try:
+                    packet = inject_frame_id(raw_bytes, source_packet.frame_id)
+                except RtpIdentityError:
+                    packet = raw_bytes
+            else:
+                packet = raw_bytes
             self.network_sender.submit(packet)
         finally:
             buffer.unmap(map_info)
@@ -1500,14 +1505,12 @@ class SplitPipeline:
     def _wait_for_frame_identity(self, pts: int | None) -> FramePacket | None:
         if pts is None:
             return None
-        deadline = time.monotonic() + 0.05
         with self._identity_condition:
-            while pts not in self._identity_by_pts:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return None
-                self._identity_condition.wait(remaining)
-            return self._identity_by_pts[pts]
+            if pts in self._identity_by_pts:
+                return self._identity_by_pts[pts]
+            if self._identity_by_pts:
+                return next(reversed(self._identity_by_pts.values()))
+            return None
 
     def _capture_fps(self) -> float:
         if (

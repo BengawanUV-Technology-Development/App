@@ -264,7 +264,7 @@ class AgentConfig:
             "--registration-url",
             registration_url,
         ]
-        if self.easycap_device:
+        if self.easycap_device and Path(self.easycap_device).exists():
             command.extend([
                 "--easycap-device", self.easycap_device,
                 "--easycap-width", str(self.easycap_width),
@@ -662,6 +662,7 @@ class RecordingController:
             self._ended_at = None
             self._stop_requested = False
             self._catalog_finalized = False
+            self._write_preview_source("digital")
             command = self.config.command(
                 session_id,
                 self._label,
