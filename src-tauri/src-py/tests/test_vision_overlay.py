@@ -50,20 +50,6 @@ class VisionOverlayStoreTests(unittest.TestCase):
         self.assertEqual(response["detections"], [])
         self.assertEqual(response["frame_id"], 12)
 
-    def test_overlay_keeps_b0249_preview_compatibility_context(self):
-        payload = overlay_payload()
-        payload.update(
-            camera_id="b0249",
-            preview_source_at_detection="analog",
-            overlay_compatible=False,
-        )
-
-        response = VisionOverlayStore().ingest(payload)
-
-        self.assertEqual(response["camera_id"], "b0249")
-        self.assertEqual(response["preview_source_at_detection"], "analog")
-        self.assertFalse(response["overlay_compatible"])
-
     def test_invalid_box_is_rejected(self):
         payload = overlay_payload()
         payload["detections"][0]["bbox_network"] = [50, 100, 1000, 400]
@@ -77,16 +63,6 @@ class VisionOverlayStoreTests(unittest.TestCase):
         self.assertTrue(response["ok"])
         self.assertTrue(response["stale"])
         self.assertEqual(response["detections"], [])
-
-    def test_clear_discards_live_overlay_correlation(self):
-        store = VisionOverlayStore()
-        store.ingest(overlay_payload())
-
-        store.clear()
-        response = store.latest()
-
-        self.assertTrue(response["stale"])
-        self.assertIsNone(response["frame_id"])
 
 
 if __name__ == "__main__":

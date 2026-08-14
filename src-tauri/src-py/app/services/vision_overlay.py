@@ -184,7 +184,7 @@ class VisionOverlayStore:
         if pts_ns is not None:
             pts_ns = _non_negative_int(pts_ns, "pts_ns")
 
-        camera_id = payload.get("camera_id", "b0249")
+        camera_id = payload.get("camera_id", "arducam")
         if not isinstance(camera_id, str) or not camera_id.strip():
             raise VisionOverlayError("camera_id must be a non-empty string")
         preview_source = payload.get("preview_source_at_detection", "digital")
