@@ -5,6 +5,7 @@ import uuid
 from typing import Any, cast
 from flask import Blueprint, jsonify, request, abort
 
+from app.config import WEBAPP_READ_ONLY
 from app.models import CommandResponse
 from app.services.mission import MissionService
 from app.utils.session_log import SessionLogStore
@@ -21,6 +22,31 @@ mission_bp = Blueprint("mission", __name__, url_prefix="/mission")
 _mission_service: MissionService | None = None
 _loop_getter = None
 logger = logging.getLogger(__name__)
+
+
+@mission_bp.before_request
+def reject_mission_routes_in_read_only_mode():
+    """Missions are control operations and stay exclusively in QGC."""
+    if WEBAPP_READ_ONLY:
+        logger.warning("blocked_read_only_request path=%s method=%s", request.path, request.method)
+        return _error_response(
+            request.path,
+            ErrorCode.READ_ONLY,
+            "Webapp is telemetry-only; use QGroundControl for mission commands",
+            403,
+        )
+
+
+@mission_bp.route("/", defaults={"unmatched_path": ""}, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+@mission_bp.route("/<path:unmatched_path>", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+def reject_unknown_mission_route(unmatched_path: str):
+    """Return the same safety response for future/legacy mission paths."""
+    return _error_response(
+        request.path,
+        ErrorCode.READ_ONLY,
+        "Webapp is telemetry-only; use QGroundControl for mission commands",
+        403,
+    )
 
 
 def init_mission_routes(state_manager, drone_getter, event_logger: SessionLogStore | None = None, loop_getter = None):

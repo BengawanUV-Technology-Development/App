@@ -4,6 +4,7 @@ import logging
 import uuid
 from flask import Blueprint, request, jsonify, abort
 from app.models import CommandResponse
+from app.config import WEBAPP_READ_ONLY
 from app.utils.errors import (
     CommandFailedError,
     CommandTimeoutError,
@@ -19,6 +20,35 @@ _command_service: CommandService | None = None
 _loop_getter = None
 _address_updater = None
 logger = logging.getLogger(__name__)
+
+
+@command_bp.before_request
+def reject_command_routes_in_read_only_mode():
+    """Keep the web process from ever reaching a command service.
+
+    This hook runs before every route in this blueprint, including serial-port
+    discovery, parameter access, connection changes, and vehicle actions.
+    """
+    if WEBAPP_READ_ONLY:
+        logger.warning("blocked_read_only_request path=%s method=%s", request.path, request.method)
+        return _error_response(
+            request.path,
+            ErrorCode.READ_ONLY,
+            "Webapp is telemetry-only; use QGroundControl for vehicle commands",
+            403,
+        )
+
+
+@command_bp.route("/", defaults={"unmatched_path": ""}, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+@command_bp.route("/<path:unmatched_path>", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+def reject_unknown_command_route(unmatched_path: str):
+    """Return the same safety response for future/legacy command paths."""
+    return _error_response(
+        request.path,
+        ErrorCode.READ_ONLY,
+        "Webapp is telemetry-only; use QGroundControl for vehicle commands",
+        403,
+    )
 
 def init_command_routes(state_manager, drone_getter, event_logger: SessionLogStore | None = None, loop_getter = None, address_updater = None):
     global _command_service, _loop_getter, _address_updater
@@ -361,4 +391,3 @@ def _error_response(command_name: str, error_code: ErrorCode, error_message: str
         error=error_message
     )
     return jsonify(resp.to_dict()), status_code
-

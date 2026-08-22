@@ -77,8 +77,8 @@ class TelemetryState:
     
     last_update: Optional[float] = None
     error: Optional[str] = None
-    source: str = "mavsdk"
-    system_address: str = "serial://COM9:115200"
+    source: str = "mavlink-udp-readonly"
+    system_address: str = "udpin://127.0.0.1:14551"
 
     def to_dict(self):
         return asdict(self)

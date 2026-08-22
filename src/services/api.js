@@ -1,84 +1,41 @@
-// src/services/api.js
+export const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:5001";
+export const WS_BASE = API_BASE.replace(/^http/, "ws");
 
-const API_BASE_URL = 'http://localhost:5001'; // Sesuaikan dengan port Flask (5001)
+export function webSocketUrl(path) {
+  return new URL(`${WS_BASE}${path}`).toString();
+}
 
-// Helper function untuk mengirim request
-const sendRequest = async (endpoint, method = 'POST', payload = null) => {
+async function apiRequest(path, options = {}) {
   try {
-    const options = {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    };
+    const headers = new Headers(options.headers || {});
+    const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+    const data = await response.json().catch(() => null);
 
-    if (payload) {
-      options.body = JSON.stringify(payload);
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: data?.error || data?.message || `Request failed: ${response.status}`,
+        data,
+      };
     }
 
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
-    const data = await response.json();
-
-    // Backend Python mengembalikan field "ok": true/false
-    if (!response.ok || (data && data.ok === false)) {
-      throw new Error(data.error || data.message || 'Permintaan ke backend gagal');
-    }
-
-    return { success: true, data };
+    return { ok: true, data };
   } catch (error) {
-    console.error(`[API Error] ${endpoint}:`, error.message);
-    return { success: false, error: error.message };
+    return { ok: false, error: String(error) };
   }
-};
+}
 
-// --- Daftar Fungsi API ---
+export function apiGet(path) {
+  return apiRequest(path);
+}
 
-export const armDrone = () => {
-  return sendRequest('/command/arm', 'POST');
-};
+export function apiPost(path, body = null) {
+  const options = { method: "POST" };
 
-export const disarmDrone = () => {
-  return sendRequest('/command/disarm', 'POST');
-};
+  if (body !== null && body !== undefined) {
+    options.headers = { "Content-Type": "application/json" };
+    options.body = JSON.stringify(body);
+  }
 
-export const setMode = (modeName) => {
-  // Endpoint backend: /command/set_flight_mode
-  return sendRequest('/command/set_flight_mode', 'POST', { mode: modeName });
-};
-
-export const uploadWaypoints = (waypoints) => {
-  // Transformasi data agar sesuai dengan schema MissionItem di MAVSDK
-  const formattedWaypoints = waypoints.map((wp, index) => ({
-    latitude_deg: wp.lat,
-    longitude_deg: wp.lng,
-    relative_altitude_m: wp.alt,
-    seq: index
-  }));
-
-  return sendRequest('/mission/upload', 'POST', { waypoints: formattedWaypoints });
-};
-
-export const rebootFCU = () => {
-  return sendRequest('/command/reboot', 'POST');
-};
-
-export const calibrateGyro = () => {
-  // Sesuaikan jika endpoint kalibrasi sudah diimplementasikan di backend
-  return sendRequest('/command/calibrate-gyro', 'POST');
-};
-
-export const setParameter = (paramId, paramValue) => {
-  return sendRequest('/command/param', 'POST', { name: paramId, value: paramValue });
-};
-
-export const getParameter = (paramId) => {
-  return sendRequest(`/command/param?name=${paramId}`, 'GET');
-};
-
-export const setConnection = (address) => {
-  return sendRequest('/command/connection', 'POST', { address });
-};
-
-export const listPorts = () => {
-  return sendRequest('/command/list_ports', 'GET');
-};
+  return apiRequest(path, options);
+}

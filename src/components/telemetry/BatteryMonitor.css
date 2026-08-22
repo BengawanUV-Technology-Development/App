@@ -1,0 +1,43 @@
+.battery-monitor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--bg-surface-2);
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+}
+
+.battery-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.battery-header strong {
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.battery-bar-container {
+  height: 8px;
+  background: var(--bg-surface-3);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+.battery-bar-fill {
+  height: 100%;
+  transition: width 0.3s ease, background-color 0.3s ease;
+}
+
+.battery-details {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}

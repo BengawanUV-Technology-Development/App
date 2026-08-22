@@ -12,6 +12,7 @@ class ErrorCode(str, Enum):
     COMMAND_FAILED = "COMMAND_FAILED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
     TIMEOUT = "TIMEOUT"
+    READ_ONLY = "READ_ONLY"
 
 
 class GroundStationError(Exception):

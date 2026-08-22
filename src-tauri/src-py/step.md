@@ -1,5 +1,13 @@
 # Ground Station Backend Checklist
 
+> **Runtime integration note (telemetry-only):** checklist sections below
+> describe the legacy command-capable service layer and are retained as
+> historical/unit-test reference. The production entry point now uses the
+> receive-only MAVLink UDP backend on `127.0.0.1:14551`; command and mission
+> HTTP routes are hard-blocked with `403 READ_ONLY`, and the Pixhawk serial
+> link plus all vehicle commands belong to the external router/QGroundControl
+> path.
+
 Dokumen ini dipakai sebagai jalur kerja backend Python (Flask + MAVSDK) sampai siap dipakai frontend.
 Fokusnya command API: konsisten, aman, gampang di-maintain, dan cukup lengkap untuk dipakai UI tanpa banyak asumsi tambahan.
 

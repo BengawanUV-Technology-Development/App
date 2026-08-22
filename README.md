@@ -10,6 +10,32 @@ Mission Planner adalah aplikasi ground control station (GCS) yang dikembangkan o
 
 Aplikasi ini memiliki fokus khusus pada **Misi Search and Rescue (SAR)**, di mana UAV dibekali dengan kecerdasan buatan untuk membantu tim penyelamat menemukan korban bencana secara lebih cepat dan akurat melalui teknologi Computer Vision.
 
+> **Mode integrasi saat ini: telemetry-only.** Webapp hanya membaca data
+> MAVLink. Semua command flight, mission, parameter, dan koneksi serial dari
+> webapp dinonaktifkan. QGroundControl tetap menjadi ground station yang
+> memiliki akses command penuh.
+
+## Arsitektur MAVLink read-only
+
+Router MAVLink menjadi satu-satunya proses yang membuka serial Pixhawk. Router
+menggandakan telemetry ke dua jalur yang terpisah:
+
+```text
+Pixhawk serial
+      │
+      ▼
+read-only MAVLink router
+      ├── UDP 14550 ──► QGroundControl (telemetry + command)
+      └── UDP 14551 ──► web backend (receive-only telemetry)
+                              │
+                              └── GET /telemetry ──► web UI
+```
+
+Backend web tidak membuka `/dev/cu.*`, COM port, atau koneksi MAVSDK ke
+flight controller. Receiver-nya menggunakan UDP `recvfrom` saja. Semua route
+di `/command/*` dan `/mission/*` menjawab `403 READ_ONLY`; jadi request HTTP
+yang keliru tidak dapat diteruskan ke Pixhawk.
+
 ---
 
 ## Fitur Utama & SAR Intelligence
@@ -23,8 +49,8 @@ Aplikasi ini memiliki fokus khusus pada **Misi Search and Rescue (SAR)**, di man
 * **Instant Map Markers**: Setiap temuan akan langsung ditandai di peta digital sebagai Point of Interest (POI) permanen untuk disurvei oleh tim darat.
 
 ### 3. Koneksi & Sistem Dasar
-* **Connect Telemetri**: Koneksi langsung ke UAV melalui modul telemetri via MAVLink.
-* **Flight Control**: Kontrol status ARM/DISARM dan sistem dasar flight controller.
+* **Connect Telemetri**: Telemetry diterima dari router melalui UDP MAVLink.
+* **Flight Control**: Command flight dilakukan melalui QGroundControl.
 
 ### 4. Flight Modes & Navigasi
 * **Multi-Mode Support**: MANUAL, FBWA, AUTO (Waypoint), Q_STABILIZE, Q_HOVER, dan Q_LAND.
@@ -123,37 +149,81 @@ Konfigurasi parameter lanjutan untuk tuning sistem:
 
 ---
 
-## Instalasi
+## Instalasi backend telemetry-only
+
+Panduan setup lengkap untuk Windows PowerShell, macOS, dan Linux tersedia di
+[MAVLINK_SETUP.md](./MAVLINK_SETUP.md).
 
 ### Prasyarat
 
-* OS: Windows / Linux
-* Python / environment sesuai stack
-* UAV / simulator kompatibel
+* Python 3.10+
+* Router MAVLink yang meneruskan telemetry ke UDP `127.0.0.1:14551`
+* QGroundControl memakai UDP `14550`, bukan serial Pixhawk langsung
 
 ### Langkah Instalasi
 
 ```bash
-git clone https://github.com/BengawanUV-Technology-Development/App
+git clone --branch main https://github.com/BengawanUV-Technology-Development/App
+cd App
 
-# Install dependencies
-pip install -r requirements.txt
+# Install dependencies backend
+python3 -m pip install -r src-tauri/src-py/requirements.txt
 
-# Jalankan aplikasi
-python main.py
+# Jalankan backend telemetry-only
+./src-tauri/src-py/start_readonly_backend.sh
+```
+
+Endpoint verifikasi:
+
+```bash
+curl http://127.0.0.1:5001/health
+curl http://127.0.0.1:5001/capabilities
+curl http://127.0.0.1:5001/telemetry
+```
+
+Percobaan command dari webapp harus ditolak:
+
+```bash
+curl -i -X POST http://127.0.0.1:5001/command/arm
+# HTTP/1.1 403
+# "error_code": "READ_ONLY"
 ```
 
 ---
 
-## Cara Penggunaan
+## Cara menjalankan stack
 
-1. Jalankan aplikasi Mission Planner
-2. Hubungkan telemetri UAV
-3. Lakukan ARM jika sistem siap
-4. Pilih flight mode sesuai kebutuhan
-5. Buat dan upload waypoint mission
-6. Monitor UAV melalui HUD dan map
-7. Setelah flight, analisis data log
+Urutan yang disarankan:
+
+1. Hentikan monitor UDP lama yang masih bind ke `14551` jika ada.
+2. Jalankan `scripts/mavlink_readonly_router.py` dengan serial Pixhawk. Contoh:
+
+   ```bash
+   python3 scripts/mavlink_readonly_router.py \
+     --serial /dev/cu.usbserial-DU0E7WRJ \
+     --baud 57600
+   ```
+
+3. Jalankan `./src-tauri/src-py/start_readonly_backend.sh`.
+4. Buka QGroundControl dan gunakan link UDP `14550`; jangan menambahkan link
+   serial Pixhawk di QGC.
+
+Untuk Windows PowerShell, gunakan:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\scripts\setup_mavlink_windows.ps1
+.\scripts\start_mavlink_router.ps1 -SerialPort COM5 -Baud 57600
+.\scripts\start_readonly_backend.ps1
+```
+
+Tidak ada ketergantungan koneksi yang ketat antara langkah 2–4: backend dan
+QGC boleh dibuka lebih dahulu karena keduanya hanya menunggu datagram. Untuk
+UX operasional, langkah tersebut nantinya dapat dibungkus dalam satu launcher
+yang menampilkan status router, backend, dan QGC secara bersamaan.
+
+Webapp hanya menampilkan telemetry. ARM, mode, parameter, mission, reboot, dan
+command lain tetap dilakukan dari QGroundControl.
 
 ---
 
