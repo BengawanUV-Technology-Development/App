@@ -3897,6 +3897,50 @@ button:hover:not(:disabled) {
   gap: 14px;
 }
 
+.camera-stream-card {
+  min-width: 0;
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-1);
+}
+
+.camera-stream-heading {
+  padding: 15px 15px 0;
+}
+
+.camera-stream-heading .panel-heading {
+  margin-bottom: 13px;
+}
+
+.camera-stream-body {
+  position: relative;
+  min-height: 360px;
+  height: min(52vw, 540px);
+  overflow: hidden;
+  border-top: 1px solid var(--line-soft);
+  border-radius: 0 0 9px 9px;
+}
+
+.camera-stream-body .vision-frame {
+  position: absolute;
+  inset: 0;
+}
+
+.camera-preview-source-error {
+  position: absolute;
+  z-index: 5;
+  top: 52px;
+  right: 12px;
+  left: 12px;
+  border: 1px solid rgba(231, 125, 114, 0.42);
+  background: rgba(48, 17, 19, 0.9);
+  padding: 6px 8px;
+  color: var(--accent-danger);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
 .operations-rail,
 .data-column {
   display: flex;
@@ -4637,6 +4681,11 @@ button:hover:not(:disabled) {
 
   .operations-grid {
     grid-template-columns: 1fr;
+  }
+
+  .camera-stream-body {
+    height: 56vw;
+    min-height: 280px;
   }
 
   .data-column {

@@ -116,6 +116,31 @@ Monitor UDP `14551` if needed:
 python scripts/monitor_mavlink_udp.py --port 14551
 ```
 
+## Live camera preview
+
+The camera preview is receive-only, like the telemetry path. The Jetson sends
+the low-resolution Arducam branch as H.264/RTP/UDP to the backend; the backend
+decodes it with GStreamer and exposes an MJPEG preview at
+`/api/v1/camera/preview`. The website starts requesting this endpoint when the
+Live camera panel is opened.
+
+Install the platform GStreamer packages and PyGObject before enabling the
+feed. Keep the values in
+[`src-tauri/src-py/camera.env.example`](src-tauri/src-py/camera.env.example)
+in sync with the Jetson sender, especially `JETSON_VIDEO_PORT` and
+`JETSON_VIDEO_PAYLOAD_TYPE`.
+
+Verify the receiver without opening the website:
+
+```bash
+curl http://127.0.0.1:5001/api/v1/camera/status
+curl -X POST http://127.0.0.1:5001/api/v1/camera/start
+curl -i --max-time 2 http://127.0.0.1:5001/api/v1/camera/preview
+```
+
+If GStreamer is unavailable, telemetry remains available and the camera status
+reports the missing video dependency instead of affecting MAVLink reception.
+
 ## Troubleshooting
 
 Check Windows UDP listeners:

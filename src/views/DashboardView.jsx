@@ -6,6 +6,7 @@ import BatteryMonitor from "../components/telemetry/BatteryMonitor";
 import DataQuick from "../components/telemetry/DataQuick";
 import EkfVibeBar from "../components/telemetry/EkfVibeBar";
 import EkfVibeModal from "../components/telemetry/EkfVibeModal";
+import CameraPreview from "../components/recording/CameraPreview";
 
 const OperationalMap = lazy(() => import("../components/map/OperationalMap"));
 
@@ -87,6 +88,15 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
         </div>
         <Badge>READ ONLY</Badge>
       </div>
+
+      <section className="camera-stream-card" aria-label="Live camera preview">
+        <div className="camera-stream-heading">
+          <PanelHeading eyebrow="Vision / H.264 RTP" title="Live camera" trailing={<Badge tone="info">ARDUCAM</Badge>} />
+        </div>
+        <div className="camera-stream-body">
+          <CameraPreview />
+        </div>
+      </section>
 
       <div className="operations-grid">
         <aside className="operations-rail">

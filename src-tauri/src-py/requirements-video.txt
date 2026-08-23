@@ -1,0 +1,5 @@
+# Optional native dependencies for the Jetson H.264/RTP preview.
+# Install the OS GStreamer/PyGObject packages first; these are not required
+# for the telemetry-only backend to start.
+pygobject==3.50.0
+pycairo==1.27.0

@@ -38,6 +38,15 @@ class HttpSmokeTests(unittest.TestCase):
         self.assertIn("connected", payload)
         self.assertEqual(payload["source"], "mavlink-udp-readonly")
 
+    def test_camera_status_endpoint_is_available_without_starting_gstreamer(self):
+        response = self.client.get("/api/v1/camera/status")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["camera_source"], "jetson_udp")
+        self.assertEqual(payload["camera_status"], "STOPPED")
+
     def test_capabilities_declare_qgc_as_control_owner(self):
         response = self.client.get("/capabilities")
 
