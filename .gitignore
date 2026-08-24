@@ -16,6 +16,7 @@ __pycache__/
 venv/
 env/
 src-tauri/src-py/runtime/logs/
+src-tauri/src-py/.camera-agent-token.env
 
 node_modules
 dist

@@ -91,7 +91,7 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
 
       <section className="camera-stream-card" aria-label="Live camera preview">
         <div className="camera-stream-heading">
-          <PanelHeading eyebrow="Vision / H.264 RTP" title="Live camera" trailing={<Badge tone="info">ARDUCAM</Badge>} />
+          <PanelHeading eyebrow="Vision / H.264 RTP" title="Live camera" trailing={<Badge tone="info">CSI / ANALOG</Badge>} />
         </div>
         <div className="camera-stream-body">
           <CameraPreview />

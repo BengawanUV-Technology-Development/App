@@ -3439,6 +3439,75 @@ button:hover:not(:disabled) {
   opacity: 0.4;
 }
 
+.camera-preview-control-stack {
+  display: grid;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.camera-source-controls,
+.camera-control-row,
+.camera-recording-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.camera-source-controls,
+.camera-recording-controls {
+  flex-wrap: wrap;
+}
+
+.camera-source-controls > span,
+.camera-recording-status {
+  color: #8fa9b3;
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+}
+
+.camera-source-controls button,
+.camera-recording-controls button {
+  min-width: 58px;
+}
+
+.camera-source-controls button.is-active {
+  border-color: rgba(103, 232, 165, 0.8);
+  background: rgba(18, 91, 67, 0.9);
+  color: #b6ffdc;
+}
+
+.camera-recording-controls .is-record {
+  border-color: rgba(103, 232, 165, 0.55);
+  background: rgba(17, 71, 58, 0.88);
+  color: #c7ffe3;
+}
+
+.camera-recording-controls .is-stop {
+  border-color: rgba(255, 112, 112, 0.72);
+  background: rgba(112, 30, 35, 0.9);
+  color: #ffe0e0;
+}
+
+.camera-recording-chip {
+  border-color: rgba(255, 112, 112, 0.7) !important;
+  color: #ffb1b1 !important;
+}
+
+.camera-control-row {
+  justify-content: space-between;
+}
+
+.camera-control-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.camera-control-row > div {
+  flex: 0 0 auto;
+}
+
 .camera-preview-canvas {
   position: absolute;
   z-index: 1;
