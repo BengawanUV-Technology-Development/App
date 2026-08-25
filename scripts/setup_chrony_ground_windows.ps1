@@ -177,6 +177,16 @@ Set-RegistryDword -Path $ConfigPath -Name "AnnounceFlags" -Value $announceFlags
 Set-RegistryDword -Path $ServerProviderPath -Name "Enabled" -Value 1
 Set-RegistryDword -Path $ClientProviderPath -Name "Enabled" -Value $(if ($hasUpstream) { 1 } else { 0 })
 
+# w32tm /config requires the Windows Time service to be running. Start it
+# before applying the reliable-source setting, then restart it again after the
+# firewall rule has been installed.
+Set-Service -Name W32Time -StartupType Automatic
+$w32timeService = Get-Service -Name W32Time
+if ($w32timeService.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Running) {
+    Start-Service -Name W32Time
+    Start-Sleep -Seconds 1
+}
+
 # Mark this host as the local reliable source. Re-apply AnnounceFlags after
 # w32tm because /reliable can normalize the value on some Windows builds.
 Invoke-NativeChecked "w32tm.exe" @("/config", "/reliable:yes", "/update")
