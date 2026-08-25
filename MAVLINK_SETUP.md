@@ -1,7 +1,13 @@
 # MAVLink router setup
 
+Untuk baseline redevelopment, lihat [R0_ARCHITECTURE_BASELINE.md](./R0_ARCHITECTURE_BASELINE.md).
+Panduan ini menjelaskan setup runtime yang tersedia saat ini; ia tidak berarti
+seluruh mission, frame metadata, chrony, atau hardware verification Mission
+Planner/QGroundControl R0 sudah selesai.
+
 This repository uses a small `pymavlink` router instead of exposing the
-Pixhawk serial device directly to the web backend.
+Pixhawk serial device directly to the web backend. Mission Planner fan-out is
+optional and must use a separate UDP destination.
 
 ```
 Pixhawk serial
@@ -9,6 +15,7 @@ Pixhawk serial
       ▼
 scripts/mavlink_readonly_router.py
       ├── UDP 14550 ──► QGroundControl (telemetry + commands)
+      ├── UDP 14552 ──► Mission Planner (optional telemetry + commands)
       └── UDP 14551 ──► web backend (receive-only telemetry)
 ```
 
@@ -57,7 +64,12 @@ Use a separate PowerShell window:
 The default routes are:
 
 - QGroundControl: `127.0.0.1:14550`
+- Mission Planner: optional, for example `127.0.0.1:14552`
 - Web backend: `127.0.0.1:14551`
+
+To enable Mission Planner in the same router process, pass
+`-MissionPlannerAddress 127.0.0.1:14552` to the PowerShell launcher or set
+`MAVLINK_MISSION_PLANNER_ADDRESS=127.0.0.1:14552` before starting the router.
 
 ### 4. Start the web backend
 
@@ -118,11 +130,17 @@ python scripts/monitor_mavlink_udp.py --port 14551
 
 ## Live camera preview
 
-The camera preview is receive-only, like the telemetry path. The Jetson sends
-the low-resolution Arducam branch as H.264/RTP/UDP to the backend; the backend
-decodes it with GStreamer and exposes an MJPEG preview at
-`/api/v1/camera/preview`. The website starts requesting this endpoint when the
-Live camera panel is opened.
+The camera preview is receive-only, like the telemetry path. The current Jetson
+service can select a low-resolution CSI/Arducam or EasyCAP branch, encode it as
+H.264/RTP/UDP, and send it to the backend. The backend decodes it with
+GStreamer and exposes an MJPEG preview at `/api/v1/camera/preview`. The website
+starts requesting this endpoint when the Live camera panel is opened.
+
+The R0 mission/frame metadata contract is intentionally not carried by this
+low-resolution preview pipeline. The deployed high-resolution recording agent
+assigns frame identity at the source callback and writes epoch-scoped
+`frames.jsonl`; `jetson/frame_metadata.py` validates that artifact. See
+[`SHORT_FLIGHT_TEST.md`](./SHORT_FLIGHT_TEST.md).
 
 Install the platform GStreamer packages and PyGObject before enabling the
 feed. Keep the values in
@@ -140,6 +158,9 @@ curl -i --max-time 2 http://127.0.0.1:5001/api/v1/camera/preview
 
 If GStreamer is unavailable, telemetry remains available and the camera status
 reports the missing video dependency instead of affecting MAVLink reception.
+
+MAVLink Anywhere, Internet fallback, YOLO, coordinate reconstruction, and a new
+WebSocket video/detection transport are outside this setup and outside R0.
 
 ## Troubleshooting
 

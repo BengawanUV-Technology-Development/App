@@ -13,6 +13,7 @@ from app.routes.commands import command_bp
 from app.services.readonly_mavlink import ReadonlyMavlinkReceiver
 from app.services.camera_stream import CameraStreamService
 from app.services.jetson_recording import JetsonRecordingClient
+from app.services.mission_telemetry import MissionTelemetryRecorder
 from app.config import (
     API_HOST,
     API_PORT,
@@ -36,6 +37,7 @@ state_manager.update(
     system_address=telemetry_address,
 )
 session_log_store = SessionLogStore(system_address=telemetry_address)
+mission_telemetry_recorder = MissionTelemetryRecorder()
 camera_service = CameraStreamService()
 jetson_recording_client = JetsonRecordingClient(
     base_url=JETSON_RECORDING_AGENT_URL,
@@ -50,7 +52,12 @@ init_telemetry_routes(state_manager)
 init_health_routes(state_manager) 
 init_log_routes(session_log_store)
 init_camera_routes(camera_service)
-init_recording_routes(camera_service, jetson_recording_client)
+init_recording_routes(
+    camera_service,
+    jetson_recording_client,
+    state_manager=state_manager,
+    mission_recorder=mission_telemetry_recorder,
+)
 
 app.register_blueprint(command_bp)
 app.register_blueprint(mission_bp)
@@ -66,6 +73,7 @@ mavlink_receiver = ReadonlyMavlinkReceiver(
     session_log_store=session_log_store,
     host=MAVLINK_UDP_HOST,
     port=MAVLINK_UDP_PORT,
+    mission_recorder=mission_telemetry_recorder,
 )
 
 if __name__ == "__main__":
@@ -74,3 +82,4 @@ if __name__ == "__main__":
         app.run(host=API_HOST, port=API_PORT, threaded=True)
     finally:
         mavlink_receiver.stop()
+        mission_telemetry_recorder.stop(reason="backend_shutdown")

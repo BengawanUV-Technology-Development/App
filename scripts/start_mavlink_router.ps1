@@ -3,6 +3,7 @@ param(
     [string]$SerialPort = "COM5",
     [int]$Baud = 57600,
     [string]$QgcAddress = "127.0.0.1:14550",
+    [string]$MissionPlannerAddress = "",
     [string]$WebAddress = "127.0.0.1:14551"
 )
 
@@ -18,6 +19,9 @@ if ($env:MAVLINK_SERIAL_PORT) {
 if ($env:MAVLINK_SERIAL_BAUD) {
     $Baud = [int]$env:MAVLINK_SERIAL_BAUD
 }
+if ($env:MAVLINK_MISSION_PLANNER_ADDRESS) {
+    $MissionPlannerAddress = $env:MAVLINK_MISSION_PLANNER_ADDRESS
+}
 
 if (-not (Test-Path $PythonExe)) {
     throw "Virtual environment belum ada. Jalankan .\scripts\setup_mavlink_windows.ps1 terlebih dahulu."
@@ -26,6 +30,9 @@ if (-not (Test-Path $PythonExe)) {
 Write-Host "Starting read-only MAVLink router..." -ForegroundColor Cyan
 Write-Host "Serial: $SerialPort @ $Baud"
 Write-Host "QGC:    $QgcAddress (bidirectional)"
+if ($MissionPlannerAddress) {
+    Write-Host "MP:     $MissionPlannerAddress (bidirectional)"
+}
 Write-Host "Web:    $WebAddress (telemetry-only)"
 
 $RouterArgs = @(
@@ -34,6 +41,9 @@ $RouterArgs = @(
     "--qgc", $QgcAddress,
     "--web", $WebAddress
 )
+if ($MissionPlannerAddress) {
+    $RouterArgs += @("--mission-planner", $MissionPlannerAddress)
+}
 
 & $PythonExe $Router @RouterArgs
 

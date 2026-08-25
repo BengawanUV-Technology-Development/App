@@ -24,6 +24,11 @@ class StateManager:
         with self._lock:
             return replace(self._state)
 
+    def set_mission_id(self, mission_id: str | None) -> None:
+        """Expose the currently active recording mission to the UI snapshot."""
+
+        self.update(mission_id=mission_id)
+
     # -- Pre-arm health -------------------------------------------------
 
     def update_prearm_health(self, **kwargs):

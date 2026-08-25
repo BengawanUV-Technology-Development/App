@@ -17,8 +17,15 @@ def health():
     return jsonify({
         "connected": state.connected,
         "status": state.status,
+        "stale": state.status == "STALE",
+        "disconnected": state.status in {"DISCONNECTED", "OFFLINE"},
         "error": state.error,
         "last_update": state.last_update,
+        "receive_timestamp": state.receive_timestamp,
+        "source_timestamp": state.source_timestamp,
+        "source_time_valid": state.source_time_valid,
+        "last_message_type": state.last_message_type,
+        "mission_id": state.mission_id,
         "system_address": state.system_address,
     })
 

@@ -8,7 +8,13 @@
 
 Mission Planner adalah aplikasi ground control station (GCS) yang dikembangkan oleh Technology Development Team Bengawan UAV untuk mendukung perencanaan, eksekusi, dan analisis misi UAV secara terintegrasi.
 
-Aplikasi ini memiliki fokus khusus pada **Misi Search and Rescue (SAR)**, di mana UAV dibekali dengan kecerdasan buatan untuk membantu tim penyelamat menemukan korban bencana secara lebih cepat dan akurat melalui teknologi Computer Vision.
+Aplikasi ini sedang dikembangkan untuk mendukung **Misi Search and Rescue
+(SAR)**. Integrasi AI/Computer Vision merupakan roadmap setelah fondasi R0,
+bukan capability aktif pada runtime telemetry-only saat ini.
+
+> **R0 architecture baseline:** lihat [R0_ARCHITECTURE_BASELINE.md](./R0_ARCHITECTURE_BASELINE.md).
+> Dokumen tersebut adalah acuan redevelopment dan membedakan target R0 dari
+> implementasi yang sudah tersedia.
 
 > **Mode integrasi saat ini: telemetry-only.** Webapp hanya membaca data
 > MAVLink. Semua command flight, mission, parameter, dan koneksi serial dari
@@ -18,7 +24,7 @@ Aplikasi ini memiliki fokus khusus pada **Misi Search and Rescue (SAR)**, di man
 ## Arsitektur MAVLink read-only
 
 Router MAVLink menjadi satu-satunya proses yang membuka serial Pixhawk. Router
-menggandakan telemetry ke dua jalur yang terpisah:
+menggandakan telemetry ke jalur GCS, optional Mission Planner, dan web:
 
 ```text
 Pixhawk serial
@@ -26,6 +32,7 @@ Pixhawk serial
       ▼
 read-only MAVLink router
       ├── UDP 14550 ──► QGroundControl (telemetry + command)
+      ├── UDP 14552 ──► Mission Planner (optional telemetry + command)
       └── UDP 14551 ──► web backend (receive-only telemetry)
                               │
                               └── GET /telemetry ──► web UI
@@ -38,23 +45,26 @@ yang keliru tidak dapat diteruskan ke Pixhawk.
 
 ---
 
-## Fitur Utama & SAR Intelligence
+## Scope R0 dan roadmap SAR
 
-### 1. Computer Vision Victim Detection
-* **Real-Time Object Detection**: Menggunakan pipeline AI (YOLO/PyTorch) untuk mendeteksi tanda-tanda keberadaan korban (pakaian, bagian tubuh, dll) langsung dari stream video UAV.
-* **Visual Bounding Box**: Menampilkan kotak deteksi secara real-time pada interface operator untuk memudahkan identifikasi.
+Runtime R0 saat ini menyediakan monitoring telemetry read-only dan live camera
+preview. YOLO, bounding-box detection, auto-marking, geotagging, dan coordinate
+reconstruction adalah roadmap batch berikutnya; dokumentasi fitur tersebut tidak
+boleh dibaca sebagai fitur aktif.
 
-### 2. Auto-Marking & Geotagging
-* **Precision Geotagging**: Menghitung koordinat GPS objek di darat secara otomatis dengan menggabungkan data posisi UAV, altitude, attitude (gyro), dan sudut kamera.
-* **Instant Map Markers**: Setiap temuan akan langsung ditandai di peta digital sebagai Point of Interest (POI) permanen untuk disurvei oleh tim darat.
-
-### 3. Koneksi & Sistem Dasar
+### Koneksi dan sistem dasar
 * **Connect Telemetri**: Telemetry diterima dari router melalui UDP MAVLink.
-* **Flight Control**: Command flight dilakukan melalui QGroundControl.
+* **Flight Control**: Command flight dilakukan melalui QGroundControl atau GCS
+  yang ditetapkan dalam topologi R0, bukan melalui website.
+* **Live camera**: Jetson mengirim H.264/RTP/UDP; Ground mengubahnya menjadi
+  MJPEG HTTP untuk React.
 
-### 4. Flight Modes & Navigasi
+### Flight Modes & Navigasi
 * **Multi-Mode Support**: MANUAL, FBWA, AUTO (Waypoint), Q_STABILIZE, Q_HOVER, dan Q_LAND.
 * **GPS & Maps Integration**: Tampilan peta berbasis koordinat real-time dengan tracking posisi UAV yang presisi.
+
+Daftar mode dan parameter di dokumen lama adalah konteks GCS/QGroundControl;
+website tetap monitoring-only dan tidak menjadi command authority.
 
 ### 5. Monitoring & Visualisasi (HUD)
 * **Advanced HUD**: Informasi attitude (roll, pitch, yaw), airspeed, altitude, dan heading dalam satu tampilan intuitif.
@@ -62,17 +72,15 @@ yang keliru tidak dapat diteruskan ke Pixhawk.
 
 ---
 
-### 5. Data Logging & Analisis
+### Data Logging & Analisis
 
-* **Data Log Recording**
+* **Current**: Ground menyimpan telemetry/event JSONL pada session backend.
+* **R0 target**: Ground menyimpan telemetry dan metadata per `mission_id`.
+* **Future**: Post-flight analysis, 3D replay, dan pengambilan evidence video
+  tertentu dari Jetson.
 
-  * Penyimpanan seluruh data penerbangan
-* **Post-Flight Analysis**
-
-  * Evaluasi performa UAV setelah misi
-* **3D Model Simulation (Post-Flight)**
-
-  * Visualisasi ulang flight dalam bentuk simulasi 3D
+  High-resolution evidence tetap berada di Jetson; transfer otomatis seluruh
+  video bukan bagian R0.
 
 ---
 
@@ -129,23 +137,26 @@ Konfigurasi parameter lanjutan untuk tuning sistem:
 
 ## Arsitektur Sistem
 
-* **Frontend (UI/UX)**
+Topologi target, mission contract, frame identity, clock contract, dan
+discrepancy implementasi dijelaskan di
+[R0_ARCHITECTURE_BASELINE.md](./R0_ARCHITECTURE_BASELINE.md).
 
-  * Interface interaktif untuk operator
-  * Visualisasi peta dan HUD
+Implementasi R1 sekarang membuat `mission_id` dan Ground
+`missions/<mission_id>/telemetry.jsonl` per recording. Recording agent Jetson
+yang terpasang menulis `epochs/<capture_epoch>/frames.jsonl` dari source
+capture callback; `jetson/frame_metadata.py` menyediakan validator yang
+kompatibel untuk audit artifact.
 
-* **Backend**
+Prosedur short-flight dan offline synchronization tersedia di
+[`SHORT_FLIGHT_TEST.md`](./SHORT_FLIGHT_TEST.md).
 
-  * Pengolahan data misi
-  * Manajemen komunikasi UAV
+Aktivasi dan verifikasi clock Ground–Jetson tersedia di
+[`CHRONY_SETUP.md`](./CHRONY_SETUP.md); helper-nya memasang chrony, mengatur
+service saat boot, menyimpan backup konfigurasi lama, dan menyediakan profil
+Windows berbasis `W32Time`.
 
-* **Communication Layer**
-
-  * Protokol MAVLink untuk komunikasi telemetri
-
-* **Data Storage**
-
-  * Penyimpanan mission plan dan log penerbangan
+MAVLink Anywhere, Internet fallback, dan link failover bukan dependency saat ini
+dan hanya dicatat sebagai future development.
 
 ---
 
@@ -159,6 +170,11 @@ Panduan setup lengkap untuk Windows PowerShell, macOS, dan Linux tersedia di
 * Python 3.10+
 * Router MAVLink yang meneruskan telemetry ke UDP `127.0.0.1:14551`
 * QGroundControl memakai UDP `14550`, bukan serial Pixhawk langsung
+
+Konfigurasi ini menjalankan custom Python router. Untuk memakai Mission Planner
+bersamaan, tambahkan destination yang berbeda dari QGC, misalnya
+`--mission-planner 127.0.0.1:14552` atau set
+`MAVLINK_MISSION_PLANNER_ADDRESS=127.0.0.1:14552`.
 
 ### Langkah Instalasi
 

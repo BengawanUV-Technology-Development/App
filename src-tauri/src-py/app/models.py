@@ -1,10 +1,7 @@
-"""
-Dataclasses for state, requests, responses.
-Type-safe schemas untuk telemetry, commands, errors.
-"""
-from dataclasses import dataclass, asdict, field
-from typing import Optional
-from datetime import datetime
+"""Dataclasses for canonical telemetry, state, commands, and errors."""
+
+from dataclasses import asdict, dataclass
+from typing import Any, Optional
 
 
 @dataclass
@@ -36,9 +33,15 @@ class PreArmHealth:
 
 @dataclass
 class TelemetryState:
-    """Vehicle telemetry state"""
+    """Latest telemetry projection consumed by the existing web UI.
+
+    This remains a snapshot.  Per-message timing and payload provenance live in
+    :class:`TelemetrySample` so fields from different MAVLink messages are not
+    presented as one measurement taken at the same source time.
+    """
+
     connected: bool = False
-    status: str = "OFFLINE" # OFFLINE, REBOOTING, CONNECTING, ACTIVE
+    status: str = "DISCONNECTED"  # CONNECTED, STALE, DISCONNECTED, CONNECTING
     lat: Optional[float] = None
     lng: Optional[float] = None
     alt: Optional[float] = None
@@ -72,15 +75,51 @@ class TelemetryState:
     vibration_clip0: int = 0
     vibration_clip1: int = 0
     vibration_clip2: int = 0
-    
-    status_text: Optional[str] = None
-    
+
     last_update: Optional[float] = None
+    receive_timestamp: Optional[int] = None
+    source_timestamp: Optional[int] = None
+    source_timestamp_raw: Optional[int | float] = None
+    source_clock_domain: Optional[str] = None
+    source_time_valid: bool = False
+    last_message_type: Optional[str] = None
+    gps_fix: Optional[int] = None
+    satellites_visible: Optional[int] = None
+    quaternion: Optional[list[float]] = None
+    mission_id: Optional[str] = None
     error: Optional[str] = None
     source: str = "mavlink-udp-readonly"
     system_address: str = "udpin://127.0.0.1:14551"
 
     def to_dict(self):
+        return asdict(self)
+
+
+@dataclass
+class TelemetrySample:
+    """One normalized MAVLink message/sample.
+
+    ``source_timestamp`` is normalized to UTC nanoseconds only when
+    ``source_time_valid`` is true.  ``source_timestamp_raw`` and
+    ``source_clock_domain`` preserve the original source clock otherwise.
+    ``receive_timestamp`` is always Ground wall-clock UTC nanoseconds when the
+    packet was received; it is never used as a silent source-time substitute.
+    """
+
+    schema_version: int = 1
+    mission_id: Optional[str] = None
+    source_timestamp: Optional[int] = None
+    source_timestamp_raw: Optional[int | float] = None
+    source_clock_domain: Optional[str] = None
+    receive_timestamp: Optional[int] = None
+    receive_monotonic_ns: Optional[int] = None
+    source_time_valid: bool = False
+    message_type: str = ""
+    system_id: Optional[int] = None
+    component_id: Optional[int] = None
+    payload: dict[str, Any] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 

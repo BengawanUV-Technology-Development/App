@@ -8,6 +8,17 @@
 > link plus all vehicle commands belong to the external router/QGroundControl
 > path.
 
+> **R0 baseline notice:** [R0_ARCHITECTURE_BASELINE.md](../../R0_ARCHITECTURE_BASELINE.md)
+> is the normative redevelopment context. The checklist below is retained as
+> historical/legacy service-layer reference and roadmap material. Its command,
+> MAVSDK, WebSocket, YOLO, and coordinate-reconstruction entries must not be
+> interpreted as active R0 runtime capabilities.
+
+> R0 additionally requires a per-recording `mission_id`, Jetson/Ground mission
+> linkage, canonical frame metadata, chrony-based clock alignment, and separate
+> telemetry source/receive timestamps. Those contracts are not implemented by
+> this checklist batch.
+
 Dokumen ini dipakai sebagai jalur kerja backend Python (Flask + MAVSDK) sampai siap dipakai frontend.
 Fokusnya command API: konsisten, aman, gampang di-maintain, dan cukup lengkap untuk dipakai UI tanpa banyak asumsi tambahan.
 

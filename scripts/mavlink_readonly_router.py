@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Restricted MAVLink fan-out for macOS, Linux, and Windows.
 
-The QGroundControl path is bidirectional: telemetry is sent to QGC and MAVLink
-packets received on QGC's learned UDP source port are written to the flight
-controller.
+The GCS path is bidirectional: telemetry is sent to QGroundControl and the
+optional Mission Planner destination, and MAVLink packets received on the
+shared learned UDP source port are written to the flight controller.
 
 The web path is intentionally transmit-only. The web UDP socket is never
 bound or read by this process, so packets sent by the web application cannot
@@ -56,6 +56,13 @@ def main() -> int:
         default=parse_address(os.environ.get("MAVLINK_QGC_ADDRESS", "127.0.0.1:14550")),
         help="QGroundControl destination (default: 127.0.0.1:14550)",
     )
+    mission_planner_value = os.environ.get("MAVLINK_MISSION_PLANNER_ADDRESS", "").strip()
+    parser.add_argument(
+        "--mission-planner",
+        type=parse_address,
+        default=parse_address(mission_planner_value) if mission_planner_value else None,
+        help="optional Mission Planner destination, e.g. 127.0.0.1:14552",
+    )
     parser.add_argument(
         "--web",
         type=parse_address,
@@ -85,9 +92,9 @@ def main() -> int:
     if port is not None and hasattr(port, "timeout"):
         port.timeout = 0.5
 
-    # This socket is bound to an ephemeral port. QGC replies to the source
-    # port from which it receives telemetry, giving QGC a two-way path without
-    # making the router compete with QGC for UDP/14550.
+    # This socket is bound to an ephemeral port. QGC and optional Mission
+    # Planner reply to the source port from which they receive telemetry,
+    # giving both GCS clients a two-way path without competing for UDP/14550.
     qgc_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     qgc_socket.bind(("127.0.0.1", 0))
     qgc_socket.setblocking(False)
@@ -97,12 +104,22 @@ def main() -> int:
     web_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     qgc_address = args.qgc
+    gcs_destinations = [qgc_address]
+    if args.mission_planner is not None:
+        gcs_destinations.append(args.mission_planner)
     web_address = args.web
     print(
         f"QGC: bidirectional via {qgc_address[0]}:{qgc_address[1]} "
         f"(router source port {qgc_socket.getsockname()[1]})",
         flush=True,
     )
+    if args.mission_planner is not None:
+        print(
+            "Mission Planner: bidirectional via "
+            f"{args.mission_planner[0]}:{args.mission_planner[1]} "
+            f"(router source port {qgc_socket.getsockname()[1]})",
+            flush=True,
+        )
     print(
         f"Web: telemetry-only to {web_address[0]}:{web_address[1]} "
         "(incoming web UDP is not read)",
@@ -123,7 +140,8 @@ def main() -> int:
 
             packet = message.get_msgbuf()
             try:
-                qgc_socket.sendto(packet, qgc_address)
+                for destination in gcs_destinations:
+                    qgc_socket.sendto(packet, destination)
                 web_socket.sendto(packet, web_address)
             except OSError as exc:
                 if not stop.is_set():
@@ -158,7 +176,7 @@ def main() -> int:
             if not packet:
                 continue
 
-            # Only QGC's learned return path reaches this socket. The web
+            # Only the learned GCS return path reaches this socket. The web
             # destination has no corresponding receive path by design.
             try:
                 master.write(packet)

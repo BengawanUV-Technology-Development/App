@@ -2,12 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import { apiGet } from "../services/api";
 
 const POLL_INTERVAL_MS = 1000;
-const STALE_AFTER_SECONDS = 5;
+const STALE_AFTER_SECONDS = 3;
 
 const initialHealth = {
   backend_online: false,
   connected: false,
-  status: "OFFLINE",
+  status: "DISCONNECTED",
   error: null,
   last_update: null,
   stale: true,
@@ -18,7 +18,7 @@ const initialHealth = {
 
 const initialTelemetry = {
   connected: false,
-  status: "OFFLINE",
+  status: "DISCONNECTED",
   lat: null,
   lng: null,
   alt: null,
@@ -59,6 +59,7 @@ function isStale(lastUpdate) {
 
 function deriveStatusText(health) {
   if (!health.backend_online) return "Backend telemetry belum dapat diakses";
+  if (health.status === "DISCONNECTED") return "MAVLink telemetry terputus";
   if (health.stale) return "Telemetry stale — menunggu heartbeat MAVLink";
   if (health.connected) return "MAVLink telemetry aktif melalui UDP 14551";
   return "Menunggu heartbeat MAVLink";
@@ -73,7 +74,11 @@ export function useTelemetry() {
   const applySnapshot = useCallback((healthData, telemetryData) => {
     const nextTelemetry = { ...initialTelemetry, ...telemetryData };
     const lastUpdate = nextTelemetry.last_update || healthData?.last_update || null;
-    const stale = isStale(lastUpdate) || !Boolean(healthData?.connected);
+    const backendStatus = healthData?.status || nextTelemetry.status || "DISCONNECTED";
+    const stale = backendStatus === "STALE"
+      || backendStatus === "DISCONNECTED"
+      || isStale(lastUpdate)
+      || !Boolean(healthData?.connected);
     const nextHealth = {
       ...initialHealth,
       ...healthData,
@@ -113,7 +118,7 @@ export function useTelemetry() {
         backend_online: false,
         connected: false,
         stale: true,
-        status: "OFFLINE",
+        status: "DISCONNECTED",
         error: message,
       }));
       setStatusText("Backend telemetry belum dapat diakses");

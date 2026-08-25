@@ -78,15 +78,24 @@ class JetsonRecordingClient:
             raise JetsonRecordingError("preview source must be digital or analog")
         return self._request("/preview/source", "POST", {"source": source})
 
-    def start(self, label: str, video_port: int, api_port: int) -> dict:
+    def start(
+        self,
+        label: str,
+        video_port: int,
+        api_port: int,
+        mission_id: str | None = None,
+    ) -> dict:
+        payload = {
+            "label": label,
+            "video_port": video_port,
+            "api_port": api_port,
+        }
+        if mission_id:
+            payload["mission_id"] = mission_id
         return self._request(
             "/recording/start",
             "POST",
-            {
-                "label": label,
-                "video_port": video_port,
-                "api_port": api_port,
-            },
+            payload,
         )
 
     def stop(self) -> dict:

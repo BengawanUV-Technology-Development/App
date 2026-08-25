@@ -57,7 +57,7 @@ class ReadonlyMavlinkTests(unittest.TestCase):
 
         state = self.state.get()
         self.assertTrue(state.connected)
-        self.assertEqual(state.status, "ACTIVE")
+        self.assertEqual(state.status, "CONNECTED")
         self.assertTrue(state.armed)
         self.assertAlmostEqual(state.lat, -71.2345678)
         self.assertAlmostEqual(state.lng, 110.1234567)
