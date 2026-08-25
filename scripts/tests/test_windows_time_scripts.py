@@ -17,6 +17,7 @@ class WindowsTimeScriptContractTests(unittest.TestCase):
             "UDP",
             "LocalPort 123",
             "reg.exe",
+            "[AllowEmptyString()]",
         ):
             self.assertIn(required, script)
 

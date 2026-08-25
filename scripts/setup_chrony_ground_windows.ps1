@@ -60,6 +60,7 @@ function Set-RegistryString {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$Name,
+        [AllowEmptyString()]
         [Parameter(Mandatory = $true)][string]$Value
     )
 
