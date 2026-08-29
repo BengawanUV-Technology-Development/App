@@ -46,8 +46,9 @@ Arducam
 ```
 
 Jetson memiliki camera capture, high-resolution evidence, frame metadata, dan
-nantinya YOLO detection. Ground memiliki telemetry, web backend, dan pada tahap
-berikutnya coordinate reconstruction.
+nantinya YOLO detection. Ground memiliki telemetry, web backend, dan post-flight
+coordinate reconstruction adapter pada batch R2; live coordinate reconstruction
+tetap bukan bagian runtime R0.
 
 R0 tidak mengganti transport video yang sudah ada dengan WebSocket, WebRTC,
 HLS, RTSP, atau transport besar lainnya.
@@ -109,18 +110,20 @@ untuk lookup metadata lengkap.
 Preview pipeline repository masih mengirim H.264/RTP dan Ground
 mempublikasikan JPEG terbaru tanpa identity/PTS. High-resolution recording
 agent remote menulis identity/PTS ke epoch-scoped `frames.jsonl`; validator
-lokal tersedia di `jetson/frame_metadata.py`. Artifact bench sudah tervalidasi,
-sedangkan flight acceptance dan visual detection masih pending.
+lokal tersedia di `jetson/frame_metadata.py`. Artifact bench sudah tervalidasi.
+Flight artifact acceptance dan inference offline pada footage nyata adalah
+pekerjaan R2; live detection bukan runtime R0.
 
 ## 4. Clock dan telemetry synchronization
 
-Ground Laptop adalah chrony server. Jetson adalah chrony client. Internet NTP
-tidak menjadi requirement operasi.
+Kontrak waktu operasi adalah **UTC Global**. Ground dan Jetson menggunakan waktu
+UTC dari system clock masing-masing; Jetson diasumsikan tetap hidup selama
+operasi penerbangan. Sinkronisasi khusus Ground–Jetson dengan chrony/NTP tidak
+menjadi dependency runtime maupun gate acceptance R2.
 
-Untuk Ground Windows tersedia profil kompatibilitas berbasis Windows Time
-(`W32Time`) yang melayani NTP ke Jetson. Profil ini mempertahankan kontrak clock
-Ground–Jetson, tetapi bukan `chronyd` native; macOS/Linux tetap menjadi pilihan
-untuk kepatuhan literal terhadap daemon chrony.
+Asumsi Jetson selalu hidup tidak dengan sendirinya membuktikan akurasi UTC.
+Artifact tetap wajib menyimpan timestamp UTC dan domain clock secara eksplisit
+agar korelasi dapat diaudit.
 
 Setiap telemetry Ground harus membedakan:
 
@@ -130,15 +133,15 @@ receive_timestamp
 ```
 
 `receive_timestamp` hanya untuk observability dan latency debugging. Timeline
-utama untuk korelasi adalah `source_timestamp` yang sudah dinormalisasi ke
-clock domain UTC yang sama dengan `capture_utc_ns`.
+utama untuk korelasi adalah `source_timestamp` yang valid pada clock domain UTC
+yang sama dengan `capture_utc_ns`.
 
 Jika MAVLink message hanya menyediakan `time_boot_ms`, `time_usec`, atau
 timestamp lain yang bukan UTC, sistem wajib membuat mapping/normalisasi terlebih
 dahulu. Nilai tersebut tidak boleh dibandingkan langsung dengan UTC
 nanoseconds.
 
-Target korelasi berikutnya:
+Target korelasi R2:
 
 ```text
 frame.capture_utc_ns
@@ -150,12 +153,9 @@ telemetry interpolation
 vehicle state pada waktu capture frame
 ```
 
-Helper konfigurasi chrony Ground–Jetson tersedia di
-[CHRONY_SETUP.md](./CHRONY_SETUP.md). Mapping source timestamp ke UTC dan
-interpolasi tetap merupakan fondasi untuk batch berikutnya, bukan bagian dari
-aktivasi time service itu sendiri. Profil Windows tersedia melalui
-`scripts/setup_chrony_ground_windows.ps1` dan
-`scripts/verify_windows_time_server.ps1`.
+Mapping source timestamp ke UTC dan interpolasi tetap merupakan fondasi R2.
+Helper chrony/NTP yang masih ada di `scripts/` bukan prosedur operasi aktif dan
+tidak boleh dijadikan prasyarat pengujian.
 
 ## 5. Audit implementasi saat ini
 
@@ -167,17 +167,18 @@ aktivasi time service itu sendiri. Profil Windows tersedia melalui
 | Camera source | CSI/Arducam dan EasyCAP analog dengan selector | Lebih luas dari single Arducam R0; keputusan scope perlu dikunci |
 | Recording control | React → Flask → authenticated Jetson agent | Ground mengirim `mission_id`; bench remote contract terverifikasi |
 | Ground mission storage | `missions/<mission_id>/telemetry.jsonl`, versioned mission-scoped JSONL | R1 implementation tersedia |
-| Frame metadata | Remote agent writes epoch-scoped `frames.jsonl`; local `jetson/frame_metadata.py` validates canonical fields | Bench verified; flight artifact and visual detection acceptance remain pending |
+| Frame metadata | Remote agent writes epoch-scoped `frames.jsonl`; local `jetson/frame_metadata.py` validates canonical fields | Bench verified; flight artifact and offline inference acceptance are the R2 work item |
 | Telemetry time | Per-sample source/receive nanosecond metadata | UTC mapping valid bila source mapping tersedia; invalid source time dipertahankan |
-| Clock sync | macOS/Linux: `chronyd`; Windows compatibility: `W32Time`; Jetson: `chrony`; setup/verifier tersedia di `scripts/` | Aktif pada Ground–Jetson macOS terhubung per 2026-08-25; profil Windows siap diuji; ulangi verifikasi sebelum setiap flight |
-| YOLO/reconstruction | Tidak ada pipeline aktif di runtime repository | Future batch |
+| Clock sync | UTC Global pada system clock Ground dan Jetson; `receive_timestamp` tetap dipisahkan dari source time | Tidak ada dependency chrony/NTP khusus; audit dilakukan dari field UTC dan source clock domain pada artifact |
+| YOLO/reconstruction | Runner offline `postflight/offline_yolo.py` dan adapter `postflight/coordinate_reconstruction.py` tersedia; live detector/estimator tidak aktif di runtime | R2 offline geometry tersedia; calibration, AGL, mounting convention, ground truth, dan real qualification masih pending |
+| Post-flight replay | `postflight/replay.py` memasangkan frame metadata dengan telemetry source-time; UI/3D replay belum aktif | Metadata/telemetry replay tersedia; pemeriksaan video fisik dilakukan bila file video diberikan |
 
 ## 6. Scope R0
 
 Jangan mengimplementasikan pada batch dokumentasi/fondasi ini:
 
 - YOLO atau detection pipeline;
-- coordinate reconstruction atau auto-geotagging;
+- live coordinate reconstruction atau auto-geotagging;
 - AI Agent, Telegram, atau Notion;
 - flight command, mission command, parameter write, atau command system baru;
 - MAVLink Anywhere, Internet/4G/5G fallback, atau link failover;
@@ -191,12 +192,18 @@ bukan dependency runtime R0.
 
 1. Verifikasi dengan hardware output simultan Mission Planner/QGC tanpa merusak
    jalur QGC dan receive-only Flask.
-2. Definisikan mapping source timestamp ke UTC dan ulangi verifikasi pada flight.
+2. Pastikan mapping source timestamp ke UTC konsisten dan dapat diaudit pada
+   artifact flight; tidak ada pre-flight chrony gate.
 3. Pisahkan telemetry interpolation dari telemetry receive-time observability.
 4. Putuskan apakah branch analog/EasyCAP tetap berada di luar atau di dalam
    baseline single-Arducam R0.
-5. Re-run the full short-flight acceptance on a scene containing a visible
-   detection target; current bench evidence is not a flight acceptance result.
+5. Lengkapi full inference offline R2 pada segmen footage nyata yang memiliki
+   target visual, lalu join detection terhadap telemetry pada capture yang sudah
+   lolos temporal synchronization. Capture radio telemetry terbaru sudah lulus
+   korelasi frame–telemetry dan positive detection sudah ditemukan pada footage
+   lain. Adapter coordinate reconstruction dan synthetic geometry test sudah
+   tersedia, tetapi belum ada pasangan mission same-time dengan AGL/calibration
+   yang tervalidasi. Manual detection/review sengaja tetap menjadi future work.
 
 ## 8. File audit utama
 
@@ -211,4 +218,5 @@ bukan dependency runtime R0.
 - `README.md`
 - `MAVLINK_SETUP.md`
 - `GEMINI.md`
-- `src-tauri/src-py/step.md`
+- `SHORT_FLIGHT_TEST.md`
+- `COORDINATE_ESTIMATOR_AUDIT.md`

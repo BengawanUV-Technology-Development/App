@@ -89,6 +89,27 @@ class _FakeJetson:
 
 
 class JetsonRecordingTests(unittest.TestCase):
+    def test_client_sends_explicit_gcs_host_with_recording_start(self):
+        client = JetsonRecordingClient(
+            "http://jetson:5101/",
+            "secret",
+            timeout=1,
+            gcs_host="100.87.201.110",
+        )
+        with patch(
+            "app.services.jetson_recording.urlopen",
+            return_value=_Response({"ok": True, "recording": True}),
+        ) as mocked:
+            client.start(
+                label="web-csi",
+                video_port=5000,
+                api_port=5001,
+                mission_id="mission-11111111-1111-4111-8111-111111111111",
+            )
+
+        request = mocked.call_args.args[0]
+        self.assertEqual(json.loads(request.data)["gcs_host"], "100.87.201.110")
+
     def test_client_sends_bearer_token_and_json(self):
         client = JetsonRecordingClient("http://jetson:5101/", "secret", timeout=1)
         with patch(

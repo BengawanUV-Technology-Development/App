@@ -21,8 +21,21 @@ Ground backend now creates a per-recording `mission_id`, writes a versioned
 mission telemetry JSONL, and includes that ID in the Jetson start request. The
 remote recording agent has been bench-verified for mission identity,
 high-resolution video, frame metadata, source PTS, and sidecar queue health.
-Flight acceptance still requires chrony verification, a visible target, and
-offline detection synchronization.
+R2 acceptance uses UTC Global fields and offline inference over real footage
+from the Jetson Nopal SSD. Chrony/NTP khusus Ground–Jetson is not required.
+Manual detection/review is deliberately future work.
+
+Offline coordinate reconstruction MVP is now implemented in
+`postflight/coordinate_reconstruction.py` after auditing the
+`Coordinate-Estimator` reference. It is not a live service and does not claim
+physical accuracy until same-time telemetry, AGL, camera calibration, mounting
+extrinsics, attitude convention, and ground truth are available.
+
+Status pengujian terbaru: capture Arducam baru dengan radio telemetry Ground
+memiliki 956/956 frame yang berhasil dikorelasikan ke telemetry source-time
+dengan state lengkap. Smoke inference custom pada 10 frame juga lulus tanpa
+error, tetapi belum menghasilkan bbox pada segmen tersebut; detection-to-
+telemetry acceptance menunggu footage yang memuat target visual.
 
 ## R0 rules
 
@@ -34,15 +47,15 @@ validity, and explicit clock-domain metadata. Do not claim the frame contract
 is flight-validated until the flight artifact passes the validator and the
 post-flight synchronization acceptance gates.
 
-Ground/Jetson chrony deployment, YOLO,
-coordinate reconstruction,
+Live YOLO/detection and live coordinate reconstruction in the production runtime,
 AI Agent, flight commands from the website, MAVLink Anywhere, Internet
 fallback, and new WebSocket transports are future work unless a later batch
 explicitly changes the scope.
 
-The legacy command-capable service files and the historical checklist in
-`src-tauri/src-py/step.md` are reference material only. The production entry
-point is the receive-only backend in `src-tauri/src-py/main.py`.
+The legacy command-capable service files are reference material only. The old
+checklist in `src-tauri/src-py/step.md` has been retired; its progress history
+is consolidated in `README.md`. The production entry point is the receive-only
+backend in `src-tauri/src-py/main.py`.
 
 ## Development and verification
 
@@ -50,6 +63,11 @@ point is the receive-only backend in `src-tauri/src-py/main.py`.
 npm run build
 PYTHONPATH=src-tauri/src-py python3 -m unittest discover \
   -s src-tauri/src-py/tests -p 'test_*.py'
+PYTHONPATH=. python3 -m unittest discover -s jetson/tests -p 'test_*.py'
+PYTHONPATH=. python3 -m unittest discover -s postflight/tests -p 'test_*.py'
 ```
 
-Do not perform broad refactors in an R0 documentation/foundation batch.
+Offline inference R2 is run on the Jetson using the footage and model path
+recorded in `SHORT_FLIGHT_TEST.md`; do not treat the old live-detector artifact
+as a successful inference result. Do not perform broad refactors in an R0
+documentation/foundation batch.

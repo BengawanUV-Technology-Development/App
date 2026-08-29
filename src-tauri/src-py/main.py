@@ -17,6 +17,7 @@ from app.services.mission_telemetry import MissionTelemetryRecorder
 from app.config import (
     API_HOST,
     API_PORT,
+    JETSON_GCS_HOST,
     JETSON_RECORDING_AGENT_TIMEOUT_SECONDS,
     JETSON_RECORDING_AGENT_TOKEN,
     JETSON_RECORDING_AGENT_URL,
@@ -43,6 +44,7 @@ jetson_recording_client = JetsonRecordingClient(
     base_url=JETSON_RECORDING_AGENT_URL,
     token=JETSON_RECORDING_AGENT_TOKEN,
     timeout=JETSON_RECORDING_AGENT_TIMEOUT_SECONDS,
+    gcs_host=JETSON_GCS_HOST,
 )
 
 # Deliberately do not initialize CommandService/MissionService.  Their route

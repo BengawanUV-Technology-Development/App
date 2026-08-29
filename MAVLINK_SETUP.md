@@ -2,7 +2,7 @@
 
 Untuk baseline redevelopment, lihat [R0_ARCHITECTURE_BASELINE.md](./R0_ARCHITECTURE_BASELINE.md).
 Panduan ini menjelaskan setup runtime yang tersedia saat ini; ia tidak berarti
-seluruh mission, frame metadata, chrony, atau hardware verification Mission
+seluruh mission, frame metadata, UTC Global, atau hardware verification Mission
 Planner/QGroundControl R0 sudah selesai.
 
 This repository uses a small `pymavlink` router instead of exposing the
@@ -159,8 +159,10 @@ curl -i --max-time 2 http://127.0.0.1:5001/api/v1/camera/preview
 If GStreamer is unavailable, telemetry remains available and the camera status
 reports the missing video dependency instead of affecting MAVLink reception.
 
-MAVLink Anywhere, Internet fallback, YOLO, coordinate reconstruction, and a new
-WebSocket video/detection transport are outside this setup and outside R0.
+MAVLink Anywhere, Internet fallback, live YOLO, live coordinate reconstruction,
+and a new WebSocket video/detection transport are outside this setup and outside
+R0. Offline coordinate reconstruction is a post-flight tool documented in
+`COORDINATE_ESTIMATOR_AUDIT.md` and does not change the receive-only boundary.
 
 ## Troubleshooting
 

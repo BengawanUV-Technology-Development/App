@@ -7,6 +7,7 @@ import DataQuick from "../components/telemetry/DataQuick";
 import EkfVibeBar from "../components/telemetry/EkfVibeBar";
 import EkfVibeModal from "../components/telemetry/EkfVibeModal";
 import CameraPreview from "../components/recording/CameraPreview";
+import { COORDINATE_SMOKE_TEST } from "../data/coordinateSmokeTest.js";
 
 const OperationalMap = lazy(() => import("../components/map/OperationalMap"));
 
@@ -22,6 +23,11 @@ function formatCoordinate(value, digits = 5) {
 
 function formatTime(value) {
   return value ? new Date(Number(value) * 1000).toLocaleTimeString() : "--:--:--";
+}
+
+function coordinateSmokeTestEnabled() {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("coordinate_smoke_test") === "1";
 }
 
 function DataRow({ label, value, emphasis = false }) {
@@ -53,6 +59,8 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
   const latestMessageTone = String(telemetry.status_text_type || "").toLowerCase();
   const messageIsWarning = /warn|critical|error|alert|emergency/.test(latestMessageTone)
     || Boolean(health.error);
+  const showCoordinateSmokeTest = coordinateSmokeTestEnabled();
+  const coordinateResult = showCoordinateSmokeTest ? COORDINATE_SMOKE_TEST : null;
 
   return (
     <section className="operations-view">
@@ -142,7 +150,12 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
             <PanelHeading
               eyebrow="Live position"
               title="Aircraft map"
-              trailing={<Badge tone="info">3D AIRCRAFT</Badge>}
+              trailing={(
+                <>
+                  <Badge tone="info">3D AIRCRAFT</Badge>
+                  {coordinateResult ? <Badge tone="warning">TARGET DOT · SMOKE</Badge> : null}
+                </>
+              )}
             />
             <span className={hasGps ? "map-lock-state is-ready" : "map-lock-state"}>
               {hasGps ? "GPS position valid" : "Waiting for GPS"}
@@ -158,6 +171,8 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
                 rollDeg={telemetry.roll_deg}
                 pitchDeg={telemetry.pitch_deg}
                 mission={null}
+                coordinate={coordinateResult}
+                focusCoordinate={showCoordinateSmokeTest}
               />
             </Suspense>
           </div>
@@ -175,6 +190,11 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
               <strong>Receive-only</strong>
             </div>
           </div>
+          {coordinateResult ? (
+            <div className="coordinate-smoke-note" role="status">
+              Smoke fixture: pedestrian F1919 · synthetic clock alignment · assumed AGL 10 m · NON-QUALIFICATION
+            </div>
+          ) : null}
         </section>
 
         <aside className="data-column">

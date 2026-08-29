@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { coordinateTargetCenter, coordinateTargetData } from "./coordinateData.js";
 
 const DEFAULT_CENTER = [110.8656314, -7.5532394];
 const MAX_TRACK_POINTS = 1000;
@@ -294,11 +295,23 @@ function createAircraftLayer(stateRef, trackRef) {
   };
 }
 
-function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchDeg = 0, mission = null }) {
+function OperationalMap({
+  lat,
+  lng,
+  alt = 0,
+  headingDeg = 0,
+  rollDeg = 0,
+  pitchDeg = 0,
+  mission = null,
+  coordinate = null,
+  focusCoordinate = false,
+}) {
   const mountRef = useRef(null);
   const mapRef = useRef(null);
   const trackRef = useRef([]);
   const missionRef = useRef(mission);
+  const coordinateRef = useRef(coordinate);
+  const focusCoordinateRef = useRef(focusCoordinate);
   const followRef = useRef(false);
   const stateRef = useRef({ lat, lng, alt, headingDeg, rollDeg, pitchDeg });
   const [isFollowing, setIsFollowing] = useState(false);
@@ -330,8 +343,22 @@ function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchD
     map.getSource("mission-current-point")?.setData(currentMissionPointData(mission));
   }, [mission]);
 
-  // The read-only backend exposes aircraft telemetry only. Detection
-  // snapshots are deliberately not polled from this ground-station view.
+  useEffect(() => {
+    coordinateRef.current = coordinate;
+    focusCoordinateRef.current = focusCoordinate;
+    const map = mapRef.current;
+    map?.getSource("coordinate-target")?.setData(coordinateTargetData(coordinate));
+
+    if (focusCoordinate) {
+      const center = coordinateTargetCenter(coordinate);
+      if (center) {
+        map?.easeTo({ center, duration: 450, essential: true });
+      }
+    }
+  }, [coordinate, focusCoordinate]);
+
+  // The normal read-only backend exposes aircraft telemetry only. Coordinate
+  // records are supplied explicitly by offline tools or a smoke fixture.
 
   useEffect(() => {
     if (!mountRef.current || mapRef.current) return undefined;
@@ -461,10 +488,93 @@ function OperationalMap({ lat, lng, alt = 0, headingDeg = 0, rollDeg = 0, pitchD
           "text-halo-width": 1.5,
         },
       });
+      map.addSource("coordinate-target", {
+        type: "geojson",
+        data: coordinateTargetData(coordinateRef.current),
+      });
+      map.addLayer({
+        id: "coordinate-target-halo",
+        type: "circle",
+        source: "coordinate-target",
+        paint: {
+          "circle-radius": 18,
+          "circle-color": [
+            "match",
+            ["get", "status"],
+            "CALIBRATED_ESTIMATE",
+            "rgba(16, 185, 129, 0.22)",
+            "rgba(245, 158, 11, 0.24)",
+          ],
+          "circle-stroke-color": [
+            "match",
+            ["get", "status"],
+            "CALIBRATED_ESTIMATE",
+            "#10b981",
+            "#f59e0b",
+          ],
+          "circle-stroke-width": 2,
+        },
+      });
+      map.addLayer({
+        id: "coordinate-target-core",
+        type: "circle",
+        source: "coordinate-target",
+        paint: {
+          "circle-radius": 7,
+          "circle-color": [
+            "match",
+            ["get", "status"],
+            "CALIBRATED_ESTIMATE",
+            "#10b981",
+            "#f59e0b",
+          ],
+          "circle-stroke-color": "#fff7ed",
+          "circle-stroke-width": 2,
+        },
+      });
+      map.addLayer({
+        id: "coordinate-target-label",
+        type: "symbol",
+        source: "coordinate-target",
+        layout: {
+          "text-field": ["get", "label"],
+          "text-size": 11,
+          "text-font": ["Open Sans Bold"],
+          "text-offset": [0, -2.2],
+          "text-anchor": "bottom",
+          "text-allow-overlap": true,
+        },
+        paint: {
+          "text-color": "#fff7ed",
+          "text-halo-color": "#451a03",
+          "text-halo-width": 1.5,
+        },
+      });
+      map.addLayer({
+        id: "coordinate-target-detail",
+        type: "symbol",
+        source: "coordinate-target",
+        layout: {
+          "text-field": ["get", "detail"],
+          "text-size": 10,
+          "text-font": ["Open Sans Regular"],
+          "text-offset": [0, 2],
+          "text-anchor": "top",
+          "text-allow-overlap": true,
+        },
+        paint: {
+          "text-color": "#fed7aa",
+          "text-halo-color": "#0f172a",
+          "text-halo-width": 1,
+        },
+      });
       map.addLayer(createAircraftLayer(stateRef, trackRef));
 
       const state = stateRef.current;
-      if (hasValidPosition(state.lat, state.lng)) {
+      const targetCenter = coordinateTargetCenter(coordinateRef.current);
+      if (focusCoordinateRef.current && targetCenter) {
+        map.jumpTo({ center: targetCenter });
+      } else if (hasValidPosition(state.lat, state.lng)) {
         const coordinate = { lng: Number(state.lng), lat: Number(state.lat), alt: Math.max(0, Number(state.alt || 0)) };
         trackRef.current = [coordinate];
         map.jumpTo({

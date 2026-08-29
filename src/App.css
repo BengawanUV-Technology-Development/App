@@ -4239,6 +4239,16 @@ button:hover:not(:disabled) {
   white-space: nowrap;
 }
 
+.coordinate-smoke-note {
+  border-top: 1px solid rgba(231, 184, 106, 0.28);
+  background: rgba(120, 53, 15, 0.24);
+  padding: 8px 16px;
+  color: #f7d9a0;
+  font-family: var(--font-mono);
+  font-size: 0.61rem;
+  letter-spacing: 0.02em;
+}
+
 .map-loading-state {
   display: grid;
   height: 100%;

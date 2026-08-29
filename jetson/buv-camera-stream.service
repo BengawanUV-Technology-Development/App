@@ -9,7 +9,7 @@ Type=simple
 User=bengawan
 Group=video
 WorkingDirectory=/home/bengawan/Documents/App-v03
-Environment=JETSON_STREAM_TARGET_HOST=100.114.81.87
+Environment=JETSON_STREAM_TARGET_HOST=100.87.201.110
 Environment=JETSON_VIDEO_PORT=5000
 Environment=JETSON_VIDEO_PAYLOAD_TYPE=96
 Environment=JETSON_NETWORK_WIDTH=960

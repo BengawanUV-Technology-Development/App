@@ -12,10 +12,17 @@ class JetsonRecordingError(RuntimeError):
 
 
 class JetsonRecordingClient:
-    def __init__(self, base_url: str, token: str, timeout: float = 8.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        timeout: float = 8.0,
+        gcs_host: str = "",
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token.strip()
         self.timeout = timeout
+        self.gcs_host = gcs_host.strip()
 
     @property
     def configured(self) -> bool:
@@ -84,6 +91,7 @@ class JetsonRecordingClient:
         video_port: int,
         api_port: int,
         mission_id: str | None = None,
+        gcs_host: str | None = None,
     ) -> dict:
         payload = {
             "label": label,
@@ -92,6 +100,9 @@ class JetsonRecordingClient:
         }
         if mission_id:
             payload["mission_id"] = mission_id
+        target_host = (gcs_host or self.gcs_host).strip()
+        if target_host:
+            payload["gcs_host"] = target_host
         return self._request(
             "/recording/start",
             "POST",

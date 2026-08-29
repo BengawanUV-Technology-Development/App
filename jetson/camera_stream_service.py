@@ -26,7 +26,7 @@ def env_int(name: str, default: int) -> int:
 
 class CameraStreamService:
     def __init__(self) -> None:
-        self.target_host = os.getenv("JETSON_STREAM_TARGET_HOST", "100.114.81.87")
+        self.target_host = os.getenv("JETSON_STREAM_TARGET_HOST", "100.87.201.110")
         self.target_port = env_int("JETSON_VIDEO_PORT", 5000)
         self.payload_type = env_int("JETSON_VIDEO_PAYLOAD_TYPE", 96)
         self.network_width = env_int("JETSON_NETWORK_WIDTH", 960)

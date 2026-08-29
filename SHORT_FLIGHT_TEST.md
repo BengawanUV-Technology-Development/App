@@ -1,7 +1,7 @@
-# Short Flight Test / Post-Flight Synchronization
+# R2 Offline Inference / Post-Flight Synchronization
 
-Dokumen ini adalah prosedur sementara sebelum R2. Fokusnya adalah membuktikan
-rantai temporal berikut, bukan coordinate reconstruction:
+Dokumen ini adalah prosedur pengujian R2. Fokusnya adalah membuktikan rantai
+temporal dan inference offline berikut, bukan coordinate reconstruction:
 
 ```text
 video.mp4 + frames.jsonl + Ground telemetry.jsonl
@@ -10,6 +10,10 @@ video.mp4 + frames.jsonl + Ground telemetry.jsonl
     → frame timestamp
     → source-time telemetry interpolation
 ```
+
+Kontrak waktu operasi adalah UTC Global. Chrony/NTP khusus Ground–Jetson tidak
+lagi menjadi dependency atau acceptance gate. Jetson diasumsikan tetap hidup
+selama penerbangan; timestamp UTC pada artifact tetap wajib dapat diaudit.
 
 ## Artefak mission
 
@@ -89,6 +93,12 @@ Validator menolak kondisi berikut:
 - `capture_utc_ns`, `capture_monotonic_ns`, atau `source_pts_ns` hilang/mundur;
 - telemetry tidak memiliki `source_time_valid=true`.
 
+Untuk korelasi R2, sample telemetry yang dipakai juga harus memiliki
+`source_clock_domain` yang secara eksplisit menyatakan UTC epoch atau mapping
+ke UTC (misalnya `utc_epoch_usec` atau `fc_*_mapped_to_utc`) dan
+`source_timestamp` pada domain UTC yang sama dengan `capture_utc_ns`.
+`receive_timestamp` tidak boleh menjadi fallback.
+
 ## Offline YOLO
 
 Perintah ini tidak dijalankan oleh live recording service:
@@ -133,55 +143,130 @@ pitch
 yaw
 ```
 
-Coordinate reconstruction dari bbox tetap berada di luar scope.
+Coordinate reconstruction bukan bagian acceptance temporal R2. Adapter offline
+MVP dan audit reference tersedia di
+[`COORDINATE_ESTIMATOR_AUDIT.md`](./COORDINATE_ESTIMATOR_AUDIT.md); ia hanya
+boleh dijalankan setelah detection memiliki real
+`telemetry_sync_status=synchronized`. Synthetic clock alignment ditolak.
 
-## Acceptance penuh
+## Replay frame dan telemetry secara receive-only
 
-Short flight baru dianggap lulus penuh bila semua gate berikut terpenuhi:
-
-1. time service Ground lulus verifier dan `chronyc tracking`/`chronyc sources -v`
-   di Jetson menunjukkan source yang synchronized;
-2. camera frame terlihat jelas dan target yang memang ada di scene terlihat;
-3. validator artifact lulus tanpa missing PTS atau dropped sample;
-4. offline YOLO memproses semua frame dan menulis minimal satu detection;
-5. synchronization menulis minimal satu record `telemetry_sync_status=synchronized`;
-6. detection tersebut diperiksa manual terhadap frame video yang sama.
-
-Video yang blur, tidak memiliki target, atau menghasilkan nol detection hanya
-merupakan capture/integration test; itu bukan acceptance penuh walaupun file
-dan timestamp valid.
-
-## Clock pre-flight
-
-Panduan aktivasi otomatis Ground–Jetson tersedia di
-[CHRONY_SETUP.md](./CHRONY_SETUP.md).
-
-Verifikasi di Ground dan Jetson sebelum `Start Record`.
-
-Untuk macOS/Linux Ground:
+Untuk memutar ulang timeline frame dan telemetry pada kecepatan capture asli,
+gunakan runner offline berikut:
 
 ```bash
-chronyc tracking
-chronyc sources -v
+PYTHONPATH=. python3 -m postflight.replay \
+  /path/to/<mission_id>/epochs/<capture_epoch>/frames.jsonl \
+  /path/to/ground/missions/<mission_id>/telemetry.jsonl \
+  /path/to/<mission_id>/replay.jsonl \
+  --video /path/to/<mission_id>/epochs/<capture_epoch>/video.mp4 \
+  --speed 1.0
 ```
 
-Repository helper (read-only; di macOS Homebrew gunakan path `chronyc` eksplisit):
+`speed=1.0` mengikuti interval `capture_utc_ns` secara real-time. Runner
+memakai interpolator source-time existing, memeriksa state lengkap pada setiap
+frame, dan bila `--video` diberikan memastikan video memiliki tepat satu frame
+yang dapat dibaca untuk setiap record metadata serta tidak memiliki frame ekor.
+Gunakan `--no-sleep` untuk validasi cepat/CI. Tanpa `--video`, runner tetap
+memvalidasi pasangan metadata–telemetry tanpa memindahkan file video besar dari
+Jetson.
+
+Replay ini tidak membuka MAVLink, tidak publish UDP, tidak mengirim command ke
+Pixhawk, dan tidak mengubah evidence asli. Output `replay_frame` adalah artifact
+diagnostik untuk post-flight; ini belum merupakan UI/3D replay interaktif.
+
+Pada 2026-08-29, metadata-only replay mission radio terbaru berhasil
+memproses 956/956 frame dengan 956/956 state lengkap, memakai 423 sample
+telemetry `source_time_valid=true`, dan mengikuti durasi capture 39,75 detik.
+Pembacaan video fisik secara langsung belum diulang pada run tersebut karena
+koneksi ke Jetson sedang timeout; hasil sebelumnya tetap mencatat video mission
+tersebut terbaca OpenCV sebagai tepat 956 frame.
+
+## Evidence R2 saat ini
+
+Footage target yang dipilih berada di SSD Nopal Jetson pada epoch:
+
+```text
+/media/bengawan/nopal-ssd1/flight-recordings/mission-6f1ff7d6-c99d-4fe2-80bc-3544180868a9/epochs/0001/
+```
+
+Model yang digunakan untuk pengujian ini adalah checkpoint
+`ghostv3_dwconv-seed0/weights/best.pt` dari hasil training Downloads
+(SHA-256 `7c3c2dd5ecb0cc440f4ae9b7add6a9493c1f6bbc9b6924f7d35a6e250ad7727f`).
+Checkpoint custom ini membutuhkan `modules_ghost.py` dan `modules_sy.py` dari
+runtime training; `best.pt` saja belum cukup.
+`detections.jsonl` bawaan epoch tersebut berstatus detector `FAILED` karena
+Ultralytics belum tersedia pada runtime recorder, sehingga file itu bukan
+evidence inference R2. Sidecar telemetry epoch tersebut berstatus
+`SOURCE_OFFLINE`, jadi synchronization juga belum lulus.
+
+Smoke test yang sudah dijalankan pada 2026-08-28 memakai checkpoint custom yang
+sama dan runner `postflight.offline_yolo`:
+
+- remux staging dapat dibuka OpenCV dan terbaca 34.439 frame;
+- sampel footage nyata 10 frame berhasil diproses seluruhnya;
+- output `detections-ghostv3-sample10.jsonl` menulis 1 detection (`frame_id=4`,
+  `pedestrian`, confidence sekitar 0,5733);
+- runtime Jetson yang tersedia CPU-only (`torch.cuda.is_available()=False`),
+  sehingga full 34 ribu frame belum dijalankan.
+
+Full acceptance masih tertahan: `frames.jsonl` dan `telemetry.jsonl` memiliki
+blok NUL mulai baris 34342, video memiliki 34.439 frame sedangkan metadata
+valid hanya sampai `frame_id=34340`, dan telemetry tidak menyediakan
+`source_time_valid=true`. Remux dan sampel dibuat di
+`/home/bengawan/r2-inference-staging/`; footage asli SSD tetap tidak diubah.
+
+### Capture radio telemetry terbaru
+
+Pada 2026-08-28 dilakukan capture baru dengan mission ID
+`mission-27bd4805-50f3-4504-8046-4f297e50833f` menggunakan Arducam CSI dan
+radio telemetry Ground secara receive-only. Hasil validasinya:
+
+- video final terbaca tepat 956 frame oleh OpenCV dan metadata valid memiliki
+  `frame_id=0..955`;
+- ground telemetry berisi 2.265 sample, dengan 423 sample
+  `source_time_valid=true` dan mapping `fc_boot_ms_mapped_to_utc`;
+- 956/956 frame memiliki bracket telemetry dan state lengkap untuk interpolasi
+  linear;
+- tidak ada telemetry sample yang drop.
+
+Ini membuktikan temporal synchronization footage → telemetry pada capture baru.
+Inference custom 10 frame dari mission yang sama juga selesai 10/10 tanpa error,
+namun menghasilkan 0 detection; detection → telemetry belum dapat menghasilkan
+output karena tidak ada bbox yang dijoin. Untuk acceptance berikutnya, gunakan
+segmen yang benar-benar memuat target visual. Manual detection/review tetap
+future work dan bukan gate.
+
+## Acceptance R2
+
+Pengujian inference offline dianggap lulus bila gate berikut terpenuhi:
+
+1. footage berasal dari video nyata di SSD Nopal Jetson dan pasangan
+   `frames.jsonl` tersedia;
+2. validator artifact lulus tanpa missing PTS, duplicate frame ID, atau frame
+   count mismatch;
+3. offline YOLO memakai model yang tercatat, memproses seluruh frame yang
+   tersedia, dan menulis detection bila target terdeteksi;
+4. bila telemetry Ground dengan `source_time_valid=true` tersedia,
+   synchronization menulis record `telemetry_sync_status=synchronized` tanpa
+   memakai receive-time fallback;
+5. output inference dan ringkasan command disimpan sebagai evidence R2.
+
+Video yang blur, tidak memiliki target, atau menghasilkan nol detection dicatat
+sebagai hasil capture/integration test, bukan detection acceptance. Manual
+detection/review sengaja tidak menjadi gate R2 dan tetap merupakan future work.
+
+## UTC Global pre-flight dan evidence
+
+Tidak ada langkah instalasi atau verifikasi chrony pada prosedur ini. Sebelum
+memulai recording/inference, catat waktu UTC host dan pastikan artifact menulis
+field UTC secara valid:
 
 ```bash
-python3 scripts/verify_chrony.py --role ground-server --chronyc-path /opt/homebrew/bin/chronyc
-python3 scripts/verify_chrony.py --role jetson-client
+date -u '+%Y-%m-%dT%H:%M:%SZ'
 ```
 
-Untuk Windows Ground:
-
-```powershell
-.\scripts\verify_windows_time_server.ps1 -JetsonIp "<JETSON_IP>"
-w32tm /query /source
-w32tm /query /status
-```
-
-Ground harus menjadi sumber waktu jaringan dan Jetson harus menjadi client.
-Pada Windows, `W32Time` adalah profil kompatibilitas karena Windows tidak
-menyediakan `chronyd` native. Jika time service belum aktif atau source Jetson
-belum synchronized, flight test temporal tidak boleh dianggap valid meskipun
-file video dapat diputar.
+Jika `source_timestamp` telemetry belum valid atau domain clock belum dapat
+dipetakan ke UTC, status synchronization harus dicatat
+**blocked/unsynchronized**; jangan mengganti source time dengan
+`receive_timestamp`.
