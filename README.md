@@ -334,7 +334,9 @@ live inference dan telemetry join dapat berjalan tanpa menghasilkan dot palsu.
 Ground harus memakai `VISION_INGEST_TOKEN` yang sama dengan
 `JETSON_INGEST_TOKEN` di Jetson. `JETSON_GCS_HOST` harus berisi IP Tailscale
 Ground yang dapat dijangkau Jetson; pada laptop Windows milik teman, jangan
-menyalin IP contoh laptop lama.
+menyalin IP contoh laptop lama. Backend juga harus bind ke interface yang dapat
+dijangkau Jetson, misalnya `API_HOST=0.0.0.0` dengan `API_PORT=5001`, dan
+firewall Windows harus mengizinkan koneksi TCP dari interface Tailscale.
 
 ### Coordinate reconstruction MVP
 

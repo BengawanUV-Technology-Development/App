@@ -182,6 +182,9 @@ Sebelum membuka/menjalankan recording, konfigurasi backend Ground secara lokal
 ```text
 JETSON_RECORDING_AGENT_URL=http://100.124.21.25:5101
 JETSON_RECORDING_AGENT_TOKEN=<token-control-agent-jetson>
+# Flask must listen beyond loopback for Jetson callbacks.
+API_HOST=0.0.0.0
+API_PORT=5001
 JETSON_GCS_HOST=<IP-Tailscale-laptop-Ground>
 VISION_INGEST_TOKEN=<nilai-yang-sama-dengan-JETSON_INGEST_TOKEN>
 VISION_COORDINATE_ENABLED=false
@@ -192,6 +195,9 @@ Tailscale laptop tersebut. Jangan memakai IP laptop developer atau alamat
 loopback, karena Jetson harus dapat melakukan callback ke Ground. Token
 `JETSON_RECORDING_AGENT_TOKEN` mengontrol start/stop; token
 `VISION_INGEST_TOKEN` mengautentikasi event detection Jetson → Ground.
+Izinkan inbound TCP `5001` dari interface/Tailscale network pada Windows
+Firewall. Jika backend tetap bind ke `127.0.0.1`, video preview lokal mungkin
+tetap berjalan tetapi callback detection Jetson akan gagal.
 
 Urutan pengujian:
 
