@@ -15,6 +15,7 @@ __pycache__/
 .venv/
 venv/
 env/
+.env
 src-tauri/src-py/runtime/logs/
 src-tauri/src-py/.camera-agent-token.env
 
