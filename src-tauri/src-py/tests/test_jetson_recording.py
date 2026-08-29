@@ -57,6 +57,7 @@ class _FakeJetson:
         self.recording = False
         self.source = "digital"
         self.mission_id = None
+        self.stop_calls = 0
 
     def status(self):
         return {
@@ -84,8 +85,24 @@ class _FakeJetson:
         }
 
     def stop(self):
+        self.stop_calls += 1
         self.recording = False
         return self.status()
+
+
+class _FailingPreviewJetson(_FakeJetson):
+    def set_preview_source(self, source):
+        from app.services.jetson_recording import JetsonRecordingError
+
+        raise JetsonRecordingError(f"cannot switch to {source}")
+
+
+class _FailingStopJetson(_FakeJetson):
+    def stop(self):
+        self.stop_calls += 1
+        from app.services.jetson_recording import JetsonRecordingError
+
+        raise JetsonRecordingError("remote stop failed")
 
 
 class _FakeVision:
@@ -232,3 +249,32 @@ class JetsonRecordingTests(unittest.TestCase):
         self.assertEqual(len(vision.started), 1)
         self.assertEqual(vision.started[0][0], start.get_json()["mission_id"])
         self.assertEqual(vision.stopped, 1)
+
+    def test_start_failure_after_remote_start_rolls_back_remote_recording(self):
+        camera = _FakeCamera()
+        jetson = _FailingPreviewJetson()
+        init_recording_routes(camera, jetson)
+        test_app = Flask(__name__)
+        test_app.register_blueprint(recording_bp)
+
+        with test_app.test_client() as client:
+            response = client.post("/api/v1/recordings/start", json={"source": "analog"})
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(jetson.stop_calls, 1)
+        self.assertFalse(camera.running)
+
+    def test_stop_failure_still_closes_local_camera(self):
+        camera = _FakeCamera()
+        jetson = _FailingStopJetson()
+        init_recording_routes(camera, jetson)
+        test_app = Flask(__name__)
+        test_app.register_blueprint(recording_bp)
+
+        with test_app.test_client() as client:
+            start = client.post("/api/v1/recordings/start", json={"source": "csi"})
+            response = client.post("/api/v1/recordings/stop")
+
+        self.assertEqual(start.status_code, 202)
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(camera.running)

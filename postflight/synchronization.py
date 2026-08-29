@@ -20,6 +20,7 @@ _NUMERIC_FIELDS = (
     "longitude",
     "relative_altitude",
     "absolute_altitude",
+    "altitude_agl_m",
     "roll_deg",
     "pitch_deg",
     "yaw_deg",

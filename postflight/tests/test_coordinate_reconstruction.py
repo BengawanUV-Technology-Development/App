@@ -59,6 +59,7 @@ def synchronized_detection(**overrides):
         "latitude": 0.0,
         "longitude": 0.0,
         "altitude": 10.0,
+        "altitude_agl_m": 10.0,
         "roll": 0.0,
         "pitch": 0.0,
         "yaw": 0.0,
@@ -211,6 +212,15 @@ class CoordinateReconstructionTests(unittest.TestCase):
         self.assertEqual(result["error_code"], "INVALID_RECONSTRUCTION_INPUT")
         self.assertIn("AGL", result["reason"])
 
+    def test_generic_relative_altitude_is_not_accepted_as_agl(self):
+        adapter = CoordinateReconstructionAdapter(calibration())
+        result = adapter.reconstruct(
+            synchronized_detection(altitude_agl_m=None)
+        )
+        self.assertEqual(result["status"], NOT_AVAILABLE)
+        self.assertEqual(result["error_code"], "INVALID_RECONSTRUCTION_INPUT")
+        self.assertIn("altitude_agl_m", result["reason"])
+
     def test_synthetic_clock_alignment_is_rejected(self):
         adapter = CoordinateReconstructionAdapter(calibration())
         result = adapter.reconstruct(
@@ -279,6 +289,7 @@ class CoordinateReconstructionTests(unittest.TestCase):
                             "latitude": latitude,
                             "longitude": longitude,
                             "relative_altitude": 10.0,
+                            "altitude_agl_m": 10.0,
                             "roll_deg": 0.0,
                             "pitch_deg": 0.0,
                             "yaw_deg": 0.0,

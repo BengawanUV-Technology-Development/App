@@ -11,3 +11,24 @@ export function extractLatestCoordinate(response) {
     ? detection.coordinate
     : null;
 }
+
+export function normalizeLatestVisionResponse(response) {
+  if (!response?.ok) {
+    return {
+      active: false,
+      mission_id: null,
+      detection: null,
+      coordinate: null,
+      latest_overlay: null,
+      error: response?.error || "Vision endpoint unavailable",
+    };
+  }
+  return {
+    active: response.data?.active === true,
+    mission_id: response.data?.mission_id || null,
+    detection: extractLatestDetection(response.data),
+    coordinate: extractLatestCoordinate(response.data),
+    latest_overlay: response.data?.latest_overlay || null,
+    error: null,
+  };
+}

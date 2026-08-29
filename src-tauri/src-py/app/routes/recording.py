@@ -105,6 +105,7 @@ def recording_start():
     camera_started = False
     mission_started = False
     vision_started = False
+    remote_started = False
     mission_id = None
     try:
         source = _source_from_request()
@@ -130,6 +131,7 @@ def recording_start():
                 api_port=API_PORT,
                 mission_id=mission_id,
             )
+            remote_started = True
         else:
             # Preserve compatibility with lightweight test doubles and older
             # Jetson clients when mission recording is not configured.
@@ -138,10 +140,16 @@ def recording_start():
                 video_port=camera.port,
                 api_port=API_PORT,
             )
+            remote_started = True
         if source == "analog":
             remote = _jetson().set_preview_source("analog")
         return jsonify(_combined(remote, source)), 202
     except (CameraStreamError, JetsonRecordingError, MissionTelemetryError, VisionIngestError) as exc:
+        if remote_started:
+            try:
+                _jetson().stop()
+            except JetsonRecordingError:
+                pass
         if camera_started:
             try:
                 _camera().stop()
@@ -170,10 +178,18 @@ def recording_stop():
     completed_vision = None
     try:
         remote = _jetson().stop()
-        camera = _camera()
-        camera.stop()
-    except (CameraStreamError, JetsonRecordingError) as exc:
+    except JetsonRecordingError as exc:
         failure = exc
+
+    # Stop local preview independently. A remote failure must not leave the
+    # Ground GStreamer receiver consuming resources indefinitely.
+    try:
+        _camera().stop()
+    except CameraStreamError as exc:
+        if failure is None:
+            failure = exc
+        else:
+            failure = RuntimeError(f"{failure}; local camera stop failed: {exc}")
 
     if _vision() is not None and _vision().active:
         completed_vision = _vision().stop()

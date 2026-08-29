@@ -10,6 +10,7 @@ import {
 import {
   extractLatestDetection,
   extractLatestCoordinate,
+  normalizeLatestVisionResponse,
 } from "../src/services/visionDetection.js";
 
 test("coordinate smoke fixture produces one map target point", () => {
@@ -71,4 +72,13 @@ test("live detection response exposes only its own coordinate result", () => {
     latitude: null,
     longitude: null,
   });
+});
+
+test("failed live detection poll clears stale target state", () => {
+  const state = normalizeLatestVisionResponse({ ok: false, error: "backend offline" });
+
+  assert.equal(state.active, false);
+  assert.equal(state.detection, null);
+  assert.equal(state.coordinate, null);
+  assert.equal(state.error, "backend offline");
 });

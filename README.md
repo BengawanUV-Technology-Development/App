@@ -189,14 +189,16 @@ cara verifikasi dan tidak boleh mengubah status implementasi di sini.
 
 ### Snapshot pengujian lokal
 
-Pada 2026-08-29, suite backend Python (51), Jetson (8), postflight (20), dan
-scripts (5) lulus; frontend map contract test (3) dan production build juga
+Pada 2026-08-29, suite backend Python (59), Jetson (8), postflight (21), dan
+scripts (5) lulus; frontend map contract test (4) dan production build juga
 lulus. Belum ada
 browser/E2E test atau hardware flight acceptance. `cargo test` berhasil
 melakukan compile test harness, tetapi crate saat ini tidak memiliki test case.
-Sebanyak 15 test postflight mencakup synthetic geometry/integration coordinate;
-2 test tambahan mencakup replay frame–telemetry; backend test tambahan mencakup
-live source-time timeline, authenticated ingestion, dan recording lifecycle.
+Sebanyak 18 test berada pada suite coordinate/replay (16 geometri/integrasi
+coordinate dan 2 replay frame–telemetry), ditambah 3 test synchronization untuk
+total 21 postflight test. Backend test mencakup live source-time timeline,
+late-telemetry resolution, authenticated ingestion, deduplication, dan
+recording lifecycle.
 
 Smoke test frontend untuk kontrak dot coordinate dijalankan dengan:
 
@@ -204,9 +206,10 @@ Smoke test frontend untuk kontrak dot coordinate dijalankan dengan:
 npm run test:map
 ```
 
-Hasilnya 3/3 test lulus: fixture menghasilkan satu point pada koordinat
+Hasilnya 4/4 test lulus: fixture menghasilkan satu point pada koordinat
 `[longitude, latitude]`, status `NOT_AVAILABLE` disembunyikan dari peta, dan
-response detection live hanya dipakai ketika backend menyatakan mission aktif.
+response detection live hanya dipakai ketika backend menyatakan mission aktif;
+poll yang gagal juga menghapus dot lama agar target stale tidak tertinggal.
 
 Replay receive-only terhadap mission sinkron
 `mission-27bd4805-50f3-4504-8046-4f297e50833f` juga lulus untuk 956 frame
@@ -330,6 +333,18 @@ dot jika coordinate result berstatus `ESTIMATED_UNCALIBRATED` atau
 `CALIBRATED_ESTIMATE` dengan koordinat valid. Karena calibration/AGL/mounting
 belum tersedia, konfigurasi default `VISION_COORDINATE_ENABLED=false`, sehingga
 live inference dan telemetry join dapat berjalan tanpa menghasilkan dot palsu.
+
+Jika detection tiba sebelum telemetry source-time yang membungkus
+`capture_utc_ns`, Ground mengembalikan `processing_status=pending_telemetry`
+dan menahannya di queue bounded. Sampel telemetry berikutnya akan memicu
+resolusi ulang; jika recording dihentikan lebih dulu, event tetap ditulis
+sebagai `finalized_unsynchronized` dengan coordinate `NOT_AVAILABLE`. Duplicate
+`detection_id` yang sama idempotent, sedangkan ID yang sama dengan payload
+berbeda ditolak.
+
+Endpoint `POST` selalu membutuhkan Bearer token. Endpoint `GET` dapat diakses
+tanpa token hanya dari loopback untuk UI lokal; akses non-loopback membutuhkan
+`VISION_READ_TOKEN` (atau fallback ke `VISION_INGEST_TOKEN`).
 
 Ground harus memakai `VISION_INGEST_TOKEN` yang sama dengan
 `JETSON_INGEST_TOKEN` di Jetson. `JETSON_GCS_HOST` harus berisi IP Tailscale

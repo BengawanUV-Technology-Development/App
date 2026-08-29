@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiGet } from "../services/api";
-import { extractLatestCoordinate, extractLatestDetection } from "../services/visionDetection.js";
+import { normalizeLatestVisionResponse } from "../services/visionDetection.js";
 
 const POLL_INTERVAL_MS = 750;
 
@@ -18,18 +18,7 @@ export function useVisionDetections() {
 
   const refresh = useCallback(async () => {
     const result = await apiGet("/api/v1/detection/latest");
-    if (!result.ok) {
-      setVision((previous) => ({ ...previous, error: result.error }));
-      return result;
-    }
-    const data = result.data || {};
-    setVision({
-      ...initialState,
-      ...data,
-      detection: extractLatestDetection(data),
-      coordinate: extractLatestCoordinate(data),
-      error: null,
-    });
+    setVision({ ...initialState, ...normalizeLatestVisionResponse(result) });
     return result;
   }, []);
 

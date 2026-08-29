@@ -173,6 +173,13 @@ validated (must be explicitly true to emit CALIBRATED_ESTIMATE)
 parameterisasi reference bila nilai optical memang diberikan oleh caller; ia
 tidak menganggap angka reference sebagai calibration Arducam.
 
+Untuk input live, field AGL yang diterima secara eksplisit adalah
+`payload.altitude_agl_m` (diteruskan oleh `LiveTelemetryTimeline`). Field
+`relative_altitude`, `absolute_altitude`, atau hasil fallback `altitude` tidak
+dianggap AGL. Saat ini receiver MAVLink belum menghasilkan
+`altitude_agl_m` yang tervalidasi; karena itu konfigurasi live tetap disabled
+dan tidak boleh diaktifkan hanya dengan mengisi `VISION_ALTITUDE_REFERENCE`.
+
 Status output:
 
 ```text
@@ -199,12 +206,12 @@ app postflight existing:          3 tests passed
 app Jetson existing:              8 tests passed
 ```
 
-Sesudah adapter dan live ingestion:
+Sesudah adapter, live ingestion, dan hardening callback:
 
 ```text
-postflight coordinate tests:     15 tests passed
-postflight full suite:           20 tests passed
-backend suite:                   51 tests passed
+coordinate/replay tests:         18 tests passed (2 replay)
+postflight full suite:           21 tests passed
+backend suite:                   59 tests passed
 Jetson suite:                     8 tests passed
 scripts suite:                    5 tests passed
 frontend production build:       passed
@@ -241,7 +248,7 @@ npm run test:map
 npm run build
 ```
 
-Hasil: 3/3 map contract tests lulus dan production build lulus. Fixture dapat
+Hasil: 4/4 map contract tests lulus dan production build lulus. Fixture dapat
 dilihat dengan `npm run dev` lalu membuka
 `http://localhost:5173/?coordinate_smoke_test=1`; peta akan fokus ke dot
 `TARGET · SMOKE` pada latitude `-7.5898935539`, longitude `110.8653516205`.

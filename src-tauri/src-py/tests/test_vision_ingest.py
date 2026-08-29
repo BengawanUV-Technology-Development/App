@@ -156,6 +156,62 @@ class VisionDetectionServiceTests(unittest.TestCase):
         self.assertIsNone(result["coordinate"]["latitude"])
         self.assertIsNone(result["coordinate"]["longitude"])
 
+    def test_telemetry_without_mission_id_is_rejected_from_active_timeline(self):
+        accepted = self.service.record_telemetry(
+            telemetry_sample(
+                2_500,
+                mission_id=None,
+                latitude=-6.0,
+                longitude=106.0,
+                relative_altitude=10.0,
+                roll_deg=0.0,
+                pitch_deg=0.0,
+                yaw_deg=0.0,
+            )
+        )
+
+        self.assertFalse(accepted)
+        self.assertEqual(self.service.status()["telemetry_timeline_samples"], 2)
+
+    def test_pending_detection_is_resolved_after_late_telemetry(self):
+        pending = self.service.ingest_event(valid_event(capture_utc_ns=2_500))
+
+        self.assertEqual(pending["processing_status"], "pending_telemetry")
+        self.assertEqual(self.service.status()["pending_detections"], 1)
+
+        self.service.record_telemetry(
+            telemetry_sample(
+                3_000,
+                latitude=-6.002,
+                longitude=106.002,
+                relative_altitude=14.0,
+                roll_deg=5.0,
+                pitch_deg=6.0,
+                yaw_deg=7.0,
+            )
+        )
+        self.service.flush_pending()
+
+        latest = self.service.latest()["detection"]
+        self.assertEqual(latest["detection_id"], "det-7")
+        self.assertEqual(latest["processing_status"], "resolved")
+        self.assertEqual(latest["telemetry_sync_status"], "synchronized")
+        self.assertEqual(self.service.status()["pending_detections"], 0)
+
+    def test_conflicting_duplicate_detection_id_is_rejected(self):
+        self.service.ingest_event(valid_event())
+
+        with self.assertRaisesRegex(VisionIngestError, "detection_id conflicts"):
+            self.service.ingest_event(
+                valid_event(bbox_normalized_xyxy=[0.1, 0.1, 0.2, 0.2])
+            )
+
+    def test_zero_area_bbox_is_rejected(self):
+        with self.assertRaisesRegex(VisionIngestError, "positive area"):
+            self.service.ingest_event(
+                valid_event(bbox_normalized_xyxy=[0.25, 0.25, 0.25, 0.75])
+            )
+
     def test_duplicate_detection_is_idempotent(self):
         first = self.service.ingest_event(valid_event())
         duplicate = self.service.ingest_event(valid_event())
@@ -183,6 +239,22 @@ class VisionDetectionServiceTests(unittest.TestCase):
         self.assertEqual(result["coordinate"]["status"], "NOT_AVAILABLE")
         self.assertEqual(result["coordinate"]["error_code"], "TELEMETRY_NOT_SYNCHRONIZED")
         self.assertIsNone(result["latitude"])
+
+    def test_stop_finalizes_pending_detection_without_dropping_it(self):
+        self.service.ingest_event(valid_event(capture_utc_ns=9_000))
+
+        stopped = self.service.stop()
+
+        self.assertEqual(stopped["accepted_detections"], 1)
+        artifact = self.mission_dir / "detections_with_telemetry.jsonl"
+        records = [
+            json.loads(line)
+            for line in artifact.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["processing_status"], "finalized_unsynchronized")
+        self.assertEqual(records[0]["telemetry_sync_status"], "unsynchronized")
 
 
 class VisionRouteTests(unittest.TestCase):
@@ -232,6 +304,30 @@ class VisionRouteTests(unittest.TestCase):
         self.assertEqual(accepted.status_code, 202)
         self.assertTrue(accepted.get_json()["accepted"])
         self.assertEqual(accepted.get_json()["detection"]["frame_id"], 7)
+
+    def test_remote_read_route_requires_bearer_token(self):
+        service = VisionDetectionService()
+        service.start(MISSION_ID)
+        init_vision_routes(service, ingest_token="secret", read_token="read-secret")
+
+        from flask import Flask
+
+        app = Flask(__name__)
+        app.register_blueprint(vision_bp)
+        with app.test_client() as client:
+            remote = client.get(
+                "/api/v1/detection/status",
+                environ_base={"REMOTE_ADDR": "100.64.0.8"},
+            )
+            authorized = client.get(
+                "/api/v1/detection/status",
+                environ_base={"REMOTE_ADDR": "100.64.0.8"},
+                headers={"Authorization": "Bearer read-secret"},
+            )
+        service.stop()
+
+        self.assertEqual(remote.status_code, 401)
+        self.assertEqual(authorized.status_code, 200)
 
 
 if __name__ == "__main__":

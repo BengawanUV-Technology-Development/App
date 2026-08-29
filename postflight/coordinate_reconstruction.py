@@ -475,15 +475,19 @@ class CoordinateReconstructionAdapter:
                     "flat-ground estimator requires AGL; AMSL/relative-home is not AGL"
                 )
 
+            # ``relative_altitude``/``altitude`` may be relative to home or
+            # AMSL-derived; neither is proof of terrain-relative AGL.  Only
+            # an explicitly named AGL field is safe for this flat-ground
+            # intersection.
             altitude = _first_number(
                 synchronized_detection,
                 telemetry,
                 "altitude_agl_m",
-                "altitude_m",
-                "altitude",
             )
             if altitude is None or altitude <= 0:
-                raise CoordinateReconstructionError("positive AGL altitude is missing")
+                raise CoordinateReconstructionError(
+                    "positive explicit altitude_agl_m is missing"
+                )
 
             attitude_frame = camera_attitude_frame or self.config.camera_attitude_frame
             if attitude_frame not in _ATTITUDE_FRAMES:

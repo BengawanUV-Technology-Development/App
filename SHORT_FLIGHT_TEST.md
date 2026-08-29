@@ -124,7 +124,8 @@ diagnostik terbaru; UI tidak menggambar bbox pada preview. Ground memvalidasi
 normalized XYXY bbox, serta `class_id`/`class_name`. Duplicate `detection_id`
 idempotent. Event memakai `capture_utc_ns` dan hanya telemetry dengan
 `source_time_valid=true`; Ground `receive_timestamp` tidak pernah menjadi
-fallback.
+fallback. Payload dengan `detection_id` sama tetapi isi berbeda ditolak agar
+artifact tidak diam-diam berubah.
 
 Callback wajib memakai token yang sama di kedua sisi:
 
@@ -149,6 +150,12 @@ explicit tersedia. Default `VISION_COORDINATE_ENABLED=false`; dengan default ini
 event tetap direkam dan telemetry tetap dijoin, tetapi coordinate berstatus
 `NOT_AVAILABLE` dan tidak ada dot target live. Jangan mengaktifkan flag sebelum
 intrinsics, mounting orientation, dan semantic AGL disediakan.
+
+Detection yang datang sebelum bracket telemetry lengkap berstatus
+`pending_telemetry`; bounded worker akan mencoba ulang setelah sample source-time
+berikutnya masuk. Bila Stop Record terjadi lebih dahulu, event ditulis sebagai
+`finalized_unsynchronized`, bukan dibuang. Saat Start Record gagal setelah
+remote Jetson sempat aktif, route melakukan rollback remote dan receiver lokal.
 
 ## Validasi sebelum offline YOLO
 
@@ -349,7 +356,10 @@ Jalur live dinyatakan **software smoke PASS** bila:
 4. Ground menulis `detections_with_telemetry.jsonl` dan menyatakan
    `telemetry_sync_status=synchronized` ketika bracket source-time lengkap;
 5. event publisher tetap bounded dan retry saat endpoint sementara gagal;
-6. video asli dan `frames.jsonl` tidak diubah oleh callback.
+6. detection yang datang lebih dulu dari telemetry dapat diselesaikan kemudian
+   atau ditutup aman sebagai `finalized_unsynchronized`;
+7. kegagalan Stop remote tetap menutup receiver lokal;
+8. video asli dan `frames.jsonl` tidak diubah oleh callback.
 
 Software smoke PASS tidak sama dengan coordinate qualification PASS. Coordinate
 qualification masih membutuhkan same-mission target, calibration intrinsics dan

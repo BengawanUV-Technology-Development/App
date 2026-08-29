@@ -34,6 +34,8 @@ from app.config import (
     VISION_COORDINATE_CALIBRATION_PATH,
     VISION_COORDINATE_ENABLED,
     VISION_INGEST_TOKEN,
+    VISION_PENDING_DETECTION_LIMIT,
+    VISION_READ_TOKEN,
     VISION_RECENT_DETECTION_LIMIT,
     VISION_TIMELINE_SIZE,
     MAVLINK_UDP_HOST,
@@ -72,6 +74,7 @@ vision_service = VisionDetectionService(
     camera_attitude_frame=VISION_CAMERA_ATTITUDE_FRAME,
     timeline_size=VISION_TIMELINE_SIZE,
     recent_detection_limit=VISION_RECENT_DETECTION_LIMIT,
+    pending_detection_limit=VISION_PENDING_DETECTION_LIMIT,
 )
 jetson_recording_client = JetsonRecordingClient(
     base_url=JETSON_RECORDING_AGENT_URL,
@@ -94,7 +97,7 @@ init_recording_routes(
     mission_recorder=mission_telemetry_recorder,
     vision_service=vision_service,
 )
-init_vision_routes(vision_service, VISION_INGEST_TOKEN)
+init_vision_routes(vision_service, VISION_INGEST_TOKEN, VISION_READ_TOKEN)
 
 app.register_blueprint(command_bp)
 app.register_blueprint(mission_bp)

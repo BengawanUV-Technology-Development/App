@@ -66,6 +66,9 @@ VISION_INGEST_TOKEN = (
     os.getenv("VISION_INGEST_TOKEN", "").strip()
     or os.getenv("JETSON_INGEST_TOKEN", "").strip()
 )
+VISION_READ_TOKEN = (
+    os.getenv("VISION_READ_TOKEN", "").strip() or VISION_INGEST_TOKEN
+)
 VISION_COORDINATE_ENABLED = os.getenv(
     "VISION_COORDINATE_ENABLED", "false"
 ).lower() == "true"
@@ -79,6 +82,9 @@ VISION_CAMERA_ATTITUDE_FRAME = os.getenv(
 VISION_TIMELINE_SIZE = int(os.getenv("VISION_TIMELINE_SIZE", "8192"))
 VISION_RECENT_DETECTION_LIMIT = int(
     os.getenv("VISION_RECENT_DETECTION_LIMIT", "64")
+)
+VISION_PENDING_DETECTION_LIMIT = int(
+    os.getenv("VISION_PENDING_DETECTION_LIMIT", "256")
 )
 
 # Intentional security boundary.  Do not replace this with an env var: the
