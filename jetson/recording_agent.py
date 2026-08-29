@@ -700,6 +700,11 @@ class RecordingController:
                 api_port=target_api_port,
             )
             try:
+                # Fence the always-on preview before creating the child. The
+                # preview service polls this marker before opening the same
+                # camera devices; writing it after Popen introduces a race
+                # where both GStreamer pipelines try to claim the camera.
+                self._write_active_state()
                 self._process = subprocess.Popen(
                     command,
                     cwd=str(self.config.pipeline_script.parent.parent),
@@ -715,6 +720,7 @@ class RecordingController:
                 self._process = None
                 self._pid = None
                 self._ended_at = time.time()
+                self._clear_active_state()
                 self._last = self._response_locked("FAILED", False, error=str(exc))
                 self._mission_catalog.finalize_epoch(
                     session_id, capture_epoch, "FAILED", str(exc)
