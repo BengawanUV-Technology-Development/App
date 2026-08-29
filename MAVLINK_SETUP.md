@@ -159,10 +159,68 @@ curl -i --max-time 2 http://127.0.0.1:5001/api/v1/camera/preview
 If GStreamer is unavailable, telemetry remains available and the camera status
 reports the missing video dependency instead of affecting MAVLink reception.
 
-MAVLink Anywhere, Internet fallback, live YOLO, live coordinate reconstruction,
-and a new WebSocket video/detection transport are outside this setup and outside
-R0. Offline coordinate reconstruction is a post-flight tool documented in
-`COORDINATE_ESTIMATOR_AUDIT.md` and does not change the receive-only boundary.
+## Live YOLO callback dan map target
+
+Recording agent Jetson memiliki extension R2 untuk menjalankan custom YOLO pada
+branch inference terpisah. Ia tetap merekam video high-resolution dan
+`frames.jsonl` ke SSD; yang dikirim ke Ground hanya JSON detection kecil. Model
+yang saat ini terpasang di Jetson adalah:
+
+```text
+/home/bengawan/Documents/s-yolov11-main/ghostv3_dwconv-seed0/weights/best.pt
+```
+
+Profile tersebut diverifikasi dengan manifest
+`jetson/production_model_ghostv3.json`, `imgsz=640`, confidence `0.25`,
+`SAHI=false`, dan custom runtime/module path. Jetson saat ini memakai CPU
+secara eksplisit karena driver CUDA lebih lama daripada runtime Torch yang
+terpasang; inference berjalan low-rate sehingga capture tidak menunggu inference.
+
+Sebelum membuka/menjalankan recording, konfigurasi backend Ground secara lokal
+(jangan commit token):
+
+```text
+JETSON_RECORDING_AGENT_URL=http://100.124.21.25:5101
+JETSON_RECORDING_AGENT_TOKEN=<token-control-agent-jetson>
+JETSON_GCS_HOST=<IP-Tailscale-laptop-Ground>
+VISION_INGEST_TOKEN=<nilai-yang-sama-dengan-JETSON_INGEST_TOKEN>
+VISION_COORDINATE_ENABLED=false
+```
+
+Pada laptop Windows teman, ganti `<IP-Tailscale-laptop-Ground>` dengan IP
+Tailscale laptop tersebut. Jangan memakai IP laptop developer atau alamat
+loopback, karena Jetson harus dapat melakukan callback ke Ground. Token
+`JETSON_RECORDING_AGENT_TOKEN` mengontrol start/stop; token
+`VISION_INGEST_TOKEN` mengautentikasi event detection Jetson → Ground.
+
+Urutan pengujian:
+
+1. Jalankan router MAVLink dan backend Ground.
+2. Pastikan `buv-recording-agent.service` Jetson aktif.
+3. Buka camera preview untuk memastikan RTP masuk.
+4. Tekan **Start Record**. Ground membuat mission dan Jetson memulai recorder
+   serta child inference.
+5. Periksa endpoint berikut dari Ground:
+
+   ```text
+   http://127.0.0.1:5001/api/v1/detection/status
+   http://127.0.0.1:5001/api/v1/detection/latest
+   ```
+
+6. Tekan **Stop Record**. Artifact Ground berada di
+   `runtime/logs/missions/<mission_id>/detections_with_telemetry.jsonl`; video
+   dan frame metadata tetap di Jetson.
+
+Live detection callback tidak menggambar bbox pada preview. Dot target di peta
+hanya dirender bila coordinate result memiliki status
+`ESTIMATED_UNCALIBRATED`/`CALIBRATED_ESTIMATE` dan koordinat valid. Karena
+calibration Arducam, mounting orientation, dan AGL belum tervalidasi,
+`VISION_COORDINATE_ENABLED=false` adalah konfigurasi aman saat ini; event dan
+telemetry join tetap dapat diuji tanpa menghasilkan dot coordinate palsu.
+
+MAVLink Anywhere, Internet fallback, dan link failover tetap future work.
+Coordinate reconstruction offline/live adapter didokumentasikan di
+`COORDINATE_ESTIMATOR_AUDIT.md` dan tidak mengubah receive-only boundary.
 
 ## Troubleshooting
 

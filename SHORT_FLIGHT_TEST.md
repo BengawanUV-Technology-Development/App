@@ -1,7 +1,9 @@
-# R2 Offline Inference / Post-Flight Synchronization
+# R2 Inference, Live Callback, dan Post-Flight Synchronization
 
-Dokumen ini adalah prosedur pengujian R2. Fokusnya adalah membuktikan rantai
-temporal dan inference offline berikut, bukan coordinate reconstruction:
+Dokumen ini adalah prosedur pengujian R2. Ia mencakup dua jalur yang memakai
+kontrak frame/telemetry yang sama: inference offline yang mudah diaudit dan
+optional low-rate inference callback saat recording. Coordinate reconstruction
+live tetap opt-in dan bukan bukti qualification fisik.
 
 ```text
 video.mp4 + frames.jsonl + Ground telemetry.jsonl
@@ -9,6 +11,12 @@ video.mp4 + frames.jsonl + Ground telemetry.jsonl
     → detections.jsonl
     → frame timestamp
     → source-time telemetry interpolation
+
+recording start
+    → Jetson bounded YOLO child
+    → authenticated detection event
+    → Ground source-time telemetry interpolation
+    → detections_with_telemetry.jsonl
 ```
 
 Kontrak waktu operasi adalah UTC Global. Chrony/NTP khusus Ground–Jetson tidak
@@ -30,6 +38,10 @@ Jetson production agent menyimpan evidence di epoch capture:
 <mission_id>/epochs/<capture_epoch>/video.mp4
 <mission_id>/epochs/<capture_epoch>/frames.jsonl
 <mission_id>/epochs/<capture_epoch>/detections.jsonl
+
+# Ground, selama recording aktif
+runtime/logs/missions/<mission_id>/telemetry.jsonl
+runtime/logs/missions/<mission_id>/detections_with_telemetry.jsonl
 ```
 
 Validator menerima langsung direktori mission atau direktori epoch. Ground
@@ -76,6 +88,68 @@ Preview service saja tidak cukup karena berhenti saat recording pipeline
 high-resolution aktif. Setelah perubahan agent, ulangi validator terhadap
 epoch artifact sebelum flight.
 
+## Live low-rate inference callback
+
+Jalur live memakai recording agent yang sama dengan high-resolution capture.
+Ground `POST /api/v1/recordings/start` membuat `mission_id`, membuka telemetry
+timeline, lalu meneruskan ID yang sama ke Jetson. Jetson menjalankan child
+inference pada branch BGR beresolusi tinggi dengan bounded queue; jika model
+lebih lambat dari camera, capture dan penulisan `video.mp4`/`frames.jsonl` tetap
+berjalan. Preview H.264/RTP juga tetap terpisah.
+
+Model production profile Jetson saat ini:
+
+```text
+weights: /home/bengawan/Documents/s-yolov11-main/ghostv3_dwconv-seed0/weights/best.pt
+manifest: jetson/production_model_ghostv3.json
+runtime: /home/bengawan/Documents/Object-Detection/venv/bin/python
+custom modules: /home/bengawan/r2-inference-staging/site-packages
+imgsz: 640
+confidence: 0.25
+SAHI: false
+device: cpu (explicit; current CUDA driver is older than Torch CUDA runtime)
+```
+
+Checkpoint dan custom module tetap berada di Jetson; jangan menyalin video atau
+model besar ke Ground. Event detection dikirim ke:
+
+```text
+POST /api/v1/detection/ingest
+POST /api/v1/detection/overlay
+```
+
+`/ingest` adalah jalur authoritative untuk join dan artifact. `/overlay` hanya
+diagnostik terbaru; UI tidak menggambar bbox pada preview. Ground memvalidasi
+`mission_id`, `capture_epoch`, `frame_id`, `camera_id`, `capture_utc_ns`, dan
+normalized XYXY bbox, serta `class_id`/`class_name`. Duplicate `detection_id`
+idempotent. Event memakai `capture_utc_ns` dan hanya telemetry dengan
+`source_time_valid=true`; Ground `receive_timestamp` tidak pernah menjadi
+fallback.
+
+Callback wajib memakai token yang sama di kedua sisi:
+
+```text
+Jetson: JETSON_INGEST_TOKEN
+Ground: VISION_INGEST_TOKEN
+```
+
+Pada Ground Windows, `JETSON_GCS_HOST` harus diisi IP Tailscale laptop yang
+sedang menjalankan backend, bukan IP contoh dari laptop lain. Jika token belum
+dikonfigurasi, endpoint sengaja menjawab `503 VISION_INGEST_NOT_CONFIGURED`.
+
+Status callback dapat diperiksa tanpa mengunduh footage:
+
+```bash
+curl http://127.0.0.1:5001/api/v1/detection/status
+curl http://127.0.0.1:5001/api/v1/detection/latest
+```
+
+Coordinate result pada event live hanya dihitung bila seluruh konfigurasi
+explicit tersedia. Default `VISION_COORDINATE_ENABLED=false`; dengan default ini
+event tetap direkam dan telemetry tetap dijoin, tetapi coordinate berstatus
+`NOT_AVAILABLE` dan tidak ada dot target live. Jangan mengaktifkan flag sebelum
+intrinsics, mounting orientation, dan semantic AGL disediakan.
+
 ## Validasi sebelum offline YOLO
 
 Setelah video dan telemetry tersedia di satu host:
@@ -101,7 +175,8 @@ ke UTC (misalnya `utc_epoch_usec` atau `fc_*_mapped_to_utc`) dan
 
 ## Offline YOLO
 
-Perintah ini tidak dijalankan oleh live recording service:
+Perintah ini adalah jalur post-flight dan tidak dijalankan oleh live recording
+service:
 
 ```bash
 python3 -m postflight.offline_yolo \
@@ -210,11 +285,17 @@ sama dan runner `postflight.offline_yolo`:
 - runtime Jetson yang tersedia CPU-only (`torch.cuda.is_available()=False`),
   sehingga full 34 ribu frame belum dijalankan.
 
-Full acceptance masih tertahan: `frames.jsonl` dan `telemetry.jsonl` memiliki
+Full acceptance footage epoch lama masih tertahan: `frames.jsonl` dan `telemetry.jsonl` memiliki
 blok NUL mulai baris 34342, video memiliki 34.439 frame sedangkan metadata
 valid hanya sampai `frame_id=34340`, dan telemetry tidak menyediakan
 `source_time_valid=true`. Remux dan sampel dibuat di
 `/home/bengawan/r2-inference-staging/`; footage asli SSD tetap tidak diubah.
+
+Runtime live Jetson sudah diperbaiki setelah audit: service aktif, model custom
+terverifikasi dapat dimuat, dan event publisher diuji retry satu kegagalan lalu
+recovery. Ini belum menggantikan E2E flight evidence; lakukan satu recording
+baru dengan Ground aktif dan target visual untuk membuktikan event benar-benar
+masuk ke `detections_with_telemetry.jsonl`.
 
 ### Capture radio telemetry terbaru
 
@@ -233,9 +314,10 @@ radio telemetry Ground secara receive-only. Hasil validasinya:
 Ini membuktikan temporal synchronization footage → telemetry pada capture baru.
 Inference custom 10 frame dari mission yang sama juga selesai 10/10 tanpa error,
 namun menghasilkan 0 detection; detection → telemetry belum dapat menghasilkan
-output karena tidak ada bbox yang dijoin. Untuk acceptance berikutnya, gunakan
-segmen yang benar-benar memuat target visual. Manual detection/review tetap
-future work dan bukan gate.
+output pada mission itu karena tidak ada bbox yang dijoin. Runtime live sekarang
+sudah memakai checkpoint custom yang sama, tetapi acceptance berikutnya tetap
+memerlukan segmen/recording yang benar-benar memuat target visual. Manual
+detection/review tetap future work dan bukan gate.
 
 ## Acceptance R2
 
@@ -255,6 +337,23 @@ Pengujian inference offline dianggap lulus bila gate berikut terpenuhi:
 Video yang blur, tidak memiliki target, atau menghasilkan nol detection dicatat
 sebagai hasil capture/integration test, bukan detection acceptance. Manual
 detection/review sengaja tidak menjadi gate R2 dan tetap merupakan future work.
+
+### Acceptance live callback
+
+Jalur live dinyatakan **software smoke PASS** bila:
+
+1. `buv-recording-agent.service` aktif dengan model manifest dan runtime custom;
+2. recording start menghasilkan satu `mission_id` yang sama di Ground dan
+   Jetson;
+3. event dengan exact frame identity masuk melalui endpoint authenticated;
+4. Ground menulis `detections_with_telemetry.jsonl` dan menyatakan
+   `telemetry_sync_status=synchronized` ketika bracket source-time lengkap;
+5. event publisher tetap bounded dan retry saat endpoint sementara gagal;
+6. video asli dan `frames.jsonl` tidak diubah oleh callback.
+
+Software smoke PASS tidak sama dengan coordinate qualification PASS. Coordinate
+qualification masih membutuhkan same-mission target, calibration intrinsics dan
+distortion, mounting/attitude validation, reliable AGL, serta ground-truth GPS.
 
 ## UTC Global pre-flight dan evidence
 

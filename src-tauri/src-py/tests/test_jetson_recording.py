@@ -88,6 +88,26 @@ class _FakeJetson:
         return self.status()
 
 
+class _FakeVision:
+    def __init__(self):
+        self.started = []
+        self.stopped = 0
+        self.active = False
+
+    def start(self, mission_id, artifact_dir=None):
+        self.started.append((mission_id, artifact_dir))
+        self.active = True
+        return {"active": True, "mission_id": mission_id}
+
+    def stop(self):
+        self.stopped += 1
+        self.active = False
+        return {"active": False}
+
+    def status(self):
+        return {"active": self.active, "vision_test": True}
+
+
 class JetsonRecordingTests(unittest.TestCase):
     def test_client_sends_explicit_gcs_host_with_recording_start(self):
         client = JetsonRecordingClient(
@@ -191,3 +211,24 @@ class JetsonRecordingTests(unittest.TestCase):
             telemetry = [item for item in records if item["record_type"] == "telemetry_sample"]
             self.assertEqual(len(telemetry), 1)
             self.assertEqual(telemetry[0]["mission_id"], jetson.mission_id)
+
+    def test_recording_lifecycle_starts_and_stops_vision_for_same_mission(self):
+        camera = _FakeCamera()
+        jetson = _FakeJetson()
+        vision = _FakeVision()
+        state = StateManager()
+        with tempfile.TemporaryDirectory(prefix="recording-vision-") as temp_dir:
+            recorder = MissionTelemetryRecorder(log_dir=temp_dir)
+            init_recording_routes(camera, jetson, state, recorder, vision)
+            test_app = Flask(__name__)
+            test_app.register_blueprint(recording_bp)
+
+            with test_app.test_client() as client:
+                start = client.post("/api/v1/recordings/start", json={"source": "csi"})
+                stop = client.post("/api/v1/recordings/stop")
+
+        self.assertEqual(start.status_code, 202)
+        self.assertEqual(stop.status_code, 200)
+        self.assertEqual(len(vision.started), 1)
+        self.assertEqual(vision.started[0][0], start.get_json()["mission_id"])
+        self.assertEqual(vision.stopped, 1)

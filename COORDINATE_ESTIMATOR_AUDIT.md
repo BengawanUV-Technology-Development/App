@@ -1,7 +1,8 @@
 # Coordinate-Estimator Audit and app-mavproxy MVP Adapter
 
-Dokumen ini mencatat audit repository referensi dan kontrak adapter offline.
-Statusnya tidak menyatakan akurasi geodetik atau qualification penerbangan.
+Dokumen ini mencatat audit repository referensi dan kontrak adapter yang dapat
+dipakai offline maupun oleh live Ground ingest. Statusnya tidak menyatakan
+akurasi geodetik atau qualification penerbangan.
 
 ## 1. Repository yang diaudit
 
@@ -151,7 +152,11 @@ local X/Y (east/north) → estimated target latitude/longitude
 `source_time_valid`, bracket source timestamp, dan complete-state guard tetap
 berlaku. Adapter tidak menerima record dengan
 `telemetry_sync_status != "synchronized"`; synthetic clock artifact akan
-menghasilkan `NOT_AVAILABLE`.
+menghasilkan `NOT_AVAILABLE`. Jalur live Ground memakai adapter yang sama
+setelah `frame_id` dan `capture_utc_ns` diterima dari event Jetson; ia menulis
+hasil ke `detections_with_telemetry.jsonl` dan tidak mengubah telemetry receiver.
+Coordinate live tetap disabled secara default sampai konfigurasi eksplisit
+diaktifkan.
 
 Calibration JSON adapter membutuhkan field eksplisit berikut:
 
@@ -194,12 +199,12 @@ app postflight existing:          3 tests passed
 app Jetson existing:              8 tests passed
 ```
 
-Sesudah adapter:
+Sesudah adapter dan live ingestion:
 
 ```text
 postflight coordinate tests:     15 tests passed
 postflight full suite:           20 tests passed
-backend suite:                   41 tests passed
+backend suite:                   51 tests passed
 Jetson suite:                     8 tests passed
 scripts suite:                    5 tests passed
 frontend production build:       passed
@@ -236,16 +241,18 @@ npm run test:map
 npm run build
 ```
 
-Hasil: 2/2 map contract tests lulus dan production build lulus. Fixture dapat
+Hasil: 3/3 map contract tests lulus dan production build lulus. Fixture dapat
 dilihat dengan `npm run dev` lalu membuka
 `http://localhost:5173/?coordinate_smoke_test=1`; peta akan fokus ke dot
 `TARGET · SMOKE` pada latitude `-7.5898935539`, longitude `110.8653516205`.
 
 Ini bukan qualification evidence: fixture masih menandai
 `source_telemetry_status=prototype_synthetic_clock_aligned`, memakai asumsi
-AGL 10 m, dan `calibration_validated=false`. Pada runtime normal, backend
-telemetry-only belum mengirim artifact coordinate ke UI, sehingga prop
-`coordinate` harus diisi oleh offline result loader/integrasi berikutnya.
+AGL 10 m, dan `calibration_validated=false`. Pada runtime normal, backend akan
+mem-poll `/api/v1/detection/latest`, tetapi dot live hanya muncul jika event
+tersinkron dan `VISION_COORDINATE_ENABLED=true` dengan input calibration yang
+sesuai. Default aman menghasilkan `NOT_AVAILABLE`, sehingga tidak ada dot
+palsu.
 
 Perintah:
 
@@ -259,7 +266,8 @@ Positive detection `pedestrian` pada `frame_id=1919` sudah memiliki visual
 verification dan exact frame metadata. Prototype telemetry sebelumnya sengaja
 menggunakan synthetic clock alignment dan sekarang ditolak adapter. Footage
 tersebut bertanggal 12 Agustus, sedangkan log telemetry yang tersedia bertanggal
-25 Agustus; keduanya bukan mission/time pair yang valid.
+25 Agustus; keduanya bukan mission/time pair yang valid. Live adapter/ingest
+plumbing sudah tersedia, tetapi belum ada same-mission coordinate qualification.
 
 Karena itu belum ada coordinate result yang boleh disebut physical atau
 qualification evidence. Blocker yang tersisa:
@@ -271,7 +279,8 @@ qualification evidence. Blocker yang tersisa:
 5. ground-truth target GPS diperlukan untuk menghitung error horizontal meter.
 
 Original flight footage dan telemetry evidence tidak disentuh oleh adapter.
-Live coordinate reconstruction, DEM, tracking, multi-view, flight command, dan
+Live coordinate reconstruction sekarang tersedia sebagai opt-in plumbing dengan
+status non-qualification; DEM, tracking, multi-view, flight command, dan
 manual detection tetap di luar scope. `postflight/replay.py` sekarang
 menyediakan replay frame–telemetry receive-only; UI/3D replay interaktif tetap
 belum diimplementasikan.

@@ -9,19 +9,21 @@
 Mission Planner adalah aplikasi ground control station (GCS) yang dikembangkan oleh Technology Development Team Bengawan UAV untuk mendukung perencanaan, eksekusi, dan analisis misi UAV secara terintegrasi.
 
 Aplikasi ini sedang dikembangkan untuk mendukung **Misi Search and Rescue
-(SAR)**. Runtime live tetap telemetry-only, sedangkan integrasi AI/Computer
-Vision sekarang diuji sebagai pipeline offline pada footage yang direkam di
-Jetson. Status dan progress lintas tahap dipelihara di bagian
+(SAR)**. Runtime live tetap receive-only untuk MAVLink, sementara recording
+path Jetson sekarang memiliki optional low-rate YOLO callback ke Ground. Offline
+inference dan replay tetap tersedia untuk audit footage. Status dan progress
+lintas tahap dipelihara di bagian
 [Progress proyek](#progress-proyek).
 
 > **R0 architecture baseline:** lihat [R0_ARCHITECTURE_BASELINE.md](./R0_ARCHITECTURE_BASELINE.md).
 > Dokumen tersebut adalah acuan redevelopment dan membedakan target R0 dari
 > implementasi yang sudah tersedia.
 
-> **Mode integrasi saat ini: telemetry-only.** Webapp hanya membaca data
-> MAVLink. Semua command flight, mission, parameter, dan koneksi serial dari
-> webapp dinonaktifkan. QGroundControl tetap menjadi ground station yang
-> memiliki akses command penuh.
+> **Batas keamanan saat ini: telemetry-only untuk MAVLink.** Webapp hanya
+> membaca data MAVLink dan metadata/detection dari pipeline. Semua command
+> flight, mission, parameter, dan koneksi serial dari webapp dinonaktifkan.
+> QGroundControl tetap menjadi ground station yang memiliki akses command
+> penuh.
 
 ## Arsitektur MAVLink read-only
 
@@ -49,12 +51,13 @@ yang keliru tidak dapat diteruskan ke Pixhawk.
 
 ## Scope R0 dan roadmap SAR
 
-Runtime R0 saat ini menyediakan monitoring telemetry read-only dan live camera
-preview. Live YOLO/detection belum menjadi bagian dari service recording
-produksi. Offline YOLO pada footage Jetson adalah pekerjaan R2; auto-marking,
-geotagging terkalibrasi, dan manual detection/review tetap future work.
-Coordinate reconstruction MVP sekarang tersedia sebagai tool offline terpisah;
-qualification fisik tetap menunggu calibration dan mission same-time.
+Runtime R0 menyediakan monitoring telemetry read-only dan live camera preview.
+Sebagai extension R2, service recording Jetson dapat menjalankan custom YOLO
+secara low-rate dan mengirim event detection kecil ke Ground. Ground menyimpan
+event tersebut setelah join ke telemetry source-time. Coordinate reconstruction
+live tersedia sebagai jalur opt-in, tetapi default-nya disabled sampai calibration,
+AGL, mounting, dan ground truth tervalidasi. Auto-marking, geotagging
+terkalibrasi, dan manual detection/review tetap future work.
 
 ### Koneksi dan sistem dasar
 * **Connect Telemetri**: Telemetry diterima dari router melalui UDP MAVLink.
@@ -81,11 +84,13 @@ website tetap monitoring-only dan tidak menjadi command authority.
 * **Current**: Ground menyimpan telemetry/event JSONL pada session backend.
 * **R0 target**: Ground menyimpan telemetry dan metadata per `mission_id`.
 * **R2**: Post-flight inference, sinkronisasi detection terhadap timestamp
-  source, dan adapter coordinate reconstruction diuji dari evidence video Jetson.
+  source, optional low-rate Jetson inference callback, dan adapter coordinate
+  reconstruction diuji dari evidence video Jetson.
 * **Current R2**: Replay validator offline dapat memasangkan setiap frame
-  dengan state telemetry berdasarkan capture UTC.
+  dengan state telemetry berdasarkan capture UTC. Saat recording aktif, Ground
+  juga menulis `detections_with_telemetry.jsonl` tanpa menyalin video besar.
 * **Future**: UI/3D replay interaktif, calibrated coordinate qualification,
-  auto-marking, dan manual detection/review.
+  auto-marking/geotagging, manual detection/review, dan link failover.
 
   High-resolution evidence tetap berada di Jetson; transfer otomatis seluruh
   video bukan bagian R0.
@@ -158,8 +163,8 @@ kompatibel untuk audit artifact.
 Prosedur short-flight dan offline synchronization tersedia di
 [`SHORT_FLIGHT_TEST.md`](./SHORT_FLIGHT_TEST.md).
 
-Audit repository `Coordinate-Estimator`, mapping input, adapter offline, dan
-limitasi calibration tersedia di
+Audit repository `Coordinate-Estimator`, mapping input, adapter, dan limitasi
+calibration tersedia di
 [`COORDINATE_ESTIMATOR_AUDIT.md`](./COORDINATE_ESTIMATOR_AUDIT.md).
 
 Kontrak waktu saat ini adalah **UTC Global**. `capture_utc_ns` pada Jetson dan
@@ -179,17 +184,19 @@ cara verifikasi dan tidak boleh mengubah status implementasi di sini.
 | --- | --- | --- |
 | R0 | Baseline tersedia | Telemetry receive-only, router MAVLink, live camera preview, dan command authority tetap berada pada QGroundControl/GCS yang ditetapkan. |
 | R1 | Fondasi tersedia | `mission_id`, mission-scoped telemetry JSONL, canonical frame metadata, source PTS, UTC/source-time fields, dan validator artifact tersedia. |
-| R2 | Inference, temporal sync, coordinate adapter, map-dot smoke, dan replay validator tersedia; qualification tertahan | Positive detection nyata dan visual bbox sudah lulus. Existing interpolator tetap dipakai. Adapter geometry, synthetic tests, rendering dot coordinate ke MapLibre, serta replay metadata/telemetry lulus, tetapi mission same-time untuk detection, AGL, calibration intrinsics/distortion, mounting extrinsics, serta ground truth belum tersedia. |
-| Future work | Belum dikerjakan | Calibrated coordinate qualification, auto-marking/geotagging, live detection transport, manual detection/review, dan link failover. |
+| R2 | Inference, temporal sync, live detection callback, coordinate adapter, map-dot smoke, dan replay validator tersedia; qualification tertahan | Positive detection nyata dan visual bbox sudah lulus. Existing interpolator tetap dipakai. Custom model Jetson sudah dikonfigurasi melalui runtime terpisah; event callback, bounded retry, Ground join, synthetic geometry, rendering dot ke MapLibre, serta replay metadata/telemetry lulus secara software. Mission same-time dengan target, AGL, calibration intrinsics/distortion, mounting extrinsics, ground truth, dan hardware/browser E2E masih belum tervalidasi. Coordinate live default disabled. |
+| Future work | Belum dikerjakan | Calibrated coordinate qualification, auto-marking/geotagging, manual detection/review, UI/3D replay interaktif, dan link failover. |
 
 ### Snapshot pengujian lokal
 
-Pada 2026-08-29, suite backend Python (41), Jetson (8), postflight (20), dan
-scripts (5) lulus; frontend production build juga lulus. Belum ada
+Pada 2026-08-29, suite backend Python (51), Jetson (8), postflight (20), dan
+scripts (5) lulus; frontend map contract test (3) dan production build juga
+lulus. Belum ada
 browser/E2E test atau hardware flight acceptance. `cargo test` berhasil
 melakukan compile test harness, tetapi crate saat ini tidak memiliki test case.
 Sebanyak 15 test postflight mencakup synthetic geometry/integration coordinate;
-2 test tambahan mencakup replay frame–telemetry.
+2 test tambahan mencakup replay frame–telemetry; backend test tambahan mencakup
+live source-time timeline, authenticated ingestion, dan recording lifecycle.
 
 Smoke test frontend untuk kontrak dot coordinate dijalankan dengan:
 
@@ -197,8 +204,9 @@ Smoke test frontend untuk kontrak dot coordinate dijalankan dengan:
 npm run test:map
 ```
 
-Hasilnya 2/2 test lulus: fixture menghasilkan satu point pada koordinat
-`[longitude, latitude]`, dan status `NOT_AVAILABLE` disembunyikan dari peta.
+Hasilnya 3/3 test lulus: fixture menghasilkan satu point pada koordinat
+`[longitude, latitude]`, status `NOT_AVAILABLE` disembunyikan dari peta, dan
+response detection live hanya dipakai ketika backend menyatakan mission aktif.
 
 Replay receive-only terhadap mission sinkron
 `mission-27bd4805-50f3-4504-8046-4f297e50833f` juga lulus untuk 956 frame
@@ -217,11 +225,14 @@ Footage nyata yang dipilih berada di Jetson pada:
 ```
 
 `video.mp4` berukuran sekitar 1,6 GB, H.264 3840×2160, dengan durasi probe
-sekitar 1466 detik. Untuk pengujian yang diminta, model yang dipilih adalah
+sekitar 1466 detik. Untuk pengujian, model yang dipilih adalah
 `ghostv3_dwconv-seed0/weights/best.pt` dari folder hasil training Downloads
 (SHA-256 `7c3c2dd5ecb0cc440f4ae9b7add6a9493c1f6bbc9b6924f7d35a6e250ad7727f`).
-Checkpoint ini bukan baseline production model Jetson dan membutuhkan source
-runtime custom `modules_ghost.py` serta `modules_sy.py`.
+Model yang sama sekarang dikonfigurasi di Jetson pada
+`/home/bengawan/Documents/s-yolov11-main/ghostv3_dwconv-seed0/weights/best.pt`
+dan dicatat di `jetson/production_model_ghostv3.json`. Checkpoint custom ini
+membutuhkan source runtime `modules_ghost.py` serta `modules_sy.py`; file besar
+tidak disalin ke Ground.
 File `detections.jsonl` yang sudah ada bukan hasil R2 yang valid: artifact
 tersebut berstatus detector `FAILED` karena paket Ultralytics tidak tersedia
 pada runtime recorder dan seluruh detection-nya kosong; jangan memakai artifact
@@ -238,10 +249,19 @@ Smoke test baru sudah berhasil dijalankan di staging Jetson:
   `/home/bengawan/r2-inference-staging/results/detections-ghostv3-sample10.jsonl`;
   record yang tertulis adalah `frame_id=4`, kelas `pedestrian`, confidence
   sekitar `0.5733`;
-- runtime yang dipakai adalah Ultralytics 8.3.0 dengan patch custom GhostV3,
-  PyTorch 2.5.1 CPU-only (`torch.cuda.is_available()=False`); smoke satu frame
-  3840×2160 memerlukan sekitar 5,39 detik. Full-run belum dijalankan karena
-  tidak efisien pada runtime tersebut.
+- runtime offline sebelumnya adalah Ultralytics 8.3.0 dengan patch custom
+  GhostV3 dan CPU-only; smoke satu frame 3840×2160 memerlukan sekitar 5,39
+  detik. Full-run offline epoch besar belum dijalankan karena tidak efisien.
+- runtime live Jetson diverifikasi memakai custom Ultralytics 8.3.0 dan Torch
+  `2.13.0+cu130`. Driver Jetson saat ini terlalu lama untuk CUDA runtime itu,
+  sehingga `JETSON_MODEL_DEVICE=cpu` dipilih secara eksplisit; inference sample
+  960×540 pada `imgsz=640`, confidence `0.25` menghasilkan `pedestrian` dengan
+  confidence sekitar `0.4762` tanpa error.
+- service `buv-recording-agent.service` aktif dan child inference memakai
+  `/home/bengawan/Documents/Object-Detection/venv/bin/python` plus custom
+  `PYTHONPATH`. Retry event callback diuji dengan satu planned failure lalu
+  recovery (`sent=1`, `errors=1`, `dropped=0`). Full camera-to-Ground live E2E
+  masih perlu dilakukan pada recording berikutnya.
 
 Untuk epoch lama ini, acceptance penuh masih tertahan oleh tiga masalah artifact nyata: metadata
 `frames.jsonl` valid sampai `frame_id=34340` lalu memiliki blok NUL pada baris
@@ -276,11 +296,45 @@ Hasil audit end-to-end:
 
 Inference custom pada 10 frame dari mission yang sama juga memproses 10/10
 frame tanpa error, tetapi menulis 0 detection pada threshold 0,25. Karena itu
-temporal synchronization sudah lulus, sementara detection → telemetry belum
-memiliki record untuk dijoin. Detection live bawaan agent tetap `FAILED` karena
-runtime recorder belum memiliki Ultralytics; hal tersebut terpisah dari uji
-offline custom. Full detection acceptance memerlukan scene/segmen dengan
-target visual terdeteksi dan runtime inference yang lebih cepat dari CPU-only.
+temporal synchronization sudah lulus, sementara mission tersebut belum
+memiliki record detection untuk dijoin. Runtime live agent yang sebelumnya
+`FAILED` sudah diperbaiki dan dikonfigurasi dengan model/runtime custom, tetapi
+full camera-to-Ground detection → telemetry acceptance tetap memerlukan
+recording baru yang memuat target visual.
+
+### Live inference callback R2
+
+Saat `POST /api/v1/recordings/start` berhasil, Ground membuat mission yang sama
+untuk telemetry, memulai timeline source-time, lalu meneruskan `mission_id` ke
+Jetson. Recording agent Jetson mempertahankan high-resolution video dan
+`frames.jsonl`, sementara child YOLO berjalan low-rate pada branch inference
+terpisah. Detection queue dibatasi agar inference lambat tidak menghentikan
+capture. Event kecil dikirim ke:
+
+```text
+POST /api/v1/detection/ingest
+POST /api/v1/detection/overlay
+```
+
+Ground hanya menerima event dengan mission/frame identity yang valid, memakai
+`capture_utc_ns` dari event untuk interpolasi terhadap telemetry dengan
+`source_time_valid=true`, lalu menulis:
+
+```text
+runtime/logs/missions/<mission_id>/detections_with_telemetry.jsonl
+```
+
+`overlay` hanya disimpan sebagai diagnostik; UI tidak menggambar bbox pada
+preview. Dashboard melakukan polling detection terbaru dan hanya menampilkan
+dot jika coordinate result berstatus `ESTIMATED_UNCALIBRATED` atau
+`CALIBRATED_ESTIMATE` dengan koordinat valid. Karena calibration/AGL/mounting
+belum tersedia, konfigurasi default `VISION_COORDINATE_ENABLED=false`, sehingga
+live inference dan telemetry join dapat berjalan tanpa menghasilkan dot palsu.
+
+Ground harus memakai `VISION_INGEST_TOKEN` yang sama dengan
+`JETSON_INGEST_TOKEN` di Jetson. `JETSON_GCS_HOST` harus berisi IP Tailscale
+Ground yang dapat dijangkau Jetson; pada laptop Windows milik teman, jangan
+menyalin IP contoh laptop lama.
 
 ### Coordinate reconstruction MVP
 
@@ -319,9 +373,10 @@ Fixture tersebut menggunakan coordinate hasil adapter yang sudah diperoleh
 dari data sebelumnya, tetapi masih memakai synthetic clock alignment dan
 asumsi AGL 10 m. Karena itu dot diberi label `TARGET · SMOKE` dan
 `NON-QUALIFICATION`; ini hanya membuktikan plumbing coordinate result → map,
-bukan akurasi target di lapangan. Pada URL normal, backend telemetry-only
-belum mengambil artifact coordinate secara otomatis sehingga tidak ada dot
-target yang muncul.
+bukan akurasi target di lapangan. Pada URL normal, live dot baru muncul bila
+Ground menerima detection yang tersinkron dan coordinate reconstruction
+diaktifkan dengan konfigurasi eksplisit; default aman tetap tidak menampilkan
+dot coordinate.
 
 ### Dokumentasi aktif dan retired
 
@@ -334,7 +389,7 @@ dipertahankan di bagian ini.
 
 ---
 
-## Instalasi backend telemetry-only
+## Instalasi backend receive-only
 
 Panduan setup lengkap untuk Windows PowerShell, macOS, dan Linux tersedia di
 [MAVLINK_SETUP.md](./MAVLINK_SETUP.md).
@@ -359,7 +414,7 @@ cd App
 # Install dependencies backend
 python3 -m pip install -r src-tauri/src-py/requirements.txt
 
-# Jalankan backend telemetry-only
+# Jalankan backend receive-only
 ./src-tauri/src-py/start_readonly_backend.sh
 ```
 

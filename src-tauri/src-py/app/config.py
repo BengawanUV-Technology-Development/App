@@ -59,6 +59,28 @@ JETSON_RECORDING_AGENT_TIMEOUT_SECONDS = float(
     os.getenv("JETSON_RECORDING_AGENT_TIMEOUT_SECONDS", "8")
 )
 
+# Jetson uses this token for Ground -> Jetson detection callbacks.  Keep the
+# callback plane opt-in: an unset token makes the endpoints unavailable rather
+# than silently accepting unauthenticated detections.
+VISION_INGEST_TOKEN = (
+    os.getenv("VISION_INGEST_TOKEN", "").strip()
+    or os.getenv("JETSON_INGEST_TOKEN", "").strip()
+)
+VISION_COORDINATE_ENABLED = os.getenv(
+    "VISION_COORDINATE_ENABLED", "false"
+).lower() == "true"
+VISION_COORDINATE_CALIBRATION_PATH = os.getenv(
+    "VISION_COORDINATE_CALIBRATION_PATH", ""
+).strip()
+VISION_ALTITUDE_REFERENCE = os.getenv("VISION_ALTITUDE_REFERENCE", "").strip() or None
+VISION_CAMERA_ATTITUDE_FRAME = os.getenv(
+    "VISION_CAMERA_ATTITUDE_FRAME", ""
+).strip() or None
+VISION_TIMELINE_SIZE = int(os.getenv("VISION_TIMELINE_SIZE", "8192"))
+VISION_RECENT_DETECTION_LIMIT = int(
+    os.getenv("VISION_RECENT_DETECTION_LIMIT", "64")
+)
+
 # Intentional security boundary.  Do not replace this with an env var: the
 # command path belongs to QGroundControl on UDP 14550, not to this web app.
 WEBAPP_READ_ONLY = True

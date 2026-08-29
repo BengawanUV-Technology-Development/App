@@ -46,9 +46,23 @@ Arducam
 ```
 
 Jetson memiliki camera capture, high-resolution evidence, frame metadata, dan
-nantinya YOLO detection. Ground memiliki telemetry, web backend, dan post-flight
-coordinate reconstruction adapter pada batch R2; live coordinate reconstruction
-tetap bukan bagian runtime R0.
+optional YOLO detection pada extension R2. Ground memiliki telemetry, web
+backend, dan coordinate reconstruction adapter yang dapat dipakai offline
+maupun oleh jalur live R2. Live coordinate reconstruction bukan requirement
+runtime R0 dan tetap disabled secara default sampai input calibration/AGL
+tersedia.
+
+Extension R2 yang sudah diimplementasikan menambahkan jalur metadata kecil:
+
+```text
+Jetson child YOLO
+      ├─ POST /api/v1/detection/overlay  → Ground diagnostic state
+      └─ POST /api/v1/detection/ingest   → source-time telemetry join
+                                              → optional coordinate result
+```
+
+Jalur ini tidak memindahkan high-resolution video ke Ground dan tidak membawa
+authority command MAVLink.
 
 R0 tidak mengganti transport video yang sudah ada dengan WebSocket, WebRTC,
 HLS, RTSP, atau transport besar lainnya.
@@ -82,7 +96,7 @@ Jetson menyimpan:
 - `mission_id`;
 - high-resolution video;
 - frame metadata;
-- detection pada batch berikutnya.
+- detection sidecar dan event callback low-rate pada extension R2.
 
 High-resolution evidence tetap berada di Jetson. Ground hanya mengambil data
 mission tertentu ketika diminta; transfer otomatis seluruh video bukan bagian
@@ -111,8 +125,9 @@ Preview pipeline repository masih mengirim H.264/RTP dan Ground
 mempublikasikan JPEG terbaru tanpa identity/PTS. High-resolution recording
 agent remote menulis identity/PTS ke epoch-scoped `frames.jsonl`; validator
 lokal tersedia di `jetson/frame_metadata.py`. Artifact bench sudah tervalidasi.
-Flight artifact acceptance dan inference offline pada footage nyata adalah
-pekerjaan R2; live detection bukan runtime R0.
+Flight artifact acceptance dan inference offline pada footage nyata tetap
+merupakan gate R2; low-rate live detection hanya extension R2 dan tidak mengubah
+kontrak frame.
 
 ## 4. Clock dan telemetry synchronization
 
@@ -170,7 +185,7 @@ tidak boleh dijadikan prasyarat pengujian.
 | Frame metadata | Remote agent writes epoch-scoped `frames.jsonl`; local `jetson/frame_metadata.py` validates canonical fields | Bench verified; flight artifact and offline inference acceptance are the R2 work item |
 | Telemetry time | Per-sample source/receive nanosecond metadata | UTC mapping valid bila source mapping tersedia; invalid source time dipertahankan |
 | Clock sync | UTC Global pada system clock Ground dan Jetson; `receive_timestamp` tetap dipisahkan dari source time | Tidak ada dependency chrony/NTP khusus; audit dilakukan dari field UTC dan source clock domain pada artifact |
-| YOLO/reconstruction | Runner offline `postflight/offline_yolo.py` dan adapter `postflight/coordinate_reconstruction.py` tersedia; live detector/estimator tidak aktif di runtime | R2 offline geometry tersedia; calibration, AGL, mounting convention, ground truth, dan real qualification masih pending |
+| YOLO/reconstruction | Runner offline `postflight/offline_yolo.py`, Jetson child runner dengan model manifest/runtime custom, Ground detection ingest, dan adapter `postflight/coordinate_reconstruction.py` tersedia | R2 software path tersedia; calibration, AGL, mounting convention, ground truth, same-mission live E2E, dan real qualification masih pending; coordinate default disabled |
 | Post-flight replay | `postflight/replay.py` memasangkan frame metadata dengan telemetry source-time; UI/3D replay belum aktif | Metadata/telemetry replay tersedia; pemeriksaan video fisik dilakukan bila file video diberikan |
 
 ## 6. Scope R0
@@ -188,6 +203,11 @@ Jangan mengimplementasikan pada batch dokumentasi/fondasi ini:
 MAVLink Anywhere dan Internet fallback dicatat sebagai future development saja,
 bukan dependency runtime R0.
 
+Daftar di atas adalah batas scope historis R0, bukan pernyataan bahwa extension
+R2 belum ada. Implementasi R2 berada di `jetson/arducam_split_pipeline.py`,
+`jetson/recording_agent.py`, `app/services/vision_ingest.py`, dan route
+`/api/v1/detection/*`; ia tidak boleh diaktifkan sebagai syarat R0.
+
 ## 7. Discrepancy yang ditunda ke batch berikutnya
 
 1. Verifikasi dengan hardware output simultan Mission Planner/QGC tanpa merusak
@@ -197,13 +217,14 @@ bukan dependency runtime R0.
 3. Pisahkan telemetry interpolation dari telemetry receive-time observability.
 4. Putuskan apakah branch analog/EasyCAP tetap berada di luar atau di dalam
    baseline single-Arducam R0.
-5. Lengkapi full inference offline R2 pada segmen footage nyata yang memiliki
-   target visual, lalu join detection terhadap telemetry pada capture yang sudah
-   lolos temporal synchronization. Capture radio telemetry terbaru sudah lulus
-   korelasi frame–telemetry dan positive detection sudah ditemukan pada footage
-   lain. Adapter coordinate reconstruction dan synthetic geometry test sudah
-   tersedia, tetapi belum ada pasangan mission same-time dengan AGL/calibration
-   yang tervalidasi. Manual detection/review sengaja tetap menjadi future work.
+5. Jalankan camera-to-Ground E2E R2 pada mission baru yang memiliki target
+   visual: custom model Jetson, event ingest, exact identity, source-time
+   interpolation, dan artifact `detections_with_telemetry.jsonl`.
+6. Lengkapi qualification coordinate dengan AGL/calibration/mounting yang
+   tervalidasi dan ground-truth target. Capture radio telemetry terbaru sudah
+   lulus korelasi frame–telemetry dan positive detection sudah ditemukan pada
+   footage lain, tetapi pasangan mission same-time untuk coordinate belum ada.
+   Manual detection/review sengaja tetap menjadi future work.
 
 ## 8. File audit utama
 

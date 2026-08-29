@@ -8,6 +8,8 @@ import EkfVibeBar from "../components/telemetry/EkfVibeBar";
 import EkfVibeModal from "../components/telemetry/EkfVibeModal";
 import CameraPreview from "../components/recording/CameraPreview";
 import { COORDINATE_SMOKE_TEST } from "../data/coordinateSmokeTest.js";
+import { hasRenderableCoordinate } from "../components/map/coordinateData.js";
+import { useVisionDetections } from "../hooks/useVisionDetections.js";
 
 const OperationalMap = lazy(() => import("../components/map/OperationalMap"));
 
@@ -53,6 +55,7 @@ function PanelHeading({ eyebrow, title, trailing = null }) {
 
 function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh }) {
   const [isEkfModalOpen, setIsEkfModalOpen] = useState(false);
+  const { vision } = useVisionDetections();
   const hasGps = health.gps_valid && telemetry.lat !== null && telemetry.lng !== null;
   const linkActive = Boolean(health.backend_online && health.connected && !health.stale);
   const latestMessage = telemetry.status_text || health.error || statusText;
@@ -60,7 +63,12 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
   const messageIsWarning = /warn|critical|error|alert|emergency/.test(latestMessageTone)
     || Boolean(health.error);
   const showCoordinateSmokeTest = coordinateSmokeTestEnabled();
-  const coordinateResult = showCoordinateSmokeTest ? COORDINATE_SMOKE_TEST : null;
+  const liveDetection = vision.detection;
+  const coordinateResult = showCoordinateSmokeTest
+    ? COORDINATE_SMOKE_TEST
+    : hasRenderableCoordinate(liveDetection)
+      ? liveDetection
+      : null;
 
   return (
     <section className="operations-view">
@@ -153,7 +161,8 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
               trailing={(
                 <>
                   <Badge tone="info">3D AIRCRAFT</Badge>
-                  {coordinateResult ? <Badge tone="warning">TARGET DOT · SMOKE</Badge> : null}
+                  {showCoordinateSmokeTest && coordinateResult ? <Badge tone="warning">TARGET DOT · SMOKE</Badge> : null}
+                  {!showCoordinateSmokeTest && coordinateResult ? <Badge tone="success">TARGET DOT</Badge> : null}
                 </>
               )}
             />
@@ -192,7 +201,9 @@ function DashboardView({ health, telemetry, statusText, isRefreshing, onRefresh 
           </div>
           {coordinateResult ? (
             <div className="coordinate-smoke-note" role="status">
-              Smoke fixture: pedestrian F1919 · synthetic clock alignment · assumed AGL 10 m · NON-QUALIFICATION
+              {showCoordinateSmokeTest
+                ? "Smoke fixture: pedestrian F1919 · synthetic clock alignment · assumed AGL 10 m · NON-QUALIFICATION"
+                : `Live detection: ${liveDetection.class_name || "target"} · F${liveDetection.frame_id} · ${liveDetection.coordinate.status} · NON-QUALIFICATION`}
             </div>
           ) : null}
         </section>

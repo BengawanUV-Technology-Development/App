@@ -11,6 +11,7 @@ from app.services.mission_telemetry import (
     MissionTelemetryError,
     MissionTelemetryRecorder,
 )
+from app.services.vision_ingest import VisionDetectionService, VisionIngestError
 from app.utils.state import StateManager
 
 
@@ -19,6 +20,7 @@ _camera_service: CameraStreamService | None = None
 _jetson_client: JetsonRecordingClient | None = None
 _state_manager: StateManager | None = None
 _mission_recorder: MissionTelemetryRecorder | None = None
+_vision_service: VisionDetectionService | None = None
 
 
 def init_recording_routes(
@@ -26,12 +28,14 @@ def init_recording_routes(
     jetson_client: JetsonRecordingClient,
     state_manager: StateManager | None = None,
     mission_recorder: MissionTelemetryRecorder | None = None,
+    vision_service: VisionDetectionService | None = None,
 ) -> None:
-    global _camera_service, _jetson_client, _state_manager, _mission_recorder
+    global _camera_service, _jetson_client, _state_manager, _mission_recorder, _vision_service
     _camera_service = camera_service
     _jetson_client = jetson_client
     _state_manager = state_manager
     _mission_recorder = mission_recorder
+    _vision_service = vision_service
 
 
 def _camera() -> CameraStreamService:
@@ -48,6 +52,10 @@ def _jetson() -> JetsonRecordingClient:
 
 def _mission() -> MissionTelemetryRecorder | None:
     return _mission_recorder
+
+
+def _vision() -> VisionDetectionService | None:
+    return _vision_service
 
 
 def _source_from_request() -> str:
@@ -70,6 +78,8 @@ def _combined(remote: dict, source: str | None = None) -> dict:
     )
     if _mission() is not None:
         result.update(_mission().status())
+    if _vision() is not None:
+        result["vision"] = _vision().status()
     return result
 
 
@@ -94,6 +104,7 @@ def recording_start():
     source = "csi"
     camera_started = False
     mission_started = False
+    vision_started = False
     mission_id = None
     try:
         source = _source_from_request()
@@ -103,6 +114,11 @@ def recording_start():
             mission_id = mission["mission_id"]
             if _state_manager is not None:
                 _state_manager.set_mission_id(mission_id)
+            if _vision() is not None:
+                mission_path = _mission().path if _mission() is not None else None
+                artifact_dir = mission_path.parent if mission_path is not None else None
+                _vision().start(mission_id, artifact_dir=artifact_dir)
+                vision_started = True
 
         camera = _camera()
         camera.start()
@@ -125,7 +141,7 @@ def recording_start():
         if source == "analog":
             remote = _jetson().set_preview_source("analog")
         return jsonify(_combined(remote, source)), 202
-    except (CameraStreamError, JetsonRecordingError, MissionTelemetryError) as exc:
+    except (CameraStreamError, JetsonRecordingError, MissionTelemetryError, VisionIngestError) as exc:
         if camera_started:
             try:
                 _camera().stop()
@@ -133,6 +149,8 @@ def recording_start():
                 pass
         if mission_started and _mission() is not None:
             _mission().stop(reason="start_failed")
+        if vision_started and _vision() is not None:
+            _vision().stop()
         if _state_manager is not None:
             _state_manager.set_mission_id(None)
         return jsonify({
@@ -149,12 +167,16 @@ def recording_stop():
     remote = None
     failure: Exception | None = None
     completed_mission = None
+    completed_vision = None
     try:
         remote = _jetson().stop()
         camera = _camera()
         camera.stop()
     except (CameraStreamError, JetsonRecordingError) as exc:
         failure = exc
+
+    if _vision() is not None and _vision().active:
+        completed_vision = _vision().stop()
 
     if _mission() is not None and _mission().active:
         completed_mission = _mission().stop(
@@ -181,6 +203,10 @@ def recording_stop():
                     ],
                 }
             )
+        if completed_vision:
+            response["completed_detection_artifact_path"] = completed_vision.get(
+                "artifact_path"
+            )
         return jsonify(response), 409
 
     response = _combined(remote or {})
@@ -193,6 +219,10 @@ def recording_stop():
                     "dropped_samples"
                 ],
             }
+        )
+    if completed_vision:
+        response["completed_detection_artifact_path"] = completed_vision.get(
+            "artifact_path"
         )
     return jsonify(response)
 

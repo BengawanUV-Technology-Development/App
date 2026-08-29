@@ -1,0 +1,40 @@
+{
+  "schema_version": "1",
+  "model_id": "s-yolov11-ghostv3-dwconv-seed0",
+  "architecture": "s-yolov11",
+  "variant": "ghostv3_dwconv",
+  "checkpoint": {
+    "sha256": "7c3c2dd5ecb0cc440f4ae9b7add6a9493c1f6bbc9b6924f7d35a6e250ad7727f",
+    "size_bytes": 18665405,
+    "ultralytics_version": "8.3.0",
+    "checkpoint_date": null
+  },
+  "training": {
+    "project": "s-yolov11-main",
+    "name": "ghostv3_dwconv-seed0",
+    "epochs": null,
+    "imgsz": 640,
+    "seed": 0,
+    "map50": null,
+    "map50_95": null,
+    "provenance_note": "Training metrics were not supplied with the deployed checkpoint."
+  },
+  "runtime": {
+    "device": "cpu",
+    "imgsz": 640,
+    "confidence": 0.25,
+    "sahi": false
+  },
+  "classes": [
+    "pedestrian",
+    "people",
+    "bicycle",
+    "car",
+    "van",
+    "truck",
+    "tricycle",
+    "awning-tricycle",
+    "bus",
+    "motor"
+  ]
+}

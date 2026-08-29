@@ -7,7 +7,7 @@ import math
 import socket
 import threading
 from time import monotonic_ns, time_ns
-from typing import Any
+from typing import Any, Callable
 
 from pymavlink import mavutil
 from pymavlink.dialects.v20 import ardupilotmega as mavlink
@@ -60,6 +60,7 @@ class ReadonlyMavlinkReceiver:
         disconnected_after: float = TELEMETRY_DISCONNECTED_AFTER_SECONDS,
         mission_recorder: MissionTelemetryRecorder | None = None,
         raw_debug_enabled: bool = TELEMETRY_RAW_DEBUG_ENABLED,
+        telemetry_observer: Callable[[TelemetrySample], None] | None = None,
     ) -> None:
         self.state_manager = state_manager
         self.session_log_store = session_log_store
@@ -78,6 +79,7 @@ class ReadonlyMavlinkReceiver:
         self.telemetry_log_interval = telemetry_log_interval
         self.mission_recorder = mission_recorder
         self.raw_debug_enabled = raw_debug_enabled
+        self.telemetry_observer = telemetry_observer
 
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -464,7 +466,7 @@ class ReadonlyMavlinkReceiver:
 
         self.state_manager.update(**state_updates)
         state = self.state_manager.get()
-        return TelemetrySample(
+        sample = TelemetrySample(
             mission_id=state.mission_id,
             source_timestamp=source_time.timestamp_ns,
             source_timestamp_raw=source_time.raw_value,
@@ -477,6 +479,14 @@ class ReadonlyMavlinkReceiver:
             component_id=component_id,
             payload=payload,
         )
+        if self.telemetry_observer:
+            try:
+                self.telemetry_observer(sample)
+            except Exception:
+                # Optional live consumers must never stop the receive-only
+                # MAVLink loop.
+                logger.exception("Ignoring telemetry observer failure")
+        return sample
 
     def _update_prearm_health(self, message: Any) -> None:
         health = int(getattr(message, "onboard_control_sensors_health", 0))

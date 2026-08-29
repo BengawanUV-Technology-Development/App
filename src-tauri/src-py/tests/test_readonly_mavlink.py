@@ -162,6 +162,33 @@ class ReadonlyMavlinkTests(unittest.TestCase):
             sender.close()
             receiver.stop()
 
+    def test_valid_sample_is_forwarded_to_optional_telemetry_observer(self):
+        observed = []
+        receiver = ReadonlyMavlinkReceiver(
+            self.state,
+            self.logs,
+            "127.0.0.1",
+            14551,
+            telemetry_observer=observed.append,
+        )
+
+        sample = receiver._handle_message(
+            mavlink.MAVLink_global_position_int_message(
+                1,
+                -712345678,
+                1101234567,
+                123450,
+                23450,
+                0,
+                0,
+                0,
+                9000,
+            )
+        )
+
+        self.assertIsNotNone(sample)
+        self.assertEqual(observed, [sample])
+
 
 if __name__ == "__main__":
     unittest.main()

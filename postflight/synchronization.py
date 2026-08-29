@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import threading
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, Iterable
 
 
@@ -33,6 +35,93 @@ _REQUIRED_STATE_FIELDS = (
     "pitch_deg",
     "yaw_deg",
 )
+
+# Public alias for live consumers.  The offline and live paths must agree on
+# what constitutes a complete interpolated UAV state.
+REQUIRED_TELEMETRY_FIELDS = _REQUIRED_STATE_FIELDS
+
+
+class LiveTelemetryTimeline:
+    """Thread-safe source-time timeline for detections arriving during flight.
+
+    This is the in-memory counterpart of :func:`load_telemetry_timeline`.  It
+    deliberately stores only ``source_time_valid=true`` samples and rebuilds
+    the same carry-forward snapshots before delegating interpolation to
+    :func:`interpolate_telemetry`.  Ground receive time is never used here.
+    """
+
+    def __init__(self, max_samples: int = 8_192) -> None:
+        if not isinstance(max_samples, int) or isinstance(max_samples, bool) or max_samples < 2:
+            raise ValueError("max_samples must be an integer >= 2")
+        self.max_samples = max_samples
+        self._lock = threading.RLock()
+        self._sequence = 0
+        self._samples: list[tuple[int, int, dict[str, Any]]] = []
+
+    def append(self, sample: Mapping[str, Any] | Any) -> bool:
+        """Append one valid source-time telemetry sample.
+
+        ``TelemetrySample`` instances are accepted directly, as are their
+        JSON-compatible dictionaries.  Invalid or receive-time-only samples
+        return ``False`` and do not affect the timeline.
+        """
+
+        if hasattr(sample, "to_dict"):
+            sample = sample.to_dict()
+        if not isinstance(sample, Mapping):
+            return False
+        if sample.get("source_time_valid") is not True:
+            return False
+        timestamp = sample.get("source_timestamp")
+        payload = sample.get("payload")
+        if (
+            not isinstance(timestamp, int)
+            or isinstance(timestamp, bool)
+            or timestamp <= 0
+            or not isinstance(payload, Mapping)
+        ):
+            return False
+
+        with self._lock:
+            self._sequence += 1
+            self._samples.append(
+                (timestamp, self._sequence, {**dict(sample), "payload": dict(payload)})
+            )
+            if len(self._samples) > self.max_samples:
+                self._samples.sort(key=lambda item: (item[0], item[1]))
+                del self._samples[: len(self._samples) - self.max_samples]
+        return True
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        """Return carry-forward snapshots in source timestamp order."""
+
+        with self._lock:
+            samples = sorted(self._samples, key=lambda item: (item[0], item[1]))
+
+        state: dict[str, Any] = {}
+        timeline: list[dict[str, Any]] = []
+        for timestamp, _sequence, record in samples:
+            payload = record["payload"]
+            state.update(_payload_state_updates(payload))
+            snapshot = dict(state)
+            snapshot["source_timestamp"] = timestamp
+            snapshot["source_clock_domain"] = record.get("source_clock_domain")
+            timeline.append(snapshot)
+        return timeline
+
+    def interpolate(self, capture_utc_ns: int) -> dict[str, Any]:
+        """Interpolate a capture timestamp with the canonical offline helper."""
+
+        return interpolate_telemetry(self.snapshot(), capture_utc_ns)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._samples.clear()
+            self._sequence = 0
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._samples)
 
 
 def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
