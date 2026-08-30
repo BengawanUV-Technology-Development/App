@@ -20,6 +20,7 @@ class _FakeConfig:
         self.easycap_device = ""
         self.pipeline_script = record_dir / "arducam_split_pipeline.py"
         self.stop_timeout_seconds = 10
+        self.camera_release_wait_seconds = 0
 
     def command(self, *_args, **_kwargs):
         return ["fake-pipeline"]
@@ -63,6 +64,45 @@ class RecordingAgentTests(unittest.TestCase):
 
             self.assertTrue(result["recording"])
             self.assertEqual(result["pid"], _FakeProcess.pid)
+
+    def test_waits_for_preview_camera_release_before_pipeline_spawn(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            record_dir = Path(temp_dir)
+            config = _FakeConfig(record_dir)
+            config.camera_release_wait_seconds = 0.25
+            controller = RecordingController(config)
+            marker = record_dir / ".recording-agent.active.json"
+            events = []
+
+            def assert_marker_before_spawn(*_args, **_kwargs):
+                events.append("spawn")
+                self.assertTrue(marker.exists())
+                self.assertEqual(events[0], "marker")
+                self.assertEqual(events[1][0], "wait")
+                return _FakeProcess()
+
+            def record_marker():
+                events.append("marker")
+                marker.write_text("{}", encoding="utf-8")
+
+            try:
+                with patch.object(controller, "_write_active_state", side_effect=record_marker):
+                    with patch(
+                        "jetson.recording_agent.time.sleep",
+                        side_effect=lambda seconds: events.append(("wait", seconds)),
+                    ):
+                        with patch(
+                            "jetson.recording_agent.subprocess.Popen",
+                            side_effect=assert_marker_before_spawn,
+                        ):
+                            result = controller.start(
+                                mission_id="mission-44444444-4444-4444-8444-444444444444"
+                            )
+            finally:
+                controller._release_lock()
+
+            self.assertTrue(result["recording"])
+            self.assertEqual(events[1], ("wait", 0.25))
 
 
 if __name__ == "__main__":

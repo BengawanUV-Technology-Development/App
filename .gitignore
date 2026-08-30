@@ -26,6 +26,10 @@ dist-ssr
 GEMINI.md
 docs
 
+# Jetson source backups are local rollback artifacts, never repository files.
+jetson/*.bak-*
+jetson/*~
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

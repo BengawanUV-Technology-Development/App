@@ -1,0 +1,21 @@
+# Install as /etc/systemd/system/buv-recording-agent.service on the
+# production Bengawan Jetson. Machine-specific values stay in /etc/buv.
+[Unit]
+Description=BUV Jetson high-resolution recording and inference agent
+After=network-online.target nvargus-daemon.service
+Wants=network-online.target
+RequiresMountsFor=/media/bengawan/nopal-ssd1/flight-recordings
+
+[Service]
+Type=simple
+User=bengawan
+WorkingDirectory=/home/bengawan/Documents/app-mavproxy
+EnvironmentFile=/etc/buv/jetson-recording.env
+EnvironmentFile=/etc/buv/jetson-recording-target.env
+ExecStart=/usr/bin/python3 /home/bengawan/Documents/app-mavproxy/jetson/recording_agent.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -155,10 +155,12 @@ discrepancy implementasi dijelaskan di
 [R0_ARCHITECTURE_BASELINE.md](./R0_ARCHITECTURE_BASELINE.md).
 
 Implementasi R1 membuat `mission_id` dan Ground
-`missions/<mission_id>/telemetry.jsonl` per recording. Recording agent Jetson
-yang terpasang menulis `epochs/<capture_epoch>/frames.jsonl` dari source
-capture callback; `jetson/frame_metadata.py` menyediakan validator yang
-kompatibel untuk audit artifact.
+`missions/<mission_id>/telemetry.jsonl` per recording. Runtime Jetson kanonis
+berada di `/home/bengawan/Documents/app-mavproxy`; recording agent yang
+terpasang menulis `epochs/<capture_epoch>/frames.jsonl` dari source capture
+callback. `jetson/frame_metadata.py` menyediakan validator yang kompatibel
+untuk audit artifact. Detail file, unit systemd, env machine-only, dan prosedur
+deploy ada di [`jetson/README.md`](./jetson/README.md).
 
 Prosedur short-flight dan offline synchronization tersedia di
 [`SHORT_FLIGHT_TEST.md`](./SHORT_FLIGHT_TEST.md).
@@ -399,10 +401,10 @@ dot coordinate.
 
 Dokumentasi aktif adalah `README.md` (progress utama),
 `R0_ARCHITECTURE_BASELINE.md` (kontrak arsitektur), `SHORT_FLIGHT_TEST.md`
-(prosedur R2), `MAVLINK_SETUP.md` (setup runtime), dan `GEMINI.md` (konteks
-agent). Dokumen historis `CHRONY_SETUP.md` dan checklist lama
-`src-tauri/src-py/step.md` sudah tidak digunakan dan dihapus; progress-nya
-dipertahankan di bagian ini.
+(prosedur R2), `MAVLINK_SETUP.md` (setup Ground), dan `jetson/README.md`
+(runtime/deployment Jetson). Dokumen historis `CHRONY_SETUP.md` dan checklist
+lama `src-tauri/src-py/step.md` sudah tidak digunakan dan dihapus;
+progress-nya dipertahankan di bagian ini.
 
 ---
 
@@ -491,16 +493,18 @@ command lain tetap dilakukan dari QGroundControl.
 
 ## Struktur Proyek
 
-```
-mission-planner/
-│── src/                # Source code utama
-│── configs/            # File konfigurasi parameter
-│── assets/             # UI, icon, dan map assets
-│── logs/               # Data log penerbangan
-│── simulation/         # 3D replay & simulation
-│── tests/              # Unit & integration tests
-│── docs/               # Dokumentasi
-│── main.py             # Entry point aplikasi
+```text
+App/
+├── src/                 # Frontend React
+├── src-tauri/src-py/    # Backend Ground receive-only
+├── src-tauri/           # Shell Tauri
+├── jetson/              # Source dan unit deployment Jetson kanonis
+├── postflight/          # Inference, replay, sync, dan coordinate adapter
+├── scripts/             # Router MAVLink dan utilitas setup
+├── tests/               # Contract test frontend
+├── README.md            # Progress utama
+├── MAVLINK_SETUP.md     # Setup Ground
+└── SHORT_FLIGHT_TEST.md # Prosedur R2
 ```
 
 ---

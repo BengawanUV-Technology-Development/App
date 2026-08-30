@@ -140,7 +140,10 @@ The R0 mission/frame metadata contract is intentionally not carried by this
 low-resolution preview pipeline. The deployed high-resolution recording agent
 assigns frame identity at the source callback and writes epoch-scoped
 `frames.jsonl`; `jetson/frame_metadata.py` validates that artifact. See
-[`SHORT_FLIGHT_TEST.md`](./SHORT_FLIGHT_TEST.md).
+[`SHORT_FLIGHT_TEST.md`](./SHORT_FLIGHT_TEST.md). Jetson source, systemd units,
+machine-only env files, and deployment commands are documented in
+[`jetson/README.md`](./jetson/README.md); do not use an `App-v03` checkout as a
+runtime service source.
 
 Install the platform GStreamer packages and PyGObject before enabling the
 feed. Keep the values in

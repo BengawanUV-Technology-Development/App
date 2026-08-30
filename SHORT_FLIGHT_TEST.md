@@ -49,6 +49,11 @@ telemetry tetap berada di `missions/<mission_id>/telemetry.jsonl`.
 
 ## Integrasi recording agent Jetson
 
+Source kanonis Jetson adalah `/home/bengawan/Documents/app-mavproxy`; kedua
+unit systemd dan seluruh child pipeline harus menunjuk ke checkout tersebut.
+Detail deployment ada di [`jetson/README.md`](./jetson/README.md). Jangan
+menjalankan salinan dari `App-v03`.
+
 Kontrak writer/validator lokal ada di `jetson/frame_metadata.py`. Agent remote
 yang sedang terpasang sudah memiliki source-pad identity callback dan bounded
 sidecar writer; bench deployment menghasilkan `frames.jsonl` dengan canonical

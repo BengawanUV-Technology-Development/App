@@ -2,8 +2,8 @@
 """Publish an always-on CSI/EasyCAP preview as H.264/RTP over UDP.
 
 The recording agent and this service share ``preview_source_file``.  While a
-recording pipeline is active, this service pauses so the recording pipeline is
-the sole RTP sender.  Once recording finishes, the always-on preview resumes.
+recording pipeline is active, this service exits so its camera handles are
+fully released; systemd restarts it after the recording marker is cleared.
 """
 
 from __future__ import annotations
@@ -121,6 +121,11 @@ udpsink host={self.target_host} port={self.target_port} sync=false async=false
 
     def poll_state(self) -> bool:
         if self.stop_requested or self.recording_active():
+            # A plain MainLoop.quit() leaves this long-lived process holding
+            # V4L2/Argus handles on some Jetson GStreamer builds.  Exit the
+            # process so systemd can restart it after recording has released
+            # the marker and the recorder can claim the cameras exclusively.
+            self.stop_requested = True
             if self.loop:
                 self.loop.quit()
             return False
