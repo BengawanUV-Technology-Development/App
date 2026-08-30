@@ -234,10 +234,10 @@ R2 belum ada. Implementasi R2 berada di `jetson/arducam_split_pipeline.py`,
 - `src-tauri/src-py/app/routes/recording.py`
 - `src-tauri/src-py/app/services/jetson_recording.py`
 - `jetson/camera_stream_service.py`
+- `jetson/README.md`
 - `src/components/recording/CameraPreview.jsx`
 - `src-tauri/src-py/app/utils/session_log.py`
 - `README.md`
 - `MAVLINK_SETUP.md`
-- `GEMINI.md`
 - `SHORT_FLIGHT_TEST.md`
 - `COORDINATE_ESTIMATOR_AUDIT.md`

@@ -191,7 +191,7 @@ cara verifikasi dan tidak boleh mengubah status implementasi di sini.
 
 ### Snapshot pengujian lokal
 
-Pada 2026-08-29, suite backend Python (59), Jetson (8), postflight (21), dan
+Pada 2026-08-29, suite backend Python (59), Jetson (16), postflight (21), dan
 scripts (5) lulus; frontend map contract test (4) dan production build juga
 lulus. Belum ada
 browser/E2E test atau hardware flight acceptance. `cargo test` berhasil

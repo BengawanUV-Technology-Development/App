@@ -1,6 +1,7 @@
-# Install as /etc/systemd/system/buv-recording-agent.service.d/storage.conf
-# on the Bengawan Jetson. This supplements the existing EnvironmentFile and
-# deliberately does not replace its host, token, camera, or bitrate values.
+# Optional drop-in for /etc/systemd/system/buv-recording-agent.service.d/storage.conf
+# on the Bengawan Jetson. The canonical base unit is
+# jetson/buv-recording-agent.service; this file only adds storage safeguards.
+# Keep host, token, camera, and bitrate values in /etc/buv env files.
 
 [Unit]
 RequiresMountsFor=/media/bengawan/nopal-ssd1/flight-recordings
