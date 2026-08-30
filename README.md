@@ -10,7 +10,8 @@ Mission Planner adalah aplikasi ground control station (GCS) yang dikembangkan o
 
 Aplikasi ini sedang dikembangkan untuk mendukung **Misi Search and Rescue
 (SAR)**. Runtime live tetap receive-only untuk MAVLink, sementara recording
-path Jetson sekarang memiliki optional low-rate YOLO callback ke Ground. Offline
+path Jetson sekarang memiliki optional YOLO callback ke Ground dengan cabang
+inference yang rate/resolusinya independen dari recording dan preview. Offline
 inference dan replay tetap tersedia untuk audit footage. Status dan progress
 lintas tahap dipelihara di bagian
 [Progress proyek](#progress-proyek).
@@ -53,11 +54,13 @@ yang keliru tidak dapat diteruskan ke Pixhawk.
 
 Runtime R0 menyediakan monitoring telemetry read-only dan live camera preview.
 Sebagai extension R2, service recording Jetson dapat menjalankan custom YOLO
-secara low-rate dan mengirim event detection kecil ke Ground. Ground menyimpan
-event tersebut setelah join ke telemetry source-time. Coordinate reconstruction
-live tersedia sebagai jalur opt-in, tetapi default-nya disabled sampai calibration,
-AGL, mounting, dan ground truth tervalidasi. Auto-marking, geotagging
-terkalibrasi, dan manual detection/review tetap future work.
+pada branch inference tersendiri (default 960×540@15 FPS) dan mengirim event
+detection kecil ke Ground. Recording high-resolution, `frames.jsonl`, dan
+telemetry tidak menunggu inference. Ground menyimpan event tersebut setelah join
+ke telemetry source-time. Coordinate reconstruction live tersedia sebagai jalur
+opt-in, tetapi default-nya disabled sampai calibration, AGL, mounting, dan
+ground truth tervalidasi. Auto-marking, geotagging terkalibrasi, dan manual
+detection/review tetap future work.
 
 ### Koneksi dan sistem dasar
 * **Connect Telemetri**: Telemetry diterima dari router melalui UDP MAVLink.
@@ -84,7 +87,7 @@ website tetap monitoring-only dan tidak menjadi command authority.
 * **Current**: Ground menyimpan telemetry/event JSONL pada session backend.
 * **R0 target**: Ground menyimpan telemetry dan metadata per `mission_id`.
 * **R2**: Post-flight inference, sinkronisasi detection terhadap timestamp
-  source, optional low-rate Jetson inference callback, dan adapter coordinate
+  source, optional Jetson inference callback, dan adapter coordinate
   reconstruction diuji dari evidence video Jetson.
 * **Current R2**: Replay validator offline dapat memasangkan setiap frame
   dengan state telemetry berdasarkan capture UTC. Saat recording aktif, Ground
@@ -186,12 +189,12 @@ cara verifikasi dan tidak boleh mengubah status implementasi di sini.
 | --- | --- | --- |
 | R0 | Baseline tersedia | Telemetry receive-only, router MAVLink, live camera preview, dan command authority tetap berada pada QGroundControl/GCS yang ditetapkan. |
 | R1 | Fondasi tersedia | `mission_id`, mission-scoped telemetry JSONL, canonical frame metadata, source PTS, UTC/source-time fields, dan validator artifact tersedia. |
-| R2 | Inference, temporal sync, live detection callback, coordinate adapter, map-dot smoke, dan replay validator tersedia; qualification tertahan | Positive detection nyata dan visual bbox sudah lulus. Existing interpolator tetap dipakai. Custom model Jetson sudah dikonfigurasi melalui runtime terpisah; event callback, bounded retry, Ground join, synthetic geometry, rendering dot ke MapLibre, serta replay metadata/telemetry lulus secara software. Mission same-time dengan target, AGL, calibration intrinsics/distortion, mounting extrinsics, ground truth, dan hardware/browser E2E masih belum tervalidasi. Coordinate live default disabled. |
+| R2 | Inference, temporal sync, live detection callback, coordinate adapter, map-dot smoke, dan replay validator tersedia; qualification tertahan | Positive detection nyata dan visual bbox sudah lulus. Existing interpolator tetap dipakai. Custom model Jetson sudah dikonfigurasi melalui runtime terpisah; branch inference kini memakai input scaled dengan rate independen dari preview/recording, event callback, bounded retry, Ground join, synthetic geometry, rendering dot ke MapLibre, serta replay metadata/telemetry lulus secara software. Full real-time hardware belum dapat diklaim sebelum runtime CUDA/TensorRT kompatibel dan benchmark Jetson lulus. Mission same-time dengan target, AGL, calibration intrinsics/distortion, mounting extrinsics, ground truth, dan hardware/browser E2E masih belum tervalidasi. Coordinate live default disabled. |
 | Future work | Belum dikerjakan | Calibrated coordinate qualification, auto-marking/geotagging, manual detection/review, UI/3D replay interaktif, dan link failover. |
 
 ### Snapshot pengujian lokal
 
-Pada 2026-08-29, suite backend Python (59), Jetson (16), postflight (21), dan
+Pada 2026-08-30, suite backend Python (59), Jetson (20), postflight (21), dan
 scripts (5) lulus; frontend map contract test (4) dan production build juga
 lulus. Belum ada
 browser/E2E test atau hardware flight acceptance. `cargo test` berhasil
@@ -312,9 +315,12 @@ recording baru yang memuat target visual.
 Saat `POST /api/v1/recordings/start` berhasil, Ground membuat mission yang sama
 untuk telemetry, memulai timeline source-time, lalu meneruskan `mission_id` ke
 Jetson. Recording agent Jetson mempertahankan high-resolution video dan
-`frames.jsonl`, sementara child YOLO berjalan low-rate pada branch inference
-terpisah. Detection queue dibatasi agar inference lambat tidak menghentikan
-capture. Event kecil dikirim ke:
+`frames.jsonl`, sementara child YOLO berjalan pada branch inference terpisah
+yang default-nya menerima 960×540@15 FPS. Pemilihan frame dilakukan deterministik
+dari `frame_id` sumber dan tidak lagi memakai rate preview. Bbox dari resolusi
+inference dikonversi kembali ke koordinat normalized master-frame sebelum ditulis.
+Detection queue dibatasi agar inference lambat tidak menghentikan capture.
+Event kecil dikirim ke:
 
 ```text
 POST /api/v1/detection/ingest
@@ -335,6 +341,18 @@ dot jika coordinate result berstatus `ESTIMATED_UNCALIBRATED` atau
 `CALIBRATED_ESTIMATE` dengan koordinat valid. Karena calibration/AGL/mounting
 belum tersedia, konfigurasi default `VISION_COORDINATE_ENABLED=false`, sehingga
 live inference dan telemetry join dapat berjalan tanpa menghasilkan dot palsu.
+
+Profil CPU Jetson tetap aman sebagai fallback, tetapi bukan target real-time.
+Untuk qualification real-time, `/etc/buv/jetson-recording.env` harus memakai
+runtime CUDA/TensorRT yang tervalidasi; jangan mengubah manifest model atau
+menandai pipeline PASS hanya karena child process berhasil start.
+
+Smoke test branch baru pada Jetson (30 Agustus 2026, source footage dibaca
+langsung dari SSD dan output ditulis ke staging) menghasilkan 30 FPS capture,
+10 FPS inference budget, `inference_unmatchable_skipped=0`, dan model custom
+berjalan tanpa inference failure. Dengan runtime CPU saat ini, 12 frame berhasil
+diproses dalam sekitar 22 detik; hasil tersebut membuktikan jalur data dan
+kontrak bbox, tetapi belum merupakan bukti full real-time.
 
 Jika detection tiba sebelum telemetry source-time yang membungkus
 `capture_utc_ns`, Ground mengembalikan `processing_status=pending_telemetry`

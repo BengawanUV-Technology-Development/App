@@ -7,7 +7,7 @@ and branches it before encoding:
 
     high-res Argus capture
         ├── high-res H.264 software encode -> local video.mp4
-        ├── high-res BGR appsink -> optional YOLO/SAHI -> detections.jsonl/HTTP
+        ├── independently rate-limited/scaled BGR -> optional YOLO/SAHI -> detections.jsonl/HTTP
         └── resize -> low-res H.264 software encode -> RTP/UDP -> GCS
 
 The capture-only mode (no ``--weights``) still writes one explicit empty
@@ -15,9 +15,11 @@ detection record per frame and one telemetry snapshot per frame. This makes
 the footage immediately usable for offline YOLO
 without pretending that a detector or telemetry source was active.
 
-Orin Nano does not provide NVENC, so x264enc is used deliberately. Start with
-1920x1080 for the high-resolution branch and benchmark CPU/FPS before trying a
-higher source mode.
+Orin Nano does not provide NVENC, so x264enc is used deliberately. Recording
+and frame identity remain at the configured high-resolution source while the
+detector consumes a bounded, independently selected inference branch (normally
+960x540 at 15 FPS). Actual real-time throughput still depends on a compatible
+Jetson CUDA/TensorRT runtime; CPU fallback is safe but is not real-time.
 """
 
 from __future__ import annotations
@@ -121,6 +123,37 @@ def fps_caps(value: float) -> str:
     return f"{fraction.numerator}/{fraction.denominator}"
 
 
+def rate_limited_branch_will_carry_frame(
+    frame_id: int, source_fps: float, branch_fps: float
+) -> bool:
+    """Predict whether a rate-limited branch carries a source frame.
+
+    The branch is selected from the canonical source ``frame_id`` rather than
+    from callback timing.  That keeps frame identity deterministic even when a
+    downstream queue drops buffers.
+    """
+
+    if frame_id < 0:
+        raise ValueError("frame_id must be zero or greater")
+    if source_fps <= 0 or branch_fps <= 0:
+        raise ValueError("source_fps and branch_fps must be greater than zero")
+    if branch_fps > source_fps:
+        raise ValueError("branch_fps cannot be higher than source_fps")
+
+    def cumulative_selections(t: int) -> int:
+        return math.floor((branch_fps * t + 1e-9) / source_fps)
+
+    return cumulative_selections(frame_id) != cumulative_selections(frame_id - 1)
+
+
+def inference_branch_will_carry_frame(
+    frame_id: int, *, source_fps: float, inference_fps: float
+) -> bool:
+    """Select inference frames independently from the preview/network rate."""
+
+    return rate_limited_branch_will_carry_frame(frame_id, source_fps, inference_fps)
+
+
 def network_branch_will_carry_frame(frame_id: int, high_fps: float, network_fps: float) -> bool:
     """Predict whether the network/preview branch will ever transmit this
     global frame_id, without depending on _on_preview_buffer's own runtime
@@ -137,10 +170,33 @@ def network_branch_will_carry_frame(frame_id: int, high_fps: float, network_fps:
     same answer regardless of what either one dropped upstream.
     """
 
-    def cumulative_selections(t: int) -> int:
-        return math.floor((network_fps * t + 1e-9) / high_fps)
+    return rate_limited_branch_will_carry_frame(frame_id, high_fps, network_fps)
 
-    return cumulative_selections(frame_id) != cumulative_selections(frame_id - 1)
+
+def normalize_bbox_xyxy(
+    bbox: list[float],
+    *,
+    source_width: int,
+    source_height: int,
+    target_width: int,
+    target_height: int,
+) -> list[float]:
+    """Scale an inference-pixel XYXY box into normalized master-frame XYXY."""
+
+    if len(bbox) != 4:
+        raise ValueError("bbox must contain four coordinates")
+    if min(source_width, source_height, target_width, target_height) <= 0:
+        raise ValueError("image dimensions must be positive")
+    sx = target_width / source_width
+    sy = target_height / source_height
+    x1, y1, x2, y2 = bbox
+    scaled = (x1 * sx, y1 * sy, x2 * sx, y2 * sy)
+    return [
+        max(0.0, min(1.0, scaled[0] / target_width)),
+        max(0.0, min(1.0, scaled[1] / target_height)),
+        max(0.0, min(1.0, scaled[2] / target_width)),
+        max(0.0, min(1.0, scaled[3] / target_height)),
+    ]
 
 
 def scale_bbox(bbox: list[float], source_width: int, source_height: int, target_width: int, target_height: int) -> list[int]:
@@ -182,9 +238,20 @@ def build_pipeline_description(
     network_height = validate_dimension(args.network_height, "network-height")
     high_fps = validate_fps(args.high_fps, "high-fps")
     network_fps = validate_fps(args.network_fps, "network-fps")
+    inference_width = validate_dimension(
+        getattr(args, "inference_width", network_width), "inference-width"
+    )
+    inference_height = validate_dimension(
+        getattr(args, "inference_height", network_height), "inference-height"
+    )
+    inference_fps = validate_fps(
+        getattr(args, "inference_fps", network_fps), "inference-fps"
+    )
     host = args.host.strip()
     if network_fps > high_fps:
         raise ValueError("network-fps cannot be higher than high-fps")
+    if inference_fps > high_fps:
+        raise ValueError("inference-fps cannot be higher than high-fps")
     if args.sensor_id < 0:
         raise ValueError("sensor-id must be zero or greater")
     if args.flip_method < 0 or args.flip_method > 7:
@@ -256,7 +323,11 @@ def build_pipeline_description(
 video/x-raw(memory:NVMM),width={high_width},height={high_height},format=NV12,framerate={high_fps_caps} !
 {flip_stage}tee name=capture"""
         record_converter = "nvvidconv"
-        inference_converter = "nvvidconv ! video/x-raw,format=BGRx ! videoconvert"
+        inference_converter = (
+            "nvvidconv ! "
+            f"video/x-raw,format=BGRx,width={inference_width},height={inference_height} ! "
+            "videoconvert"
+        )
         preview_converter = "nvvidconv"
     else:
         source = f"""filesrc location={_gst_quote(qualification_video)} !
@@ -312,8 +383,9 @@ capture. ! queue max-size-buffers=8 max-size-time=0 max-size-bytes=0 leaky=downs
 x264enc bitrate={args.local_bitrate_kbps} speed-preset=ultrafast tune=zerolatency key-int-max={key_int} bframes=0 !
 h264parse ! mp4mux fragment-duration=1000 fragment-mode=first-moov-then-finalise moov-recovery-file={_gst_quote(recovery_file)} ! filesink location={_gst_quote(video_path)}
 capture. ! {appsink_queue} !
-{inference_converter} ! video/x-raw,format=BGR,width={high_width},height={high_height} !
-appsink name=highres_sink emit-signals=true max-buffers={appsink_buffers} {appsink_drop} sync=false
+identity name=inference_identity !
+{inference_converter} ! video/x-raw,format=BGR,width={inference_width},height={inference_height} !
+appsink name=inference_sink emit-signals=true max-buffers={appsink_buffers} {appsink_drop} sync=false
 {preview_stage}
 """.strip()
 
@@ -821,7 +893,7 @@ class DetectionRunner:
                 "class_name": str(class_name),
                 "class": str(class_name),
                 "confidence": float(confidence),
-                "bbox_highres": [float(value) for value in box],
+                "bbox_inference": [float(value) for value in box],
             })
         return detections
 
@@ -957,6 +1029,9 @@ class DetectionWorker:
                 "model": self.verified_model.as_dict() if self.verified_model else None,
                 "device": self.args.device,
                 "imgsz": self.args.imgsz,
+                "input_width": getattr(self.args, "inference_width", self.args.high_width),
+                "input_height": getattr(self.args, "inference_height", self.args.high_height),
+                "input_fps": getattr(self.args, "inference_fps", self.args.high_fps),
                 "confidence": self.args.conf,
                 "sahi": self.args.sahi,
                 "queue_depth": self.queue.qsize(),
@@ -1046,14 +1121,19 @@ class DetectionWorker:
             try:
                 for detection in detections:
                     detection["detection_id"] = str(uuid.uuid4())
-                    x1, y1, x2, y2 = detection["bbox_highres"]
-                    detection["bbox_normalized_xyxy"] = [
-                        max(0.0, min(1.0, x1 / self.args.high_width)),
-                        max(0.0, min(1.0, y1 / self.args.high_height)),
-                        max(0.0, min(1.0, x2 / self.args.high_width)),
-                        max(0.0, min(1.0, y2 / self.args.high_height)),
-                    ]
-                    detection.pop("bbox_highres", None)
+                    source_width = int(
+                        getattr(self.args, "inference_width", self.args.high_width)
+                    )
+                    source_height = int(
+                        getattr(self.args, "inference_height", self.args.high_height)
+                    )
+                    detection["bbox_normalized_xyxy"] = normalize_bbox_xyxy(
+                        detection.pop("bbox_inference"),
+                        source_width=source_width,
+                        source_height=source_height,
+                        target_width=self.args.high_width,
+                        target_height=self.args.high_height,
+                    )
 
                 with self._lock:
                     detector_status = self.status
@@ -1134,6 +1214,7 @@ class SplitPipeline:
         self._throughput_last_sent = 0
         self._throughput_last_monotonic = time.monotonic()
         self._inference_unmatchable_skipped = 0
+        self._inference_rate_drop_count = 0
         self.worker: DetectionWorker | None = None
         self.network_sender = RtpNetworkSender(args.host, args.port)
         self._identity_condition = threading.Condition()
@@ -1222,6 +1303,10 @@ class SplitPipeline:
                     flush=True,
                 )
             print(f"[pipeline] local={self.args.high_width}x{self.args.high_height}@{self.args.high_fps:g}", flush=True)
+            print(
+                f"[pipeline] inference={self.args.inference_width}x{self.args.inference_height}@{self.args.inference_fps:g}",
+                flush=True,
+            )
             print(f"[pipeline] network={self.args.network_width}x{self.args.network_height}@{self.args.network_fps:g} -> {self.args.host}:{self.args.port}", flush=True)
             self.pipeline = Gst.parse_launch(description)
             capture = self.pipeline.get_by_name("capture")
@@ -1231,9 +1316,18 @@ class SplitPipeline:
             if capture_pad is None:
                 raise RuntimeError("GStreamer capture tee did not expose a sink pad")
             capture_pad.add_probe(Gst.PadProbeType.BUFFER, self._on_source_buffer)
-            sink = self.pipeline.get_by_name("highres_sink")
+            inference_identity = self.pipeline.get_by_name("inference_identity")
+            if inference_identity is None:
+                raise RuntimeError("GStreamer pipeline did not create inference_identity")
+            inference_identity_pad = inference_identity.get_static_pad("src")
+            if inference_identity_pad is None:
+                raise RuntimeError("GStreamer inference_identity did not expose a src pad")
+            inference_identity_pad.add_probe(
+                Gst.PadProbeType.BUFFER, self._on_inference_buffer
+            )
+            sink = self.pipeline.get_by_name("inference_sink")
             if sink is None:
-                raise RuntimeError("GStreamer pipeline did not create highres_sink")
+                raise RuntimeError("GStreamer pipeline did not create inference_sink")
             sink.connect("new-sample", self._on_sample)
             preview_identity = self.pipeline.get_by_name("preview_identity")
             if preview_identity is None:
@@ -1425,16 +1519,13 @@ class SplitPipeline:
         preview_pts = int(buffer.pts)
         source_packet = self._wait_for_frame_identity(preview_pts)
         if source_packet is None:
-            source_packet = FramePacket(
-                mission_id=self.args.mission_id,
-                capture_epoch=self.args.capture_epoch,
-                frame_id=self.frame_counter,
-                camera_id="arducam",
-                capture_utc_ns=time.time_ns(),
-                capture_monotonic_ns=time.monotonic_ns(),
-                pts_ns=preview_pts,
-                image=None,
-            )
+            self._identity_miss_count += 1
+            # Analog EasyCAP frames are intentionally outside the canonical
+            # Arducam identity timeline. They can still be previewed, but no
+            # fabricated frame_id may be attached to them.
+            if self.preview_source == "analog":
+                return self.gst.PadProbeReturn.OK
+            return self.gst.PadProbeReturn.DROP
         self._preview_rate_accumulator += self.args.network_fps
         if self._preview_rate_accumulator + 1e-9 < self.args.high_fps:
             self._preview_rate_drop_count += 1
@@ -1443,6 +1534,31 @@ class SplitPipeline:
         with self._identity_condition:
             self._preview_identity_queue.append(source_packet)
             self._identity_condition.notify_all()
+        return self.gst.PadProbeReturn.OK
+
+    def _on_inference_buffer(self, _pad, probe_info):
+        """Select inference frames before resize/BGR conversion.
+
+        This branch has its own deterministic rate budget. It must never use
+        the preview selection because preview may be switched to EasyCAP or
+        throttled independently of the detector.
+        """
+
+        buffer = probe_info.get_buffer()
+        if buffer is None or buffer.pts == self.gst.CLOCK_TIME_NONE:
+            self._inference_unmatchable_skipped += 1
+            return self.gst.PadProbeReturn.DROP
+        source_packet = self._wait_for_frame_identity(int(buffer.pts))
+        if source_packet is None:
+            self._inference_unmatchable_skipped += 1
+            return self.gst.PadProbeReturn.DROP
+        if not inference_branch_will_carry_frame(
+            source_packet.frame_id,
+            source_fps=self.args.high_fps,
+            inference_fps=self.args.inference_fps,
+        ):
+            self._inference_rate_drop_count += 1
+            return self.gst.PadProbeReturn.DROP
         return self.gst.PadProbeReturn.OK
 
     def _on_rtp_access_unit(self, _pad, _probe_info):
@@ -1466,10 +1582,9 @@ class SplitPipeline:
         if sample is None:
             return self.gst.FlowReturn.ERROR
         buffer = sample.get_buffer()
-        # width/height are not read here: the appsink caps are fixed to
-        # args.high_width/args.high_height by build_pipeline_description, so
-        # DetectionWorker (which does the actual map+reshape, off this
-        # thread) uses those directly instead of re-deriving them per frame.
+        # The appsink caps are fixed to the inference dimensions by
+        # build_pipeline_description. DetectionWorker maps the sample off this
+        # callback thread and scales its bbox back to the master dimensions.
         pts = None if buffer.pts == self.gst.CLOCK_TIME_NONE else int(buffer.pts)
         source_packet = self._wait_for_frame_identity(pts)
         if source_packet is None:
@@ -1477,14 +1592,6 @@ class SplitPipeline:
             if self.loop and self.loop.is_running():
                 self.glib.idle_add(self.loop.quit)
             return self.gst.FlowReturn.ERROR
-        if not network_branch_will_carry_frame(source_packet.frame_id, self.args.high_fps, self.args.network_fps):
-            # The network branch will never transmit this frame_id (it keeps
-            # a different, evenly-spaced subset than whatever the inference
-            # queue happens to pull), so ground can never have a video frame
-            # to join this detection against. Running YOLO on it would only
-            # produce a result that can never be displayed.
-            self._inference_unmatchable_skipped += 1
-            return self.gst.FlowReturn.OK
         # Capture-only mode does not need to copy a high-resolution BGR frame
         # into Python. Canonical identity and sidecars were already assigned
         # by the source-pad probe before this branch.
@@ -1547,11 +1654,11 @@ class SplitPipeline:
         if pts is None:
             return None
         with self._identity_condition:
-            if pts in self._identity_by_pts:
-                return self._identity_by_pts[pts]
-            if self._identity_by_pts:
-                return next(reversed(self._identity_by_pts.values()))
-            return None
+            # Never associate a transformed/delayed buffer with the most
+            # recent frame. That would create a plausible-looking but wrong
+            # frame_id and break telemetry synchronization. Branches that
+            # cannot preserve the canonical source PTS are dropped instead.
+            return self._identity_by_pts.get(pts)
 
     def _capture_fps(self) -> float:
         if (
@@ -1783,7 +1890,14 @@ class SplitPipeline:
                 "width": self.args.high_width,
                 "height": self.args.high_height,
                 "fps": self.args.high_fps,
-                "purpose": ["local_recording", "offline_yolo"],
+                "purpose": ["local_recording", "master_frame_source"],
+            },
+            "inference": {
+                "width": self.args.inference_width,
+                "height": self.args.inference_height,
+                "fps": self.args.inference_fps,
+                "purpose": ["realtime_yolo_input"],
+                "selection": "deterministic_source_frame_id_rate_limit",
             },
             "network": {
                 "width": self.args.network_width,
@@ -1811,6 +1925,7 @@ class SplitPipeline:
                 "description": "identity is assigned in the source callback before recording metadata, inference, and preview publication",
             },
             "inference_unmatchable_skipped": self._inference_unmatchable_skipped,
+            "inference_rate_dropped": self._inference_rate_drop_count,
             "detector": self.worker.metadata() if self.worker is not None else {
                 "enabled": False,
                 "mode": "none",
@@ -1865,6 +1980,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--network-width", type=int, default=960)
     parser.add_argument("--network-height", type=int, default=540)
     parser.add_argument("--network-fps", type=float, default=15.0)
+    parser.add_argument(
+        "--inference-width",
+        type=int,
+        default=960,
+        help="Inference branch width; recording remains at high-width",
+    )
+    parser.add_argument(
+        "--inference-height",
+        type=int,
+        default=540,
+        help="Inference branch height; recording remains at high-height",
+    )
+    parser.add_argument(
+        "--inference-fps",
+        type=float,
+        default=15.0,
+        help="Independent inference frame budget selected from canonical frame_id",
+    )
     parser.add_argument("--local-bitrate-kbps", type=int, default=12000)
     parser.add_argument("--network-bitrate-kbps", type=int, default=2000)
     parser.add_argument("--record-dir", type=Path, default=Path("recordings"))

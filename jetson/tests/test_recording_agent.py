@@ -1,10 +1,12 @@
 import json
+import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from jetson.recording_agent import RecordingController
+from jetson.recording_agent import AgentConfig, RecordingController
 
 
 class _FakeConfig:
@@ -38,6 +40,33 @@ class _FakeProcess:
 
 
 class RecordingAgentTests(unittest.TestCase):
+    def test_inference_dimensions_and_rate_are_forwarded_to_child_pipeline(self):
+        pipeline_script = Path(__file__).resolve().parents[1] / "arducam_split_pipeline.py"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            environment = {
+                "JETSON_RECORDING_AGENT_TOKEN": "agent-token",
+                "JETSON_INGEST_TOKEN": "ingest-token",
+                "JETSON_GCS_HOST": "127.0.0.1",
+                "JETSON_RECORDING_PIPELINE_SCRIPT": str(pipeline_script),
+                "JETSON_INFERENCE_PYTHON": sys.executable,
+                "JETSON_RECORD_DIR": temp_dir,
+                "JETSON_INFERENCE_WIDTH": "1280",
+                "JETSON_INFERENCE_HEIGHT": "720",
+                "JETSON_INFERENCE_FPS": "15",
+            }
+            with patch.dict(os.environ, environment, clear=True):
+                config = AgentConfig()
+
+            command = config.command(
+                "mission-55555555-5555-4555-8555-555555555555",
+                None,
+            )
+
+        self.assertIn("--inference-width", command)
+        self.assertEqual(command[command.index("--inference-width") + 1], "1280")
+        self.assertEqual(command[command.index("--inference-height") + 1], "720")
+        self.assertEqual(command[command.index("--inference-fps") + 1], "15.0")
+
     def test_active_marker_exists_before_pipeline_spawn(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             record_dir = Path(temp_dir)

@@ -157,6 +157,19 @@ class AgentConfig:
         self.network_width = env_int("JETSON_NETWORK_WIDTH", 960, 16, 7680)
         self.network_height = env_int("JETSON_NETWORK_HEIGHT", 540, 16, 7680)
         self.network_fps = env_float("JETSON_NETWORK_FPS", 15.0, 0.1, 120.0)
+        self.inference_width = env_int(
+            "JETSON_INFERENCE_WIDTH", self.network_width, 16, 7680
+        )
+        self.inference_height = env_int(
+            "JETSON_INFERENCE_HEIGHT", self.network_height, 16, 7680
+        )
+        self.inference_fps = env_float(
+            "JETSON_INFERENCE_FPS", self.network_fps, 0.1, 120.0
+        )
+        if self.inference_fps > self.high_fps:
+            raise RecordingAgentError(
+                "JETSON_INFERENCE_FPS cannot be higher than JETSON_HIGH_FPS"
+            )
         self.local_bitrate_kbps = env_int("JETSON_LOCAL_BITRATE_KBPS", 12000, 100, 100000)
         self.network_bitrate_kbps = env_int("JETSON_NETWORK_BITRATE_KBPS", 2000, 100, 100000)
         self.easycap_device = os.getenv("JETSON_EASYCAP_DEVICE", "").strip()
@@ -245,6 +258,12 @@ class AgentConfig:
             str(self.network_height),
             "--network-fps",
             str(self.network_fps),
+            "--inference-width",
+            str(self.inference_width),
+            "--inference-height",
+            str(self.inference_height),
+            "--inference-fps",
+            str(self.inference_fps),
             "--local-bitrate-kbps",
             str(self.local_bitrate_kbps),
             "--network-bitrate-kbps",

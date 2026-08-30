@@ -45,6 +45,23 @@ and capture settings. The target environment contains the Ground callback host
 and authentication values. Keep the two files synchronized with the Ground
 configuration, but keep their contents out of Git.
 
+The relevant capture/inference profile is:
+
+```text
+JETSON_HIGH_WIDTH/HEIGHT/FPS       master recording and frame metadata
+JETSON_INFERENCE_WIDTH/HEIGHT/FPS  detector input (default 960/540/15)
+JETSON_NETWORK_WIDTH/HEIGHT/FPS    RTP preview (independent of detector)
+JETSON_MODEL_DEVICE                custom YOLO runtime device
+JETSON_MODEL_IMGSZ                 model inference size (default 640)
+```
+
+The detector selects frames deterministically from the source `frame_id` before
+resize and BGR conversion. Its normalized XYXY bbox is mapped back to the
+high-resolution master frame. A slow detector may drop queued inference frames,
+but it must not block high-resolution recording, frame metadata, or telemetry.
+The CPU profile is a safe fallback only; real-time qualification requires a
+Jetson CUDA/TensorRT runtime that has passed the hardware benchmark.
+
 The production model itself remains outside this repository, normally at:
 
 ```text
