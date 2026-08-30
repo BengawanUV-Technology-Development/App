@@ -841,7 +841,6 @@ class DetectionWorker:
         )
         self.runner: DetectionRunner | None = None
         self.verified_model: VerifiedModel | None = None
-        self.initialization_thread: threading.Thread | None = None
         self.submitted_frames = 0
         self.processed_frames = 0
         self.dropped_oldest = 0
@@ -851,39 +850,27 @@ class DetectionWorker:
         self.last_queue_wait_ms: float | None = None
         self.failed_at_frame_id: int | None = None
         self.started_monotonic = time.monotonic()
+        if args.weights:
+            manifest = ProductionModelManifest(args.model_manifest)
+            manifest.validate_runtime(
+                device=args.device,
+                imgsz=args.imgsz,
+                confidence=args.conf,
+                sahi=args.sahi,
+            )
+            self.verified_model = manifest.verify(args.weights)
+            try:
+                self.runner = DetectionRunner(args, self.verified_model)
+                self.status = "RUNNING"
+            except Exception as exc:
+                self.status = "FAILED"
+                self.failure_reason = f"DETECTOR_INITIALIZATION_FAILED: {exc}"
         self.detections_path = session_dir / "detections.jsonl"
         self._detection_file = (
             self.detections_path.open("a", encoding="utf-8", buffering=1)
             if args.weights else None
         )
         self.publisher = MetadataPublisher(args.ingest_token, args.ingest_timeout)
-
-    def _initialize_detector(self) -> None:
-        """Load and verify YOLO without delaying camera capture startup."""
-
-        try:
-            manifest = ProductionModelManifest(self.args.model_manifest)
-            manifest.validate_runtime(
-                device=self.args.device,
-                imgsz=self.args.imgsz,
-                confidence=self.args.conf,
-                sahi=self.args.sahi,
-            )
-            verified_model = manifest.verify(self.args.weights)
-            runner = DetectionRunner(self.args, verified_model)
-            with self._lock:
-                if self.stop_event.is_set():
-                    return
-                self.verified_model = verified_model
-                self.runner = runner
-                self.status = "RUNNING"
-                self.failure_reason = None
-            print("[detector] YOLO model initialized", flush=True)
-        except Exception as exc:
-            with self._lock:
-                self.status = "FAILED"
-                self.failure_reason = f"DETECTOR_INITIALIZATION_FAILED: {exc}"
-            print(f"[detector] initialization failed; capture continues: {exc}", flush=True)
 
     @property
     def needs_image(self) -> bool:
@@ -897,12 +884,6 @@ class DetectionWorker:
         self.publisher.start()
         self.thread = threading.Thread(target=self._run, daemon=True, name="jetson-yolo")
         self.thread.start()
-        self.initialization_thread = threading.Thread(
-            target=self._initialize_detector,
-            daemon=True,
-            name="jetson-yolo-initializer",
-        )
-        self.initialization_thread.start()
 
     def submit(self, packet: FramePacket) -> None:
         if self.status == "DISABLED":
@@ -939,9 +920,6 @@ class DetectionWorker:
                 pass
         if self.thread:
             self.thread.join(timeout=10)
-        if self.initialization_thread:
-            self.initialization_thread.join(timeout=2)
-            self.initialization_thread = None
         self.publisher.close()
         if self._detection_file is not None:
             self._detection_file.close()

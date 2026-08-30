@@ -143,9 +143,6 @@ class AgentConfig:
         self.storage_guard = env_bool("JETSON_STORAGE_GUARD", True)
         self.eos_timeout_seconds = env_float("JETSON_EOS_TIMEOUT_SECONDS", 30.0, 1, 300)
         self.stop_timeout_seconds = env_float("JETSON_STOP_TIMEOUT_SECONDS", 60.0, 10, 300)
-        self.camera_release_wait_seconds = env_float(
-            "JETSON_CAMERA_RELEASE_WAIT_SECONDS", 2.0, 0, 30
-        )
         self.video_port = env_int("JETSON_VIDEO_PORT", 5000, 1, 65535)
         self.payload_type = env_int("JETSON_VIDEO_PAYLOAD_TYPE", 96, 0, 127)
         self.sensor_id = env_int("JETSON_SENSOR_ID", 0, 0, 16)
@@ -708,11 +705,6 @@ class RecordingController:
                 # camera devices; writing it after Popen introduces a race
                 # where both GStreamer pipelines try to claim the camera.
                 self._write_active_state()
-                release_wait = float(
-                    getattr(self.config, "camera_release_wait_seconds", 0)
-                )
-                if release_wait > 0:
-                    time.sleep(release_wait)
                 self._process = subprocess.Popen(
                     command,
                     cwd=str(self.config.pipeline_script.parent.parent),
